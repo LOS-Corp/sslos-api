@@ -1,0 +1,109 @@
+name: API CI/CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/los-corp/sslos-api
+  CONTAINER_NAME: sslos-api
+  HOST_PORT: 8080
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: laundry
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres -d laundry"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+    env:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/laundry
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Run tests
+        run: ./mvnw -B test
+
+  image:
+    name: Build and publish image
+    needs: test
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+
+  deploy:
+    name: Deploy to VPS
+    needs: image
+    if: github.event_name == 'push' && vars.DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.DEPLOY_SSH_KEY }}
+      - name: Trust deployment host
+        run: ssh-keyscan -p "${{ secrets.DEPLOY_PORT || 22 }}" -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts
+      - name: Upload API environment file
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || 22 }}
+          API_ENV_CONTENT: ${{ secrets.API_ENV_FILE }}
+        run: |
+          printf '%s\n' "$API_ENV_CONTENT" | ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "umask 077; mkdir -p /opt/sslos; cat > /opt/sslos/api.env"
+      - name: Pull and restart container
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || 22 }}
+          GHCR_USER: ${{ secrets.GHCR_DEPLOY_USER }}
+          GHCR_TOKEN: ${{ secrets.GHCR_DEPLOY_TOKEN }}
+        run: |
+          printf '%s' "$GHCR_TOKEN" | ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "docker login ghcr.io -u '$GHCR_USER' --password-stdin && \
+             docker pull '$IMAGE_NAME:latest' && \
+             (docker network create sslos 2>/dev/null || true) && \
+             (docker rm -f '$CONTAINER_NAME' 2>/dev/null || true) && \
+             docker run -d --restart unless-stopped --name '$CONTAINER_NAME' \
+               --network sslos --env-file /opt/sslos/api.env -p '$HOST_PORT:8080' '$IMAGE_NAME:latest'"
