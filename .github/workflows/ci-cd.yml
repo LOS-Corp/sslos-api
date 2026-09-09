@@ -37,6 +37,8 @@ jobs:
       SPRING_DATASOURCE_PASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
+      - name: Make Maven Wrapper executable
+        run: chmod +x ./mvnw
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
