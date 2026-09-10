@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 
@@ -34,5 +35,17 @@ public class AuthController {
     @Operation(summary = "Login and receive a JWT bearer token")
     public LoginResponse login(@Valid @RequestBody LoginRequest request) {
         return authService.login(request);
+    }
+
+    @PostMapping("/refresh")
+    @Operation(summary = "Refresh access token using a valid refresh token")
+    public RefreshTokenResponse refresh(@Valid @RequestBody RefreshTokenRequest request) {
+        return authService.refreshToken(request);
+    }
+
+    @PostMapping("/logout")
+    @Operation(summary = "Logout current session", security = @SecurityRequirement(name = "bearerAuth"))
+    public LogoutResponse logout() {
+        return authService.logout();
     }
 }

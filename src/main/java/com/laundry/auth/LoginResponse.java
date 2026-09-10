@@ -1,4 +1,4 @@
 package com.laundry.auth;
 
-public record LoginResponse(String accessToken, CustomerResponse customer, String role) {
+public record LoginResponse(String accessToken, String refreshToken, CustomerResponse customer, String role) {
 }

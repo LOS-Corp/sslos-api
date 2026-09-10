@@ -5,7 +5,12 @@ import com.laundry.user.RoleRepository;
 import com.laundry.user.User;
 import com.laundry.user.UserRepository;
 
+import java.time.OffsetDateTime;
+import java.util.UUID;
+
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -15,15 +20,23 @@ public class AuthService {
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
+    private final RefreshTokenRepository refreshTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final long refreshTokenExpirationSeconds;
 
-    public AuthService(UserRepository userRepository, RoleRepository roleRepository,
-                       PasswordEncoder passwordEncoder, JwtService jwtService) {
+    public AuthService(UserRepository userRepository,
+                       RoleRepository roleRepository,
+                       RefreshTokenRepository refreshTokenRepository,
+                       PasswordEncoder passwordEncoder,
+                       JwtService jwtService,
+                       @Value("${app.jwt.refresh-token-expiration-seconds:604800}") long refreshTokenExpirationSeconds) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
+        this.refreshTokenRepository = refreshTokenRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.refreshTokenExpirationSeconds = refreshTokenExpirationSeconds;
     }
 
     @Transactional
@@ -53,7 +66,7 @@ public class AuthService {
         }
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public LoginResponse login(LoginRequest request) {
         User user = userRepository.findByEmail(normalizeEmail(request.email()))
             .filter(candidate -> passwordEncoder.matches(request.password(), candidate.getPasswordHash()))
@@ -64,7 +77,59 @@ public class AuthService {
             .sorted()
             .findFirst()
             .orElse(null);
-        return new LoginResponse(jwtService.createToken(user), CustomerResponse.from(user), role);
+
+        String accessToken = jwtService.createToken(user);
+        RefreshToken refreshToken = createRefreshToken(user);
+
+        return new LoginResponse(accessToken, refreshToken.getToken(), CustomerResponse.from(user), role);
+    }
+
+    @Transactional
+    public RefreshTokenResponse refreshToken(RefreshTokenRequest request) {
+        RefreshToken currentToken = refreshTokenRepository.findByToken(request.refreshToken())
+            .orElseThrow(() -> new InvalidTokenException("Refresh token does not exist"));
+
+        if (!currentToken.isValid()) {
+            throw new InvalidTokenException("Refresh token is expired or revoked");
+        }
+
+        User user = currentToken.getUser();
+        if (!"ACTIVE".equals(user.getStatus())) {
+            throw new InvalidTokenException("User account is inactive");
+        }
+
+        // Token Rotation: revoke current refresh token
+        currentToken.revoke();
+        refreshTokenRepository.save(currentToken);
+
+        // Generate new token pair
+        String newAccessToken = jwtService.createToken(user);
+        RefreshToken newRefreshToken = createRefreshToken(user);
+
+        return new RefreshTokenResponse(newAccessToken, newRefreshToken.getToken());
+    }
+
+    @Transactional
+    public LogoutResponse logout() {
+        var authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication != null && authentication.getPrincipal() != null) {
+            String principal = authentication.getName();
+            try {
+                UUID userId = UUID.fromString(principal);
+                userRepository.findById(userId).ifPresent(refreshTokenRepository::revokeAllByUser);
+            } catch (IllegalArgumentException ignored) {
+                userRepository.findByEmail(principal).ifPresent(refreshTokenRepository::revokeAllByUser);
+            }
+        }
+        SecurityContextHolder.clearContext();
+        return LogoutResponse.success();
+    }
+
+    private RefreshToken createRefreshToken(User user) {
+        String tokenValue = UUID.randomUUID().toString().replace("-", "");
+        OffsetDateTime expiresAt = OffsetDateTime.now().plusSeconds(refreshTokenExpirationSeconds);
+        RefreshToken refreshToken = new RefreshToken(user, tokenValue, expiresAt);
+        return refreshTokenRepository.save(refreshToken);
     }
 
     private String normalizeEmail(String email) {
