@@ -14,7 +14,7 @@ class AuthServiceLogoutTests {
     void logoutClearsSecurityContextAndReturnsSuccessMessage() {
         var userRepo = mock(com.laundry.user.UserRepository.class);
         var tokenRepo = mock(RefreshTokenRepository.class);
-        AuthService authService = new AuthService(userRepo, null, tokenRepo, null, null, 604800L);
+        AuthService authService = new AuthService(userRepo, null, tokenRepo, null, null, null, null, 604800L, 900L);
         SecurityContextHolder.getContext().setAuthentication(
             new UsernamePasswordAuthenticationToken("user", "credentials"));
 
