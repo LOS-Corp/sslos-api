@@ -5,13 +5,10 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.laundry.user.Role;
-import com.laundry.user.RoleRepository;
-import com.laundry.user.User;
-import com.laundry.user.UserRepository;
-
 import java.time.OffsetDateTime;
+import java.util.regex.Pattern;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,9 +19,23 @@ import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
 
+import com.laundry.auth.dto.request.ForgotPasswordRequest;
+import com.laundry.auth.dto.request.LoginRequest;
+import com.laundry.auth.dto.request.ResetPasswordRequest;
+import com.laundry.auth.entity.OtpCode;
+import com.laundry.auth.entity.RefreshToken;
+import com.laundry.auth.repository.OtpCodeRepository;
+import com.laundry.auth.repository.RefreshTokenRepository;
+import com.laundry.user.entity.Role;
+import com.laundry.user.entity.User;
+import com.laundry.user.repository.RoleRepository;
+import com.laundry.user.repository.UserRepository;
+
 @SpringBootTest
 @AutoConfigureMockMvc
 class AuthPasswordResetIntegrationTests {
+
+    private static final Pattern OTP_PATTERN = Pattern.compile("\\d{6}");
 
     @Autowired
     private MockMvc mockMvc;
@@ -41,7 +52,7 @@ class AuthPasswordResetIntegrationTests {
     private RefreshTokenRepository refreshTokenRepository;
 
     @Autowired
-    private PasswordResetTokenRepository passwordResetTokenRepository;
+    private OtpCodeRepository otpCodeRepository;
 
     @Autowired
     private PasswordEncoder passwordEncoder;
@@ -50,7 +61,7 @@ class AuthPasswordResetIntegrationTests {
 
     @BeforeEach
     void setUp() {
-        passwordResetTokenRepository.deleteAll();
+        otpCodeRepository.deleteAll();
         refreshTokenRepository.deleteAll();
 
         Role role = roleRepository.findByName("CUSTOMER")
@@ -69,7 +80,7 @@ class AuthPasswordResetIntegrationTests {
     }
 
     @Test
-    void forgotPassword_withValidEmail_generatesResetTokenAndReturnsSuccess() throws Exception {
+    void forgotPassword_withValidEmail_generatesOtpAndReturnsSuccess() throws Exception {
         ForgotPasswordRequest request = new ForgotPasswordRequest("reset-user@example.com");
 
         mockMvc.perform(post("/api/auth/forgot-password")
@@ -78,16 +89,17 @@ class AuthPasswordResetIntegrationTests {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.message").value("If your email is registered in our system, you will receive password reset instructions."));
 
-        var tokens = passwordResetTokenRepository.findAll();
-        assertThat(tokens).hasSize(1);
-        PasswordResetToken token = tokens.getFirst();
-        assertThat(token.getUser().getId()).isEqualTo(testUser.getId());
-        assertThat(token.isValid()).isTrue();
-        assertThat(token.isUsed()).isFalse();
+        var otpCodes = otpCodeRepository.findAll();
+        assertThat(otpCodes).hasSize(1);
+        OtpCode otp = otpCodes.getFirst();
+        assertThat(otp.getUser().getId()).isEqualTo(testUser.getId());
+        assertThat(otp.isValid()).isTrue();
+        assertThat(otp.isUsed()).isFalse();
+        assertThat(otp.getCode()).matches(OTP_PATTERN);
     }
 
     @Test
-    void forgotPassword_withNonExistentEmail_returnsGenericSuccessWithoutGeneratingToken() throws Exception {
+    void forgotPassword_withNonExistentEmail_returnsGenericSuccessWithoutGeneratingOtp() throws Exception {
         ForgotPasswordRequest request = new ForgotPasswordRequest("nonexistent@example.com");
 
         mockMvc.perform(post("/api/auth/forgot-password")
@@ -96,20 +108,20 @@ class AuthPasswordResetIntegrationTests {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.message").value("If your email is registered in our system, you will receive password reset instructions."));
 
-        assertThat(passwordResetTokenRepository.findAll()).isEmpty();
+        assertThat(otpCodeRepository.findAll()).isEmpty();
     }
 
     @Test
-    void resetPassword_withValidToken_resetsPasswordAndRevokesRefreshTokens() throws Exception {
+    void resetPassword_withValidOtp_resetsPasswordAndRevokesRefreshTokens() throws Exception {
         // Create an existing refresh token for the user
         RefreshToken refreshToken = new RefreshToken(testUser, "sample-refresh-token", OffsetDateTime.now().plusDays(7));
         refreshTokenRepository.save(refreshToken);
 
-        // Create a valid password reset token
-        PasswordResetToken resetToken = new PasswordResetToken(testUser, "valid-reset-token-123", OffsetDateTime.now().plusMinutes(15));
-        passwordResetTokenRepository.save(resetToken);
+        // Create a valid OTP code
+        OtpCode otp = new OtpCode(testUser, "123456", OffsetDateTime.now().plusMinutes(5));
+        otpCodeRepository.save(otp);
 
-        ResetPasswordRequest request = new ResetPasswordRequest("valid-reset-token-123", "NewSecret@2026", "NewSecret@2026");
+        ResetPasswordRequest request = new ResetPasswordRequest("reset-user@example.com", "123456", "NewSecret@2026", "NewSecret@2026");
 
         mockMvc.perform(post("/api/auth/reset-password")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -117,10 +129,10 @@ class AuthPasswordResetIntegrationTests {
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.message").value("Password has been reset successfully"));
 
-        // Verify token marked used
-        PasswordResetToken updatedToken = passwordResetTokenRepository.findByToken("valid-reset-token-123").orElseThrow();
-        assertThat(updatedToken.isUsed()).isTrue();
-        assertThat(updatedToken.isValid()).isFalse();
+        // Verify OTP marked used
+        OtpCode updatedOtp = otpCodeRepository.findById(otp.getId()).orElseThrow();
+        assertThat(updatedOtp.isUsed()).isTrue();
+        assertThat(updatedOtp.isValid()).isFalse();
 
         // Verify old refresh token is revoked
         RefreshToken updatedRefreshToken = refreshTokenRepository.findByToken("sample-refresh-token").orElseThrow();
@@ -143,7 +155,7 @@ class AuthPasswordResetIntegrationTests {
 
     @Test
     void resetPassword_withMismatchedConfirmPassword_returnsBadRequest() throws Exception {
-        ResetPasswordRequest request = new ResetPasswordRequest("some-token", "NewSecret@2026", "DifferentPassword@2026");
+        ResetPasswordRequest request = new ResetPasswordRequest("reset-user@example.com", "123456", "NewSecret@2026", "DifferentPassword@2026");
 
         mockMvc.perform(post("/api/auth/reset-password")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -154,7 +166,7 @@ class AuthPasswordResetIntegrationTests {
 
     @Test
     void resetPassword_withWeakPassword_returnsBadRequest() throws Exception {
-        ResetPasswordRequest request = new ResetPasswordRequest("some-token", "weak", "weak");
+        ResetPasswordRequest request = new ResetPasswordRequest("reset-user@example.com", "123456", "weak", "weak");
 
         mockMvc.perform(post("/api/auth/reset-password")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -164,42 +176,56 @@ class AuthPasswordResetIntegrationTests {
     }
 
     @Test
-    void resetPassword_withExpiredToken_returnsUnauthorized() throws Exception {
-        PasswordResetToken expiredToken = new PasswordResetToken(testUser, "expired-token", OffsetDateTime.now().minusMinutes(5));
-        passwordResetTokenRepository.save(expiredToken);
+    void resetPassword_withExpiredOtp_returnsUnauthorized() throws Exception {
+        OtpCode expiredOtp = new OtpCode(testUser, "654321", OffsetDateTime.now().minusMinutes(5));
+        otpCodeRepository.save(expiredOtp);
 
-        ResetPasswordRequest request = new ResetPasswordRequest("expired-token", "NewSecret@2026", "NewSecret@2026");
+        ResetPasswordRequest request = new ResetPasswordRequest("reset-user@example.com", "654321", "NewSecret@2026", "NewSecret@2026");
 
         mockMvc.perform(post("/api/auth/reset-password")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.message").value("Password reset token is invalid or expired"));
+            .andExpect(jsonPath("$.message").value("Invalid OTP or OTP has expired"));
     }
 
     @Test
-    void resetPassword_withAlreadyUsedToken_returnsUnauthorized() throws Exception {
-        PasswordResetToken usedToken = new PasswordResetToken(testUser, "used-token", OffsetDateTime.now().plusMinutes(15));
-        usedToken.markAsUsed();
-        passwordResetTokenRepository.save(usedToken);
+    void resetPassword_withAlreadyUsedOtp_returnsUnauthorized() throws Exception {
+        OtpCode usedOtp = new OtpCode(testUser, "111222", OffsetDateTime.now().plusMinutes(5));
+        usedOtp.markAsUsed();
+        otpCodeRepository.save(usedOtp);
 
-        ResetPasswordRequest request = new ResetPasswordRequest("used-token", "NewSecret@2026", "NewSecret@2026");
+        ResetPasswordRequest request = new ResetPasswordRequest("reset-user@example.com", "111222", "NewSecret@2026", "NewSecret@2026");
 
         mockMvc.perform(post("/api/auth/reset-password")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.message").value("Password reset token is invalid or expired"));
+            .andExpect(jsonPath("$.message").value("Invalid OTP or OTP has expired"));
     }
 
     @Test
-    void resetPassword_withNonExistentToken_returnsUnauthorized() throws Exception {
-        ResetPasswordRequest request = new ResetPasswordRequest("non-existent-token", "NewSecret@2026", "NewSecret@2026");
+    void resetPassword_withInvalidOtp_returnsUnauthorized() throws Exception {
+        ResetPasswordRequest request = new ResetPasswordRequest("reset-user@example.com", "999999", "NewSecret@2026", "NewSecret@2026");
 
         mockMvc.perform(post("/api/auth/reset-password")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(objectMapper.writeValueAsString(request)))
             .andExpect(status().isUnauthorized())
-            .andExpect(jsonPath("$.message").value("Password reset token is invalid or expired"));
+            .andExpect(jsonPath("$.message").value("Invalid OTP or OTP has expired"));
+    }
+
+    @Test
+    void resetPassword_withWrongEmail_returnsUnauthorized() throws Exception {
+        OtpCode otp = new OtpCode(testUser, "555666", OffsetDateTime.now().plusMinutes(5));
+        otpCodeRepository.save(otp);
+
+        ResetPasswordRequest request = new ResetPasswordRequest("wrong-email@example.com", "555666", "NewSecret@2026", "NewSecret@2026");
+
+        mockMvc.perform(post("/api/auth/reset-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(objectMapper.writeValueAsString(request)))
+            .andExpect(status().isUnauthorized())
+            .andExpect(jsonPath("$.message").value("Invalid OTP or email"));
     }
 }

@@ -2,15 +2,28 @@ package com.laundry.shared;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
+import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
+/**
+ * Logging-based email service for development.
+ * Only active when SmtpEmailService is not available.
+ */
 @Service
+@Profile("!smtp")
+@ConditionalOnMissingBean(EmailService.class)
 public class LoggingEmailService implements EmailService {
 
     private static final Logger log = LoggerFactory.getLogger(LoggingEmailService.class);
 
     @Override
-    public void sendPasswordResetEmail(String toEmail, String resetToken) {
-        log.info("Simulating email to: {} with password reset token: {}", toEmail, resetToken);
+    public void sendPasswordResetEmail(String toEmail, String customerName, String otpCode) {
+        log.info("========== PASSWORD RESET EMAIL ==========");
+        log.info("To: {}", toEmail);
+        log.info("Customer: {}", customerName);
+        log.info("Your OTP code: {}", otpCode);
+        log.info("This code expires in 5 minutes.");
+        log.info("==========================================");
     }
 }

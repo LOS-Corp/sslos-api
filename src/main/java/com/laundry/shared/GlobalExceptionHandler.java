@@ -4,11 +4,13 @@ import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import com.laundry.auth.DuplicateResourceException;
-import com.laundry.auth.InvalidCredentialsException;
-import com.laundry.auth.InvalidTokenException;
+import com.laundry.auth.exception.InvalidCredentialsException;
+import com.laundry.auth.exception.InvalidTokenException;
+import com.laundry.shared.exception.DuplicateResourceException;
+
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -29,6 +31,11 @@ public class GlobalExceptionHandler {
         return error(HttpStatus.BAD_REQUEST, exception.getMessage(), Map.of());
     }
 
+    @ExceptionHandler(IllegalStateException.class)
+    ResponseEntity<ApiError> handleIllegalState(IllegalStateException exception) {
+        return error(HttpStatus.BAD_REQUEST, exception.getMessage(), Map.of());
+    }
+
     @ExceptionHandler(DuplicateResourceException.class)
     ResponseEntity<ApiError> handleDuplicate(DuplicateResourceException exception) {
         return error(HttpStatus.CONFLICT, exception.getMessage(), Map.of());
@@ -42,6 +49,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(InvalidTokenException.class)
     ResponseEntity<ApiError> handleInvalidToken(InvalidTokenException exception) {
         return error(HttpStatus.UNAUTHORIZED, exception.getMessage(), Map.of());
+    }
+
+    @ExceptionHandler(AccessDeniedException.class)
+    ResponseEntity<ApiError> handleAccessDenied(AccessDeniedException exception) {
+        return error(HttpStatus.FORBIDDEN, "Access denied: " + exception.getMessage(), Map.of());
     }
 
     private ResponseEntity<ApiError> error(HttpStatus status, String message, Map<String, String> fields) {

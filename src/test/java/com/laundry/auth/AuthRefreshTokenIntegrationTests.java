@@ -6,20 +6,26 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.laundry.user.Role;
-import com.laundry.user.RoleRepository;
-import com.laundry.user.User;
-import com.laundry.user.UserRepository;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.web.servlet.MockMvc;
+
+import com.laundry.auth.dto.request.LoginRequest;
+import com.laundry.auth.dto.request.RefreshTokenRequest;
+import com.laundry.auth.dto.response.LoginResponse;
+import com.laundry.auth.dto.response.RefreshTokenResponse;
+import com.laundry.auth.entity.RefreshToken;
+import com.laundry.auth.repository.RefreshTokenRepository;
+import com.laundry.user.entity.Role;
+import com.laundry.user.entity.User;
+import com.laundry.user.repository.RoleRepository;
+import com.laundry.user.repository.UserRepository;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -129,8 +135,8 @@ class AuthRefreshTokenIntegrationTests {
 
         // Logout with bearer access token
         mockMvc.perform(post("/api/auth/logout")
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + loginResponse.accessToken())
-                .contentType(MediaType.APPLICATION_JSON))
+                .contentType(MediaType.APPLICATION_JSON)
+                .header("Authorization", "Bearer " + loginResponse.accessToken()))
             .andExpect(status().isOk());
 
         // Refresh token should now be revoked

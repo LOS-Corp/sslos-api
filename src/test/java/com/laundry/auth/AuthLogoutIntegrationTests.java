@@ -4,11 +4,6 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-import com.laundry.user.Role;
-import com.laundry.user.RoleRepository;
-import com.laundry.user.User;
-import com.laundry.user.UserRepository;
-
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,6 +12,12 @@ import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
+
+import com.laundry.auth.security.JwtService;
+import com.laundry.user.entity.Role;
+import com.laundry.user.entity.User;
+import com.laundry.user.repository.RoleRepository;
+import com.laundry.user.repository.UserRepository;
 
 @SpringBootTest
 @AutoConfigureMockMvc
@@ -55,7 +56,7 @@ class AuthLogoutIntegrationTests {
     void rejectsLogoutWithoutAuthentication() throws Exception {
         mockMvc.perform(post("/api/auth/logout")
                 .contentType(MediaType.APPLICATION_JSON))
-            .andExpect(status().isForbidden());
+            .andExpect(status().isUnauthorized());
     }
 
     @Test

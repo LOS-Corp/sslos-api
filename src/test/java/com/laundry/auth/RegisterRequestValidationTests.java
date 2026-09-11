@@ -6,8 +6,11 @@ import java.util.Set;
 
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
+
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+
+import com.laundry.auth.dto.request.RegisterRequest;
 
 class RegisterRequestValidationTests {
 
