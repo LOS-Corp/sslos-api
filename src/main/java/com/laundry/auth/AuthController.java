@@ -48,4 +48,16 @@ public class AuthController {
     public LogoutResponse logout() {
         return authService.logout();
     }
+
+    @PostMapping("/forgot-password")
+    @Operation(summary = "Request password reset instructions via email")
+    public MessageResponse forgotPassword(@Valid @RequestBody ForgotPasswordRequest request) {
+        return authService.forgotPassword(request);
+    }
+
+    @PostMapping("/reset-password")
+    @Operation(summary = "Reset password using a reset token")
+    public MessageResponse resetPassword(@Valid @RequestBody ResetPasswordRequest request) {
+        return authService.resetPassword(request);
+    }
 }

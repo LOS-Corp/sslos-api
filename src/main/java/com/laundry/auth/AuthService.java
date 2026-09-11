@@ -1,5 +1,6 @@
 package com.laundry.auth;
 
+import com.laundry.shared.EmailService;
 import com.laundry.user.Role;
 import com.laundry.user.RoleRepository;
 import com.laundry.user.User;
@@ -21,22 +22,31 @@ public class AuthService {
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;
     private final RefreshTokenRepository refreshTokenRepository;
+    private final PasswordResetTokenRepository passwordResetTokenRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
+    private final EmailService emailService;
     private final long refreshTokenExpirationSeconds;
+    private final long resetTokenExpirationSeconds;
 
     public AuthService(UserRepository userRepository,
                        RoleRepository roleRepository,
                        RefreshTokenRepository refreshTokenRepository,
+                       PasswordResetTokenRepository passwordResetTokenRepository,
                        PasswordEncoder passwordEncoder,
                        JwtService jwtService,
-                       @Value("${app.jwt.refresh-token-expiration-seconds:604800}") long refreshTokenExpirationSeconds) {
+                       EmailService emailService,
+                       @Value("${app.jwt.refresh-token-expiration-seconds:604800}") long refreshTokenExpirationSeconds,
+                       @Value("${app.auth.reset-token-expiration-seconds:900}") long resetTokenExpirationSeconds) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.refreshTokenRepository = refreshTokenRepository;
+        this.passwordResetTokenRepository = passwordResetTokenRepository;
         this.passwordEncoder = passwordEncoder;
         this.jwtService = jwtService;
+        this.emailService = emailService;
         this.refreshTokenExpirationSeconds = refreshTokenExpirationSeconds;
+        this.resetTokenExpirationSeconds = resetTokenExpirationSeconds;
     }
 
     @Transactional
@@ -123,6 +133,52 @@ public class AuthService {
         }
         SecurityContextHolder.clearContext();
         return LogoutResponse.success();
+    }
+
+    @Transactional
+    public MessageResponse forgotPassword(ForgotPasswordRequest request) {
+        String email = normalizeEmail(request.email());
+        userRepository.findByEmail(email)
+            .filter(user -> "ACTIVE".equals(user.getStatus()))
+            .ifPresent(user -> {
+                passwordResetTokenRepository.invalidateAllByUser(user);
+                String tokenValue = UUID.randomUUID().toString().replace("-", "");
+                OffsetDateTime expiresAt = OffsetDateTime.now().plusSeconds(resetTokenExpirationSeconds);
+                PasswordResetToken resetToken = new PasswordResetToken(user, tokenValue, expiresAt);
+                passwordResetTokenRepository.save(resetToken);
+                emailService.sendPasswordResetEmail(user.getEmail(), tokenValue);
+            });
+
+        return new MessageResponse("If your email is registered in our system, you will receive password reset instructions.");
+    }
+
+    @Transactional
+    public MessageResponse resetPassword(ResetPasswordRequest request) {
+        if (!request.newPassword().equals(request.confirmPassword())) {
+            throw new IllegalArgumentException("Password confirmation does not match");
+        }
+
+        PasswordResetToken resetToken = passwordResetTokenRepository.findByToken(request.token())
+            .orElseThrow(() -> new InvalidTokenException("Password reset token is invalid or expired"));
+
+        if (!resetToken.isValid()) {
+            throw new InvalidTokenException("Password reset token is invalid or expired");
+        }
+
+        User user = resetToken.getUser();
+        if (!"ACTIVE".equals(user.getStatus())) {
+            throw new InvalidTokenException("User account is inactive");
+        }
+
+        user.changePassword(passwordEncoder.encode(request.newPassword()));
+        userRepository.save(user);
+
+        resetToken.markAsUsed();
+        passwordResetTokenRepository.save(resetToken);
+
+        refreshTokenRepository.revokeAllByUser(user);
+
+        return new MessageResponse("Password has been reset successfully");
     }
 
     private RefreshToken createRefreshToken(User user) {
