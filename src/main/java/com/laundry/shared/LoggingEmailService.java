@@ -3,15 +3,13 @@ package com.laundry.shared;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
-import org.springframework.context.annotation.Profile;
 import org.springframework.stereotype.Service;
 
 /**
- * Logging-based email service for development.
- * Only active when SmtpEmailService is not available.
+ * Logging-based email service for development and testing.
+ * Only active when SmtpEmailService is not available (app.email.enabled=false).
  */
 @Service
-@Profile("!smtp")
 @ConditionalOnMissingBean(EmailService.class)
 public class LoggingEmailService implements EmailService {
 

@@ -5,6 +5,7 @@ import jakarta.mail.internet.MimeMessage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.mail.MailException;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
@@ -13,8 +14,10 @@ import org.springframework.stereotype.Service;
 /**
  * SMTP-based email service implementation.
  * Sends actual HTML emails via configured SMTP server.
+ * Only active when app.email.enabled=true
  */
 @Service
+@ConditionalOnProperty(name = "app.email.enabled", havingValue = "true")
 public class SmtpEmailService implements EmailService {
 
     private static final Logger log = LoggerFactory.getLogger(SmtpEmailService.class);
