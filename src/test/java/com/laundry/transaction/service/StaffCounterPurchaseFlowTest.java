@@ -1,6 +1,8 @@
 package com.laundry.transaction.service;
 
+import com.laundry.payment.dto.request.CreatePaymentRequest;
 import com.laundry.payment.dto.response.PaymentResponse;
+import com.laundry.payment.entity.PaymentMethod;
 import com.laundry.payment.entity.PaymentStatus;
 import com.laundry.transaction.dto.request.CreatePurchaseRequest;
 import com.laundry.transaction.dto.response.TransactionResponse;
@@ -11,7 +13,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.ActiveProfiles;
 
-import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -47,7 +48,7 @@ class StaffCounterPurchaseFlowTest {
         CreatePaymentRequest paymentRequest = CreatePaymentRequest.builder()
             .transactionId(transaction.getTransactionId())
             .amount(transaction.getTotalAmount())
-            .paymentMethod(com.laundry.payment.entity.PaymentMethod.CASH)
+            .paymentMethod(PaymentMethod.CASH)
             .idempotencyKey("staff-cash-" + UUID.randomUUID())
             .build();
 
