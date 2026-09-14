@@ -76,6 +76,11 @@ public class SecurityConfig {
                 // Actuator endpoints (for health checks)
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                 
+                // Transaction endpoints - public for now (will add auth later)
+                .requestMatchers("/api/mobile/**").permitAll()
+                .requestMatchers("/api/kiosk/**").permitAll()
+                .requestMatchers("/api/staff/**").hasAnyAuthority("ROLE_STAFF", "ROLE_ADMIN", "ROLE_OWNER")
+                
                 // User profile endpoints - require authentication
                 .requestMatchers("/api/v1/users/**").authenticated()
                 
