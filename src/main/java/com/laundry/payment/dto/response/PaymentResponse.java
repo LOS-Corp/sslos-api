@@ -27,6 +27,7 @@ public class PaymentResponse {
     private PaymentStatus status;
     private String gatewayTransactionId;
     private String paymentUrl; // For ONLINE payment
+    private String qrCode;     // VietQR code string for direct display
     private LocalDateTime createdAt;
     private LocalDateTime paidAt;
 }

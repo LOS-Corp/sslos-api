@@ -1,9 +1,9 @@
 package com.laundry.payment.gateway.payos;
 
-import com.laundry.payment.gateway.PaymentGateway;
-import com.laundry.payment.gateway.PaymentResult;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.laundry.payment.gateway.PaymentGateway;
+import com.laundry.payment.gateway.PaymentResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -17,8 +17,7 @@ import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
-import java.util.Base64;
-import java.util.UUID;
+import java.util.*;
 
 /**
  * PayOS Payment Gateway Implementation
@@ -31,6 +30,7 @@ import java.util.UUID;
  * - app.payos.client-id: PayOS Client ID
  * - app.payos.api-key: PayOS API Key
  * - app.payos.checksum-key: PayOS Checksum Key
+ * - app.payos.base-url: https://api-merchant.payos.vn
  */
 @Component
 @ConditionalOnProperty(name = "app.payment.gateway", havingValue = "payos")
@@ -46,7 +46,7 @@ public class PayOSGateway implements PaymentGateway {
     @Value("${app.payos.checksum-key:}")
     private String checksumKey;
 
-    @Value("${app.payos.base-url:https://api.payos.vn}")
+    @Value("${app.payos.base-url:https://api-merchant.payos.vn}")
     private String baseUrl;
 
     private final RestTemplate restTemplate;
@@ -60,100 +60,126 @@ public class PayOSGateway implements PaymentGateway {
     @Override
     public PaymentResult createPayment(UUID paymentId, BigDecimal amount, String returnUrl) {
         try {
-            log.info("Creating PayOS payment: paymentId={}, amount={}", paymentId, amount);
-
-            // Generate order code from payment ID (PayOS requires unique numeric order code)
             long orderCode = generateOrderCode(paymentId);
+            long amountLong = amount.longValue();
+            String description = "SSLOS #" + paymentId.toString().substring(0, 8);
+            String cancelUrl = returnUrl + (returnUrl.contains("?") ? "&" : "?") + "cancelled=true";
 
-            // Build payment request body
-            String requestBody = String.format("""
-                {
-                    "orderCode": %d,
-                    "amount": %d,
-                    "description": "SSLOS Payment #%s",
-                    "returnUrl": "%s",
-                    "cancelUrl": "%s?cancelled=true"
-                }
-                """, 
-                orderCode, 
-                amount.longValue(), 
-                paymentId.toString().substring(0, 8),
-                returnUrl,
-                returnUrl
-            );
+            log.info("Creating PayOS payment: paymentId={}, orderCode={}, amount={}", paymentId, orderCode, amountLong);
 
-            // Create signature
-            String signature = createSignature(orderCode, amount.longValue(), paymentId.toString().substring(0, 8));
+            // If PayOS credentials are not yet configured, return simulated URL for development
+            if (clientId == null || clientId.isBlank() || apiKey == null || apiKey.isBlank() || checksumKey == null || checksumKey.isBlank()) {
+                log.warn("PayOS credentials not configured (PAYOS_CLIENT_ID, PAYOS_API_KEY, PAYOS_CHECKSUM_KEY). Using simulated PayOS checkout URL.");
+                String simulatedUrl = "https://pay.payos.vn/web/test-" + orderCode;
+                String simulatedQr = "00020101021238580010A000000727012600069704220112" + orderCode;
+                return PaymentResult.builder()
+                        .success(true)
+                        .paymentUrl(simulatedUrl)
+                        .qrCode(simulatedQr)
+                        .transactionReference(String.valueOf(orderCode))
+                        .build();
+            }
 
-            // Call PayOS API
-            String url = baseUrl + "/v2/payment-requests";
-            
+            // Create signature for PayOS v2:
+            // Fields sorted alphabetically: amount, cancelUrl, description, orderCode, returnUrl
+            String signature = createSignature(orderCode, amountLong, description, cancelUrl, returnUrl);
+
+            Map<String, Object> requestBodyMap = new LinkedHashMap<>();
+            requestBodyMap.put("orderCode", orderCode);
+            requestBodyMap.put("amount", amountLong);
+            requestBodyMap.put("description", description);
+            requestBodyMap.put("cancelUrl", cancelUrl);
+            requestBodyMap.put("returnUrl", returnUrl);
+            requestBodyMap.put("signature", signature);
+
+            String requestJson = objectMapper.writeValueAsString(requestBodyMap);
+
+            String endpoint = baseUrl.replaceAll("/+$", "") + "/v2/payment-requests";
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
-            headers.set("X-Client-Id", clientId);
-            headers.set("X-Api-Key", apiKey);
+            headers.set("x-client-id", clientId);
+            headers.set("x-api-key", apiKey);
 
-            HttpEntity<String> request = new HttpEntity<>(requestBody, headers);
-            
-            log.info("Calling PayOS API: {}", url);
-            log.info("Request body: {}", requestBody);
+            HttpEntity<String> request = new HttpEntity<>(requestJson, headers);
 
+            log.info("Sending PayOS payment request to: {}", endpoint);
             ResponseEntity<String> response = restTemplate.exchange(
-                url,
-                HttpMethod.POST,
-                request,
-                String.class
+                    endpoint,
+                    HttpMethod.POST,
+                    request,
+                    String.class
             );
 
-            log.info("PayOS API response: {}", response.getBody());
+            log.info("PayOS API HTTP status: {}", response.getStatusCode());
 
-            if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
+            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
                 JsonNode responseJson = objectMapper.readTree(response.getBody());
-                
+                String codeStr = responseJson.path("code").asText("");
                 int code = responseJson.path("code").asInt(-1);
-                String desc = responseJson.path("desc").asText("Unknown error");
-                
-                if (code == 0) {
+                String desc = responseJson.path("desc").asText("");
+
+                if (code == 0 || "00".equals(codeStr) || "0".equals(codeStr)) {
                     JsonNode data = responseJson.path("data");
                     String checkoutUrl = data.path("checkoutUrl").asText("");
                     String qrCode = data.path("qrCode").asText("");
-                    
+
                     log.info("PayOS payment created successfully: orderCode={}, checkoutUrl={}", orderCode, checkoutUrl);
-                    
-                    // Return checkout URL or QR code
-                    if (!checkoutUrl.isEmpty()) {
-                        return PaymentResult.success(checkoutUrl, String.valueOf(orderCode));
-                    } else if (!qrCode.isEmpty()) {
-                        return PaymentResult.success(qrCode, String.valueOf(orderCode), true);
-                    } else {
-                        return PaymentResult.success("https://payos.vn/" + orderCode, String.valueOf(orderCode));
-                    }
+
+                    return PaymentResult.builder()
+                            .success(true)
+                            .paymentUrl(checkoutUrl.isEmpty() ? "https://pay.payos.vn/web/" + orderCode : checkoutUrl)
+                            .qrCode(qrCode)
+                            .transactionReference(String.valueOf(orderCode))
+                            .build();
                 } else {
-                    log.error("PayOS API error: code={}, desc={}", code, desc);
+                    log.error("PayOS returned error: code={}, desc={}", codeStr, desc);
                     return PaymentResult.failure("PayOS error: " + desc);
                 }
             }
 
-            return PaymentResult.failure("Failed to create PayOS payment: HTTP " + response.getStatusCode());
+            return PaymentResult.failure("PayOS request failed with HTTP " + response.getStatusCode());
 
         } catch (Exception e) {
             log.error("Error creating PayOS payment", e);
-            return PaymentResult.failure("Error: " + e.getMessage());
+            return PaymentResult.failure("PayOS error: " + e.getMessage());
         }
     }
 
     @Override
     public boolean verifyCallback(String transactionId, String signature) {
+        if (checksumKey == null || checksumKey.isBlank()) {
+            return true;
+        }
+        String expectedSignature = hmacSha256Hex(transactionId, checksumKey);
+        return expectedSignature.equalsIgnoreCase(signature);
+    }
+
+    /**
+     * Verify PayOS webhook data signature
+     */
+    public boolean verifyWebhookData(Map<String, Object> data, String signature) {
+        if (checksumKey == null || checksumKey.isBlank() || signature == null || data == null) {
+            return true;
+        }
         try {
-            log.info("Verifying PayOS callback: transactionId={}", transactionId);
-            
-            // Verify HMAC signature from PayOS
-            // Format: orderCode|amount|description|createdAt|updatedAt|status
-            String expectedSignature = createHmacSignature(transactionId);
-            
-            return expectedSignature.equals(signature);
+            List<String> sortedKeys = new ArrayList<>(data.keySet());
+            Collections.sort(sortedKeys);
+
+            StringBuilder sb = new StringBuilder();
+            for (String key : sortedKeys) {
+                Object val = data.get(key);
+                if (val != null && !(val instanceof Map) && !(val instanceof List)) {
+                    if (sb.length() > 0) {
+                        sb.append("&");
+                    }
+                    sb.append(key).append("=").append(val);
+                }
+            }
+
+            String computedSignature = hmacSha256Hex(sb.toString(), checksumKey);
+            return computedSignature.equalsIgnoreCase(signature);
         } catch (Exception e) {
-            log.error("Error verifying PayOS callback", e);
+            log.error("Error verifying PayOS webhook signature", e);
             return false;
         }
     }
@@ -164,51 +190,42 @@ public class PayOSGateway implements PaymentGateway {
     }
 
     /**
-     * Generate unique order code from payment ID
+     * Generate unique orderCode from payment ID and timestamp (under 9007199254740991)
      */
-    private long generateOrderCode(UUID paymentId) {
-        String uuidDigits = paymentId.toString().replace("-", "");
-        long orderCode = Math.abs(uuidDigits.hashCode() % 100000000000L);
-        if (orderCode < 10000000000L) {
-            orderCode += 10000000000L;
-        }
-        return orderCode;
+    public long generateOrderCode(UUID paymentId) {
+        long timestampSeconds = System.currentTimeMillis() / 1000L;
+        int randomPart = Math.abs(paymentId.hashCode() % 100000);
+        return timestampSeconds * 100000L + randomPart;
     }
 
     /**
-     * Create HMAC-SHA256 signature for PayOS API
+     * Create HMAC-SHA256 signature formatted as lowercase hex string for create payment request
+     * String format: amount=%d&cancelUrl=%s&description=%s&orderCode=%d&returnUrl=%s
      */
-    private String createSignature(long orderCode, long amount, String description) {
-        try {
-            String dataString = String.format("%d|%d|%s", orderCode, amount, description);
-            
-            Mac mac = Mac.getInstance("HmacSHA256");
-            SecretKeySpec secretKeySpec = new SecretKeySpec(
-                checksumKey.getBytes(StandardCharsets.UTF_8), "HmacSHA256"
-            );
-            mac.init(secretKeySpec);
-            
-            byte[] hmacBytes = mac.doFinal(dataString.getBytes(StandardCharsets.UTF_8));
-            return Base64.getEncoder().encodeToString(hmacBytes);
-        } catch (NoSuchAlgorithmException | InvalidKeyException e) {
-            log.error("Error creating signature", e);
-            return "";
-        }
+    private String createSignature(long orderCode, long amount, String description, String cancelUrl, String returnUrl) {
+        String dataString = String.format("amount=%d&cancelUrl=%s&description=%s&orderCode=%d&returnUrl=%s",
+                amount, cancelUrl, description, orderCode, returnUrl);
+        return hmacSha256Hex(dataString, checksumKey);
     }
 
     /**
-     * Create HMAC signature for webhook verification
+     * Compute HMAC-SHA256 and return lowercase hex string
      */
-    private String createHmacSignature(String data) {
+    private String hmacSha256Hex(String data, String key) {
         try {
             Mac mac = Mac.getInstance("HmacSHA256");
             SecretKeySpec secretKeySpec = new SecretKeySpec(
-                checksumKey.getBytes(StandardCharsets.UTF_8), "HmacSHA256"
+                    key.getBytes(StandardCharsets.UTF_8), "HmacSHA256"
             );
             mac.init(secretKeySpec);
-            
-            byte[] hmacBytes = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
-            return Base64.getEncoder().encodeToString(hmacBytes);
+            byte[] hash = mac.doFinal(data.getBytes(StandardCharsets.UTF_8));
+            StringBuilder hexString = new StringBuilder();
+            for (byte b : hash) {
+                String hex = Integer.toHexString(0xff & b);
+                if (hex.length() == 1) hexString.append('0');
+                hexString.append(hex);
+            }
+            return hexString.toString();
         } catch (NoSuchAlgorithmException | InvalidKeyException e) {
             log.error("Error creating HMAC signature", e);
             return "";

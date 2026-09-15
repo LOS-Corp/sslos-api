@@ -51,12 +51,13 @@ public class MachineReservationService {
      * Create a temporary machine reservation (PENDING_PAYMENT)
      */
     @Transactional
-    public MachineReservation createTemporaryReservation(UUID machineId, LocalDateTime startTime, 
-                                                       LocalDateTime expiresAt, UUID transactionId) {
+    public MachineReservation createTemporaryReservation(Transaction transaction, UUID machineId, LocalDateTime startTime, 
+                                                       LocalDateTime expiresAt) {
         // Double check availability before creating
         checkMachineAvailability(machineId, startTime, startTime.plusHours(2));
         
         MachineReservation reservation = MachineReservation.builder()
+            .transaction(transaction)
             .machineId(machineId)
             .startTime(startTime)
             .endTime(startTime.plusHours(2))
@@ -64,9 +65,15 @@ public class MachineReservationService {
             .build();
         
         log.info("Creating temporary machine reservation: machineId={}, transactionId={}", 
-                 machineId, transactionId);
+                 machineId, transaction != null ? transaction.getId() : null);
         
         return reservationRepository.save(reservation);
+    }
+
+    @Transactional
+    public MachineReservation createTemporaryReservation(UUID machineId, LocalDateTime startTime, 
+                                                       LocalDateTime expiresAt, Transaction transaction) {
+        return createTemporaryReservation(transaction, machineId, startTime, expiresAt);
     }
 
     /**

@@ -85,7 +85,7 @@ public class PaymentService {
             payment.setGatewayTransactionId(result.getTransactionReference());
             payment = paymentRepository.save(payment);
 
-            return toResponse(payment, result.getPaymentUrl());
+            return toResponse(payment, result.getPaymentUrl(), result.getQrCode());
         }
 
         // For CASH payment, return without payment URL
@@ -201,10 +201,14 @@ public class PaymentService {
      * Convert entity to response DTO
      */
     private PaymentResponse toResponse(Payment payment) {
-        return toResponse(payment, null);
+        return toResponse(payment, null, null);
     }
 
     private PaymentResponse toResponse(Payment payment, String paymentUrl) {
+        return toResponse(payment, paymentUrl, null);
+    }
+
+    private PaymentResponse toResponse(Payment payment, String paymentUrl, String qrCode) {
         return PaymentResponse.builder()
             .paymentId(payment.getId())
             .transactionId(payment.getTransactionId())
@@ -213,6 +217,7 @@ public class PaymentService {
             .status(payment.getStatus())
             .gatewayTransactionId(payment.getGatewayTransactionId())
             .paymentUrl(paymentUrl)
+            .qrCode(qrCode)
             .createdAt(payment.getCreatedAt())
             .paidAt(payment.getPaidAt())
             .build();

@@ -100,10 +100,10 @@ public class PurchaseService {
 
         // Create temporary reservation
         MachineReservation reservation = machineReservationService.createTemporaryReservation(
+            transaction,
             request.getMachineId(),
             startTime,
-            transaction.getExpiresAt(),
-            transaction.getId()
+            transaction.getExpiresAt()
         );
 
         transaction.addMachineReservation(reservation);
@@ -143,6 +143,7 @@ public class PurchaseService {
     /**
      * Get transaction by ID
      */
+    @Transactional(readOnly = true)
     public TransactionResponse getTransaction(UUID transactionId) {
         Transaction transaction = transactionRepository.findById(transactionId)
             .orElseThrow(() -> new TransactionException("Transaction not found: " + transactionId));
