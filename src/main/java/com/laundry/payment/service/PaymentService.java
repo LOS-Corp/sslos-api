@@ -136,36 +136,6 @@ public class PaymentService {
     }
 
     /**
-     * Confirm CASH payment (called by Staff)
-     */
-    @Transactional
-    public PaymentResponse confirmCashPayment(UUID paymentId) {
-        log.info("Confirming cash payment: paymentId={}", paymentId);
-
-        Payment payment = paymentRepository.findById(paymentId)
-            .orElseThrow(() -> new PaymentException("Payment not found: " + paymentId));
-
-        if (payment.getPaymentMethod() != PaymentMethod.CASH) {
-            throw new PaymentException("Payment is not a CASH payment");
-        }
-
-        if (payment.getStatus() != PaymentStatus.PENDING) {
-            throw new PaymentException("Payment is not in PENDING status");
-        }
-
-        // Update payment
-        payment.markAsPaid(null, "Confirmed by staff");
-        paymentRepository.save(payment);
-
-        // Confirm transaction
-        purchaseService.confirmPayment(payment.getTransactionId());
-
-        log.info("Cash payment confirmed: paymentId={}, transactionId={}", paymentId, payment.getTransactionId());
-
-        return toResponse(payment);
-    }
-
-    /**
      * Cancel a pending payment
      */
     @Transactional

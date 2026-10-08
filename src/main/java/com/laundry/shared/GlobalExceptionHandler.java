@@ -6,6 +6,9 @@ import java.util.Map;
 
 import com.laundry.auth.exception.InvalidCredentialsException;
 import com.laundry.auth.exception.InvalidTokenException;
+import com.laundry.machine.exception.CheckInRejectedException;
+import com.laundry.machine.exception.MachineNotFoundException;
+import com.laundry.machine.exception.StaleAuthorizationException;
 import com.laundry.shared.exception.DuplicateResourceException;
 
 import org.springframework.http.HttpStatus;
@@ -39,6 +42,42 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DuplicateResourceException.class)
     ResponseEntity<ApiError> handleDuplicate(DuplicateResourceException exception) {
         return error(HttpStatus.CONFLICT, exception.getMessage(), Map.of());
+    }
+
+    @ExceptionHandler(MachineNotFoundException.class)
+    ResponseEntity<ApiError> handleMachineNotFound(MachineNotFoundException exception) {
+        return error(HttpStatus.NOT_FOUND, exception.getMessage(), Map.of());
+    }
+
+    /**
+     * QR check-in rejected by business rules. Maps to 400 with a stable
+     * {@code code} field so the mobile app can branch on it.
+     */
+    @ExceptionHandler(CheckInRejectedException.class)
+    ResponseEntity<ApiError> handleCheckInRejected(CheckInRejectedException exception) {
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .body(new ApiError(OffsetDateTime.now(),
+                        HttpStatus.BAD_REQUEST.value(),
+                        exception.getMessage(),
+                        Map.of("code", exception.code())));
+    }
+
+    /**
+     * Authorization referenced by a START_REQUEST is no longer valid.
+     * Maps to 409 — caller may want to re-scan the QR.
+     */
+    @ExceptionHandler(StaleAuthorizationException.class)
+    ResponseEntity<ApiError> handleStaleAuth(StaleAuthorizationException exception) {
+        return ResponseEntity.status(HttpStatus.CONFLICT)
+                .body(new ApiError(OffsetDateTime.now(),
+                        HttpStatus.CONFLICT.value(),
+                        exception.getMessage(),
+                        Map.of("authorizationId", String.valueOf(exception.getAuthorizationId()))));
+    }
+
+    @ExceptionHandler(com.laundry.branch.exception.BranchNotFoundException.class)
+    ResponseEntity<ApiError> handleBranchNotFound(com.laundry.branch.exception.BranchNotFoundException exception) {
+        return error(HttpStatus.NOT_FOUND, exception.getMessage(), Map.of());
     }
 
     @ExceptionHandler(InvalidCredentialsException.class)

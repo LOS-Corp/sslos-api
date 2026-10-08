@@ -47,4 +47,28 @@ public interface MachineReservationRepository extends JpaRepository<MachineReser
         @Param("transactionId") UUID transactionId,
         @Param("now") LocalDateTime now
     );
+
+    /**
+     * BR-PAY-002: Expire reservations due to payment timeout (single transaction).
+     */
+    @Modifying
+    @Query("UPDATE MachineReservation mr SET mr.status = 'EXPIRED', mr.updatedAt = :now " +
+           "WHERE mr.transaction.id = :transactionId AND mr.status = 'RESERVED'")
+    int expireByTransactionId(
+        @Param("transactionId") UUID transactionId,
+        @Param("now") LocalDateTime now
+    );
+
+    /**
+     * Bulk variant — used by the expiration scheduler to release all reservations
+     * owned by a set of expired transactions in a single round-trip.
+     * Only flips RESERVED → EXPIRED; CONFIRMED/ACTIVE/EXPIRED/CANCELLED are untouched.
+     */
+    @Modifying
+    @Query("UPDATE MachineReservation mr SET mr.status = 'EXPIRED', mr.updatedAt = :now " +
+           "WHERE mr.transaction.id IN :transactionIds AND mr.status = 'RESERVED'")
+    int expireByTransactionIds(
+        @Param("transactionIds") List<UUID> transactionIds,
+        @Param("now") LocalDateTime now
+    );
 }

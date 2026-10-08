@@ -30,4 +30,14 @@ public interface LaundryServiceOrderRepository extends JpaRepository<LaundryServ
         @Param("status") LaundryOrderStatus status,
         @Param("now") LocalDateTime now
     );
+
+    /**
+     * Bulk variant — used by the expiration scheduler to cancel laundry orders
+     * belonging to a set of expired transactions in a single UPDATE.
+     */
+    @Modifying
+    @Query("UPDATE LaundryServiceOrder lo SET lo.status = 'CANCELLED', lo.updatedAt = :now " +
+           "WHERE lo.transaction.id IN :transactionIds AND lo.status IN ('PENDING', 'RECEIVED', 'PROCESSING')")
+    int cancelByTransactionIds(@Param("transactionIds") List<UUID> transactionIds,
+                                 @Param("now") LocalDateTime now);
 }

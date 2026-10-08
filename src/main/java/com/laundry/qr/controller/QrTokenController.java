@@ -3,6 +3,7 @@ package com.laundry.qr.controller;
 import com.laundry.qr.dto.response.QrTokenResponse;
 import com.laundry.qr.entity.QrTokenType;
 import com.laundry.qr.service.QrTokenService;
+import com.laundry.transaction.entity.ServiceType;
 import com.laundry.transaction.entity.TransactionStatus;
 import com.laundry.transaction.service.PurchaseService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -28,39 +29,43 @@ public class QrTokenController {
     private final PurchaseService purchaseService;
 
     /**
-     * Get QR token for a transaction
+     * Get QR token for a locker-based service (LAUNDRY_SERVICE drop-off/pickup).
+     *
+     * <p>QR tĩnh cho máy SELF_SERVICE đã được thay thế bởi
+     * {@code GET /api/machines/{machineCode}/qr} — không cần token, không hết hạn.
+     * Endpoint này chỉ phục vụ LOCKER_DROP_OFF / LOCKER_PICKUP cho LAUNDRY_SERVICE.
      */
     @GetMapping("/transactions/{transactionId}")
-    @Operation(summary = "Get transaction QR", description = "Get QR token for a confirmed transaction")
+    @Operation(summary = "Get locker QR token for LAUNDRY_SERVICE transactions")
     public ResponseEntity<QrTokenResponse> getTransactionQr(@PathVariable UUID transactionId) {
-        log.info("Get QR for transaction: {}", transactionId);
-        
+        log.info("Get locker QR for transaction: {}", transactionId);
+
         var transaction = purchaseService.getTransaction(transactionId);
-        
+
         if (transaction.getStatus() != TransactionStatus.PAID) {
             return ResponseEntity.notFound().build();
         }
-        
-        QrTokenType tokenType;
-        switch (transaction.getServiceType()) {
-            case SELF_SERVICE -> tokenType = QrTokenType.MACHINE_ACTIVATION;
-            case LAUNDRY_SERVICE -> tokenType = QrTokenType.LOCKER_DROP_OFF;
-            default -> throw new IllegalStateException("Unknown service type");
+
+        // Only LAUNDRY_SERVICE needs QR tokens (locker operations).
+        // SELF_SERVICE uses static QR from GET /api/machines/{machineCode}/qr instead.
+        if (transaction.getServiceType() != ServiceType.LAUNDRY_SERVICE) {
+            return ResponseEntity.notFound().build();
         }
-        
-        // Get reference ID based on service type
+
+        QrTokenType tokenType = QrTokenType.LOCKER_DROP_OFF;
+
+        // Get order ID from laundry order
         UUID referenceId;
-        if (transaction.getMachineReservation() != null) {
-            referenceId = transaction.getMachineReservation().getReservationId();
-        } else if (transaction.getLaundryOrder() != null) {
+        if (transaction.getLaundryOrder() != null) {
             referenceId = transaction.getLaundryOrder().getOrderId();
         } else {
-            throw new IllegalStateException("No reservation found");
+            throw new IllegalStateException("No laundry order found");
         }
-        
-        // Create token with 24 hour expiration
-        QrTokenResponse qrToken = qrTokenService.createToken(tokenType, referenceId, "TRANSACTION", 1440);
-        
+
+        // Create locker token with 24 hour expiration
+        QrTokenResponse qrToken = qrTokenService.createToken(
+                tokenType, referenceId, "LAUNDRY_ORDER", 1440);
+
         return ResponseEntity.ok(qrToken);
     }
 

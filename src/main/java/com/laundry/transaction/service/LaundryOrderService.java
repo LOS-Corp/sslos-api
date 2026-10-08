@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -91,16 +92,29 @@ public class LaundryOrderService {
     @Transactional
     public void cancelOrder(UUID orderId) {
         LaundryServiceOrder order = getById(orderId);
-        
+
         // Cancel drop-off locker reservation if exists
         if (order.getDropOffLockerReservation() != null) {
             dropOffLockerService.cancelByOrderId(orderId);
         }
-        
+
         int updated = orderRepository.updateStatus(orderId, LaundryOrderStatus.CANCELLED, LocalDateTime.now());
         if (updated > 0) {
             log.info("Laundry service order cancelled: {}", orderId);
         }
+    }
+
+    /**
+     * Bulk cancel of laundry orders belonging to a set of expired transactions.
+     * Used by the expiration scheduler — single UPDATE for the whole batch.
+     * Cancels only orders that are still cancellable (PENDING/RECEIVED/PROCESSING).
+     */
+    @Transactional
+    public int cancelOrdersByTransactionBulk(List<UUID> transactionIds, LocalDateTime now) {
+        if (transactionIds == null || transactionIds.isEmpty()) {
+            return 0;
+        }
+        return orderRepository.cancelByTransactionIds(transactionIds, now);
     }
 
     /**

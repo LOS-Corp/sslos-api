@@ -59,14 +59,20 @@ public class PayOSWebhookController {
                 data = casted;
             }
 
-            // Verify webhook signature if available
+            // FR-PAY-02: Verify webhook signature for security
+            // BR-PAY-002: Skip verification only if checksum key is not configured (dev mode)
             String signature = (String) payload.get("signature");
             if (payOSGateway != null && signature != null && !signature.isBlank()) {
-                boolean valid = payOSGateway.verifyWebhookData(data, signature);
-                if (!valid) {
-                    log.warn("Invalid PayOS webhook signature: {}", signature);
-                    return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                            .body(Map.of("status", "error", "message", "Invalid signature"));
+                if (checksumKey != null && !checksumKey.isBlank()) {
+                    boolean valid = payOSGateway.verifyWebhookData(data, signature);
+                    if (!valid) {
+                        log.warn("Invalid PayOS webhook signature: {}", signature);
+                        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                                .body(Map.of("status", "error", "message", "Invalid signature"));
+                    }
+                    log.debug("PayOS webhook signature verified successfully");
+                } else {
+                    log.warn("PayOS checksum key not configured - skipping webhook signature verification (dev mode only)");
                 }
             }
 

@@ -76,11 +76,31 @@ public class SecurityConfig {
                 // Actuator endpoints (for health checks)
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                 
+                // WebSocket / STOMP endpoint (SockJS requires unauthenticated handshake)
+                .requestMatchers("/ws", "/ws/**").permitAll()
+                
+                // Machine status read — public (kiosk displays, lobby screens)
+                .requestMatchers(HttpMethod.GET, "/api/machines", "/api/machines/**").permitAll()
+                
+                // Machine commands — require authentication
+                .requestMatchers(HttpMethod.POST, "/api/machines/**").authenticated()
+
+                // Admin machine CRUD — admin/owner only
+                .requestMatchers("/api/admin/machines", "/api/admin/machines/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_OWNER")
+
+                // Branch read — public (kiosks, dropdowns, customer apps)
+                .requestMatchers(HttpMethod.GET, "/api/branches", "/api/branches/**").permitAll()
+
+                // Admin branch CRUD — admin/owner only
+                .requestMatchers("/api/admin/branches", "/api/admin/branches/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_OWNER")
+                
                 // Transaction & Payment endpoints - public for customer flow
                 .requestMatchers("/api/mobile/**").permitAll()
                 .requestMatchers("/api/kiosk/**").permitAll()
                 .requestMatchers("/api/payments/**").permitAll()
                 .requestMatchers("/api/staff/**").hasAnyAuthority("ROLE_STAFF", "ROLE_ADMIN", "ROLE_OWNER")
+                // Refund endpoints
+                .requestMatchers("/api/refunds/**").hasAnyAuthority("ROLE_STAFF", "ROLE_MANAGER", "ROLE_OWNER", "ROLE_ADMIN")
                 
                 // User profile endpoints - require authentication
                 .requestMatchers("/api/v1/users/**").authenticated()
