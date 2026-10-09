@@ -2,6 +2,7 @@ package com.laundry.machine.controller;
 
 import com.laundry.machine.dto.CreateMachineRequest;
 import com.laundry.machine.dto.MachineDto;
+import com.laundry.machine.dto.MachineQrLabelDto;
 import com.laundry.machine.dto.MachineListFilter;
 import com.laundry.machine.dto.PageResponse;
 import com.laundry.machine.dto.UpdateMachineRequest;
@@ -19,6 +20,7 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -46,6 +48,9 @@ public class MachineAdminController {
 
     private final MachineRepository machineRepository;
     private final MachineService machineService;
+
+    @Value("${app.machine.qr-base-url:}")
+    private String qrBaseUrl;
 
     @PostMapping
     @Operation(summary = "Create a new machine")
@@ -91,6 +96,23 @@ public class MachineAdminController {
                 .last(result.isLast())
                 .build();
         return ResponseEntity.ok(body);
+    }
+
+    @GetMapping("/qr-labels")
+    @Operation(summary = "Get QR labels for all registered machines")
+    public ResponseEntity<List<MachineQrLabelDto>> listMachineQrLabels() {
+        if (qrBaseUrl == null || qrBaseUrl.isBlank()) {
+            return ResponseEntity.status(503).build();
+        }
+        String baseUrl = qrBaseUrl.replaceAll("/+$", "");
+        List<MachineQrLabelDto> labels = machineRepository.findAll(Sort.by("machineCode")).stream()
+                .map(machine -> new MachineQrLabelDto(
+                        machine.getMachineCode(),
+                        machine.getDisplayName(),
+                        machine.getType(),
+                        baseUrl + "/machines/" + machine.getMachineCode()))
+                .toList();
+        return ResponseEntity.ok(labels);
     }
 
     @GetMapping("/{machineCode}")

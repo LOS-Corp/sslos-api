@@ -38,6 +38,14 @@ public class Branch {
     @Column(length = 20)
     private String phone;
 
+    /**
+     * URL embed Google Maps (iframe src) của chi nhánh.
+     * Ví dụ: https://www.google.com/maps/embed?pb=...
+     * Có thể NULL khi chưa ghi nhận.
+     */
+    @Column(name = "map_embed_url", length = 500)
+    private String mapEmbedUrl;
+
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     @Builder.Default

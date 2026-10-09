@@ -85,12 +85,14 @@ Get-Content .env | ForEach-Object {
   }
 }
 
-.\mvnw.cmd spring-boot:run
+.\mvnw.cmd spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
 Or use `run-be.ps1` if available.
 
-The application starts on: `http://localhost:8080`
+The application starts on: `http://localhost:8080`. The `dev` profile uses the
+mock payment gateway and enables the authenticated local payment simulation
+endpoint; do not use this profile for a deployed environment.
 
 ---
 
@@ -264,6 +266,32 @@ Payload:
 | `POST` | `/api/machines/{code}/commands` | Issue command |
 | `POST` | `/api/auth/login` | Get JWT token |
 | `POST` | `/api/auth/register` | Register user |
+| `POST` | `/api/payments/{paymentId}/simulate-success` | Simulate a customer payment (dev profile + mock gateway only) |
+
+### Admin Booking Configuration
+
+The management web exposes booking readiness and branch configuration at
+`/admin/booking-config`. Its backend API is restricted to `ADMIN` and `OWNER`:
+
+| Method | URL | Description |
+|--------|-----|-------------|
+| `GET` | `/api/admin/booking-config/branches` | Read readiness overview for all branches |
+| `GET` | `/api/admin/booking-config/branches/{branchId}` | Read branch configuration and readiness |
+| `GET` / `PUT` | `/api/admin/booking-config/branches/{branchId}/settings` | Read or update booking settings |
+| `GET` / `PUT` | `/api/admin/booking-config/branches/{branchId}/hours` | Read or update weekly opening hours |
+| `GET` | `/api/admin/booking-config/branches/{branchId}/services` | List branch service offerings |
+| `PUT` | `/api/admin/booking-config/branches/{branchId}/services/{serviceCode}` | Configure a service offering |
+| `GET` | `/api/admin/booking-config/branches/{branchId}/machines` | List branch machines |
+| `GET` / `POST` | `/api/admin/booking-config/branches/{branchId}/resources` | List or create locker/ironing resources |
+| `PUT` | `/api/admin/booking-config/branches/{branchId}/resources/{resourceId}` | Update a locker/ironing resource |
+
+Booking configuration uses the existing schema (including migration V30); no
+additional migration is required. The current hours schema allows one opening
+interval per weekday; an earlier closing time represents overnight operation.
+Changes that would conflict with future holds or confirmed bookings are rejected.
+Readiness reports configured machine inventory separately from machines that
+are currently online and operational; actual customer recommendations still
+require an available machine for the selected time.
 
 ### Command Payload
 ```json

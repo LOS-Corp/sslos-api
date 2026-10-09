@@ -93,11 +93,20 @@ public class SecurityConfig {
 
                 // Admin branch CRUD — admin/owner only
                 .requestMatchers("/api/admin/branches", "/api/admin/branches/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_OWNER")
+                .requestMatchers("/api/admin/booking-config/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_OWNER")
+
+                // Public service discovery; booking actions are customer-authenticated.
+                .requestMatchers(HttpMethod.GET, "/api/services", "/api/services/**").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/bookings/timeline-availability").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/bookings/recommendations").permitAll()
+                .requestMatchers("/api/admin/bookings/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_OWNER")
+                .requestMatchers("/api/bookings/**", "/api/users/me/bookings").authenticated()
                 
                 // Transaction & Payment endpoints - public for customer flow
                 .requestMatchers("/api/mobile/**").permitAll()
                 .requestMatchers("/api/kiosk/**").permitAll()
-                .requestMatchers("/api/payments/**").permitAll()
+                .requestMatchers(HttpMethod.POST, "/api/payments/payos/webhook", "/api/payments/callback/**").permitAll()
+                .requestMatchers("/api/payments/**").authenticated()
                 .requestMatchers("/api/staff/**").hasAnyAuthority("ROLE_STAFF", "ROLE_ADMIN", "ROLE_OWNER")
                 // Refund endpoints
                 .requestMatchers("/api/refunds/**").hasAnyAuthority("ROLE_STAFF", "ROLE_MANAGER", "ROLE_OWNER", "ROLE_ADMIN")

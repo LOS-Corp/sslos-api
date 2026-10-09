@@ -2,6 +2,8 @@ package com.laundry.branch.controller;
 
 import com.laundry.branch.dto.BranchDto;
 import com.laundry.branch.service.BranchService;
+import com.laundry.booking.dto.BookingDtos.BranchServiceDto;
+import com.laundry.booking.service.ScheduledBookingService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -22,10 +24,16 @@ import java.util.UUID;
 public class BranchController {
 
     private final BranchService branchService;
+    private final ScheduledBookingService bookingService;
 
     @GetMapping
     @Operation(summary = "List all active branches for selection")
-    public ResponseEntity<List<BranchDto>> getActiveBranches() {
+    public ResponseEntity<?> getActiveBranches(
+            @RequestParam(required = false) String serviceId) {
+        if (serviceId != null && !serviceId.isBlank()) {
+            List<BranchServiceDto> offerings = bookingService.listBranches(serviceId);
+            return ResponseEntity.ok(offerings);
+        }
         return ResponseEntity.ok(branchService.getActiveBranches());
     }
 

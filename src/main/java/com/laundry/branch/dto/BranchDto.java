@@ -22,6 +22,8 @@ public class BranchDto {
     private String name;
     private String address;
     private String phone;
+    /** URL embed Google Maps (iframe src) của chi nhánh. Null khi chưa ghi nhận. */
+    private String mapEmbedUrl;
     private BranchStatus status;
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;

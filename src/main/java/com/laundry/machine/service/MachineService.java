@@ -20,9 +20,11 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.http.HttpStatus;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
@@ -563,6 +565,18 @@ public class MachineService {
     public MachineDto updateMachine(String machineCode, UpdateMachineRequest request) {
         Machine machine = machineRepository.findByMachineCode(machineCode)
                 .orElseThrow(() -> MachineNotFoundException.byCode(machineCode));
+
+        boolean movesMachine = request.getBranchId() != null
+                && !request.getBranchId().equals(machine.getBranchId());
+        boolean changesType = request.getType() != null && request.getType() != machine.getType();
+        if (movesMachine || changesType) {
+            machine = machineRepository.findByIdForReservation(machine.getId())
+                    .orElseThrow(() -> MachineNotFoundException.byCode(machineCode));
+            if (machineRepository.hasActiveBookingAllocation(machine.getId())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "Cannot reassign or change the type of a machine with active or future bookings");
+            }
+        }
 
         boolean changed = false;
 

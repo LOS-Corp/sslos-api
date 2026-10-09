@@ -7,6 +7,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -33,6 +35,22 @@ public interface MachineRepository extends JpaRepository<Machine, UUID> {
 
     /** Multi-branch lookup by branchId and machineCode. */
     Optional<Machine> findByBranchIdAndMachineCode(UUID branchId, String machineCode);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT m FROM Machine m WHERE m.id = :id")
+    Optional<Machine> findByIdForReservation(@Param("id") UUID id);
+
+    @Query(value = """
+            SELECT EXISTS (
+                SELECT 1
+                FROM booking_resource_allocations a
+                JOIN scheduled_bookings b ON b.id = a.booking_id
+                WHERE a.resource_id = :machineId
+                  AND (b.status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING')
+                       OR (b.status = 'HELD' AND b.hold_expires_at > NOW()))
+            )
+            """, nativeQuery = true)
+    boolean hasActiveBookingAllocation(@Param("machineId") UUID machineId);
 
     boolean existsByBranchIdAndMachineCode(UUID branchId, String machineCode);
 

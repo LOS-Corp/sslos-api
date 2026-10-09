@@ -1,5 +1,6 @@
 package com.laundry.transaction.service;
 
+import com.laundry.machine.repository.MachineRepository;
 import com.laundry.machine.service.MachineStartAuthorizationService;
 import com.laundry.transaction.entity.*;
 import com.laundry.transaction.exception.DoubleBookingException;
@@ -12,6 +13,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.UUID;
 
@@ -24,6 +27,7 @@ import java.util.UUID;
 public class MachineReservationService {
 
     private final MachineReservationRepository reservationRepository;
+    private final MachineRepository machineRepository;
     /**
      * Lazy injection to break the (machine ↔ transaction) service cycle —
      * both packages are siblings and Lombok's {@code @RequiredArgsConstructor}
@@ -39,12 +43,18 @@ public class MachineReservationService {
         if (endTime == null) {
             endTime = startTime.plusHours(2); // Default 2 hours
         }
-        
+
+        machineRepository.findByIdForReservation(machineId);
+
         List<MachineReservation> overlapping = reservationRepository.findOverlappingReservations(
             machineId, startTime, endTime
         );
-        
-        return overlapping.isEmpty();
+
+        ZoneId zone = ZoneId.systemDefault();
+        OffsetDateTime scheduledStart = startTime.atZone(zone).toOffsetDateTime();
+        OffsetDateTime scheduledEnd = endTime.atZone(zone).toOffsetDateTime();
+        return overlapping.isEmpty()
+                && reservationRepository.countScheduledConflicts(machineId, scheduledStart, scheduledEnd) == 0;
     }
 
     /**
@@ -147,7 +157,8 @@ public class MachineReservationService {
      * Get reservation by transaction ID
      */
     public MachineReservation getByTransactionId(UUID transactionId) {
-        return reservationRepository.findByTransactionId(transactionId)
+        return reservationRepository.findByTransactionIdOrderByCreatedAtAsc(transactionId).stream()
+            .findFirst()
             .orElseThrow(() -> new ResourceNotAvailableException("Reservation not found for transaction", transactionId.toString()));
     }
 

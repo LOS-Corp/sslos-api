@@ -10,6 +10,7 @@ import com.laundry.machine.exception.CheckInRejectedException;
 import com.laundry.machine.exception.MachineNotFoundException;
 import com.laundry.machine.exception.StaleAuthorizationException;
 import com.laundry.shared.exception.DuplicateResourceException;
+import com.laundry.shared.exception.InvalidRequestException;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -42,6 +43,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DuplicateResourceException.class)
     ResponseEntity<ApiError> handleDuplicate(DuplicateResourceException exception) {
         return error(HttpStatus.CONFLICT, exception.getMessage(), Map.of());
+    }
+
+    @ExceptionHandler(InvalidRequestException.class)
+    ResponseEntity<ApiError> handleInvalidRequest(InvalidRequestException exception) {
+        return error(HttpStatus.BAD_REQUEST, exception.getMessage(), Map.of());
     }
 
     @ExceptionHandler(MachineNotFoundException.class)

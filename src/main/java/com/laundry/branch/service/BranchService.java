@@ -36,6 +36,7 @@ public class BranchService {
                 .name(trimmedName)
                 .address(request.getAddress() != null ? request.getAddress().trim() : null)
                 .phone(request.getPhone() != null ? request.getPhone().trim() : null)
+                .mapEmbedUrl(normalizeMapEmbedUrl(request.getMapEmbedUrl()))
                 .status(BranchStatus.ACTIVE)
                 .build();
 
@@ -74,6 +75,14 @@ public class BranchService {
             String newPhone = request.getPhone().trim();
             if (!newPhone.equals(branch.getPhone())) {
                 branch.setPhone(newPhone);
+                changed = true;
+            }
+        }
+
+        if (request.getMapEmbedUrl() != null) {
+            String newUrl = normalizeMapEmbedUrl(request.getMapEmbedUrl());
+            if (!newUrl.equals(branch.getMapEmbedUrl())) {
+                branch.setMapEmbedUrl(newUrl);
                 changed = true;
             }
         }
@@ -128,9 +137,20 @@ public class BranchService {
                 .name(branch.getName())
                 .address(branch.getAddress())
                 .phone(branch.getPhone())
+                .mapEmbedUrl(branch.getMapEmbedUrl())
                 .status(branch.getStatus())
                 .createdAt(branch.getCreatedAt())
                 .updatedAt(branch.getUpdatedAt())
                 .build();
+    }
+
+    /**
+     * Trim và trả về null nếu URL rỗng sau khi trim.
+     * Cho phép admin "xóa" URL bằng cách gửi string rỗng.
+     */
+    private String normalizeMapEmbedUrl(String raw) {
+        if (raw == null) return null;
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed;
     }
 }

@@ -1,6 +1,7 @@
 package com.laundry.payment.gateway;
 
 import java.math.BigDecimal;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -18,6 +19,13 @@ public interface PaymentGateway {
      * Verify a callback from the payment gateway
      */
     boolean verifyCallback(String transactionId, String signature);
+
+    /**
+     * Query the provider for an existing payment, when supported.
+     */
+    default Optional<GatewayPaymentStatus> getPaymentStatus(String transactionReference) {
+        return Optional.empty();
+    }
 
     /**
      * Get the gateway name

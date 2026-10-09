@@ -11,6 +11,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -33,11 +35,12 @@ public class PaymentController {
     @PostMapping
     @Operation(summary = "Create payment", description = "Create a new payment request")
     public ResponseEntity<PaymentResponse> createPayment(
-            @Valid @RequestBody CreatePaymentRequest request) {
+            @Valid @RequestBody CreatePaymentRequest request,
+            Authentication authentication) {
         log.info("Create payment request: transactionId={}, amount={}, method={}", 
                  request.getTransactionId(), request.getAmount(), request.getPaymentMethod());
         
-        PaymentResponse response = paymentService.createPayment(request);
+        PaymentResponse response = paymentService.createPaymentForCustomer(request, customerId(authentication));
         
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
@@ -47,10 +50,10 @@ public class PaymentController {
      */
     @GetMapping("/{id}")
     @Operation(summary = "Get payment", description = "Get payment by ID")
-    public ResponseEntity<PaymentResponse> getPayment(@PathVariable UUID id) {
+    public ResponseEntity<PaymentResponse> getPayment(@PathVariable UUID id, Authentication authentication) {
         log.info("Get payment request: id={}", id);
         
-        PaymentResponse response = paymentService.getPayment(id);
+        PaymentResponse response = paymentService.getPaymentForCustomer(id, customerId(authentication));
         
         return ResponseEntity.ok(response);
     }
@@ -75,11 +78,24 @@ public class PaymentController {
      */
     @DeleteMapping("/{id}")
     @Operation(summary = "Cancel payment", description = "Cancel a pending payment")
-    public ResponseEntity<Void> cancelPayment(@PathVariable UUID id) {
+    public ResponseEntity<Void> cancelPayment(@PathVariable UUID id, Authentication authentication) {
         log.info("Cancel payment request: id={}", id);
         
-        paymentService.cancelPayment(id);
+        paymentService.cancelPaymentForCustomer(id, customerId(authentication));
         
         return ResponseEntity.noContent().build();
+    }
+
+    private UUID customerId(Authentication authentication) {
+        if (authentication == null || authentication.getName() == null
+                || authentication.getAuthorities().stream()
+                .noneMatch(authority -> "ROLE_CUSTOMER".equals(authority.getAuthority()))) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Customer account is required");
+        }
+        try {
+            return UUID.fromString(authentication.getName());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid customer identity");
+        }
     }
 }

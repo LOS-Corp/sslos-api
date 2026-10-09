@@ -9,6 +9,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -19,9 +20,25 @@ import java.util.UUID;
 @Repository
 public interface MachineReservationRepository extends JpaRepository<MachineReservation, UUID> {
 
+    @Query(value = """
+        SELECT COUNT(*)
+        FROM booking_resource_allocations a
+        JOIN scheduled_bookings b ON b.id = a.booking_id
+        WHERE a.resource_id = :machineId
+          AND a.occupied_from < :endTime
+          AND a.occupied_until > :startTime
+          AND (b.status <> 'HELD' OR b.hold_expires_at > NOW())
+          AND b.status NOT IN ('CANCELLED', 'EXPIRED', 'COMPLETED', 'PAYMENT_REVIEW_REQUIRED')
+        """, nativeQuery = true)
+    long countScheduledConflicts(@Param("machineId") UUID machineId,
+                                 @Param("startTime") OffsetDateTime startTime,
+                                 @Param("endTime") OffsetDateTime endTime);
+
     List<MachineReservation> findByMachineIdAndStatus(UUID machineId, ReservationStatus status);
 
-    Optional<MachineReservation> findByTransactionId(UUID transactionId);
+    List<MachineReservation> findByTransactionIdOrderByCreatedAtAsc(UUID transactionId);
+
+    List<MachineReservation> findAllByTransactionId(UUID transactionId);
 
     @Query("SELECT mr FROM MachineReservation mr WHERE mr.machineId = :machineId " +
            "AND mr.status IN ('RESERVED', 'CONFIRMED', 'ACTIVE') " +
