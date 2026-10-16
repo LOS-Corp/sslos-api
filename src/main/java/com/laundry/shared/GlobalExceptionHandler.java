@@ -6,6 +6,7 @@ import java.util.Map;
 
 import com.laundry.auth.exception.InvalidCredentialsException;
 import com.laundry.auth.exception.InvalidTokenException;
+import com.laundry.iot.exception.ProvisioningRejectedException;
 import com.laundry.machine.exception.CheckInRejectedException;
 import com.laundry.machine.exception.MachineNotFoundException;
 import com.laundry.machine.exception.StaleAuthorizationException;
@@ -99,6 +100,12 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     ResponseEntity<ApiError> handleAccessDenied(AccessDeniedException exception) {
         return error(HttpStatus.FORBIDDEN, "Access denied: " + exception.getMessage(), Map.of());
+    }
+
+    /** Device provisioning refusals carry a reason the admin console shows verbatim. */
+    @ExceptionHandler(ProvisioningRejectedException.class)
+    ResponseEntity<ApiError> handleProvisioningRejected(ProvisioningRejectedException exception) {
+        return error(HttpStatus.valueOf(exception.getStatusCode().value()), exception.getReason(), Map.of());
     }
 
     private ResponseEntity<ApiError> error(HttpStatus status, String message, Map<String, String> fields) {

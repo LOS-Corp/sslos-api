@@ -117,4 +117,10 @@ public interface MachineStartAuthorizationRepository
                             @Param("now") OffsetDateTime now);
 
     Optional<MachineStartAuthorization> findByIdAndUserId(UUID id, UUID userId);
+
+    /** True once a reservation has been used for a wash (one cycle per booking). */
+    /** Most recent admin test-run authorization for a machine (any status). */
+    Optional<MachineStartAuthorization> findFirstByMachineIdAndTestRunTrueOrderByCreatedAtDesc(UUID machineId);
+
+    boolean existsByReservationIdAndStatus(UUID reservationId, MachineStartAuthorizationStatus status);
 }

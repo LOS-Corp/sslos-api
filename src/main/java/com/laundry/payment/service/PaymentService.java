@@ -92,30 +92,25 @@ public class PaymentService {
 
         payment = paymentRepository.save(payment);
 
-        // For ONLINE payment, create gateway request
-        if (request.getPaymentMethod() == PaymentMethod.ONLINE) {
-            String returnUrl = payosReturnUrl == null || payosReturnUrl.isBlank()
-                    ? callbackBaseUrl + "/api/payments/callback/" + payment.getId()
-                    : payosReturnUrl + (payosReturnUrl.contains("?") ? "&" : "?")
-                    + "paymentId=" + payment.getId();
-            PaymentResult result = paymentGateway.createPayment(payment.getId(), request.getAmount(), returnUrl);
-            
-            if (!result.isSuccess()) {
-                payment.markAsFailed(result.getErrorMessage());
-                paymentRepository.save(payment);
-                throw new PaymentException("Failed to create payment: " + result.getErrorMessage());
-            }
+        // Payments are online-only: always create the gateway request
+        String returnUrl = payosReturnUrl == null || payosReturnUrl.isBlank()
+                ? callbackBaseUrl + "/api/payments/callback/" + payment.getId()
+                : payosReturnUrl + (payosReturnUrl.contains("?") ? "&" : "?")
+                + "paymentId=" + payment.getId();
+        PaymentResult result = paymentGateway.createPayment(payment.getId(), request.getAmount(), returnUrl);
 
-            // Store gateway transaction ID
-            payment.setGatewayTransactionId(result.getTransactionReference());
-            payment.setCheckoutUrl(result.getPaymentUrl());
-            payment.setQrCode(result.getQrCode());
-            payment = paymentRepository.save(payment);
-
-            return toResponse(payment);
+        if (!result.isSuccess()) {
+            payment.markAsFailed(result.getErrorMessage());
+            paymentRepository.save(payment);
+            throw new PaymentException("Failed to create payment: " + result.getErrorMessage());
         }
 
-        // For CASH payment, return without payment URL
+        // Store gateway transaction ID
+        payment.setGatewayTransactionId(result.getTransactionReference());
+        payment.setCheckoutUrl(result.getPaymentUrl());
+        payment.setQrCode(result.getQrCode());
+        payment = paymentRepository.save(payment);
+
         return toResponse(payment);
     }
 

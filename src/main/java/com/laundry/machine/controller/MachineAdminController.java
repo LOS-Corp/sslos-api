@@ -1,5 +1,6 @@
 package com.laundry.machine.controller;
 
+import com.laundry.iot.service.DeviceProvisioningService;
 import com.laundry.machine.dto.CreateMachineRequest;
 import com.laundry.machine.dto.MachineDto;
 import com.laundry.machine.dto.MachineQrLabelDto;
@@ -10,7 +11,10 @@ import com.laundry.machine.entity.Machine;
 import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.entity.MachineType;
 import com.laundry.machine.repository.MachineRepository;
+import com.laundry.machine.dto.CheckInResponse;
 import com.laundry.machine.service.MachineService;
+import com.laundry.machine.service.MachineStartAuthorizationService;
+import org.springframework.security.core.Authentication;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -48,6 +52,8 @@ public class MachineAdminController {
 
     private final MachineRepository machineRepository;
     private final MachineService machineService;
+    private final DeviceProvisioningService provisioningService;
+    private final MachineStartAuthorizationService startAuthorizationService;
 
     @Value("${app.machine.qr-base-url:}")
     private String qrBaseUrl;
@@ -134,8 +140,41 @@ public class MachineAdminController {
     @DeleteMapping("/{machineCode}")
     @Operation(summary = "Hard-delete a machine")
     public ResponseEntity<Void> deleteMachine(@PathVariable String machineCode) {
+        // Revoke the bound ESP32's EMQX identity first so it cannot outlive the machine.
+        provisioningService.unpair(machineCode);
         machineService.deleteMachine(machineCode);
         return ResponseEntity.noContent().build();
+    }
+
+    // ── Test run: unlock physical START without booking / QR ───────────────
+
+    @PostMapping("/{machineCode}/test-start")
+    @Operation(summary = "Admin test run: send AUTHORIZE_START without a booking or QR check-in")
+    public ResponseEntity<CheckInResponse> testStart(@PathVariable String machineCode, Authentication authentication) {
+        return ResponseEntity.ok(startAuthorizationService.adminTestStart(machineCode, userId(authentication)));
+    }
+
+    @GetMapping("/{machineCode}/test-start")
+    @Operation(summary = "Latest admin test-run authorization for the machine")
+    public ResponseEntity<CheckInResponse> latestTestStart(@PathVariable String machineCode) {
+        return startAuthorizationService.latestTestStart(machineCode)
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.noContent().build());
+    }
+
+    @PostMapping("/{machineCode}/test-start/cancel")
+    @Operation(summary = "Cancel the active admin test-run authorization")
+    public ResponseEntity<Void> cancelTestStart(@PathVariable String machineCode) {
+        startAuthorizationService.cancelTestStart(machineCode);
+        return ResponseEntity.noContent().build();
+    }
+
+    private static UUID userId(Authentication authentication) {
+        try {
+            return authentication == null ? null : UUID.fromString(authentication.getName());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     /**

@@ -176,6 +176,7 @@ public class BranchBookingReadinessService {
     private int countOperationalMachines(List<Machine> machines, MachineType type) {
         return (int) machines.stream()
                 .filter(machine -> machine.getType() == type && machine.isOnline()
+                        && machine.isCommissioned()
                         && (machine.getStatus() == MachineStatus.AVAILABLE
                         || machine.getStatus() == MachineStatus.RESERVED))
                 .count();

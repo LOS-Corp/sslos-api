@@ -24,4 +24,14 @@ public class LoggingEmailService implements EmailService {
         log.info("This code expires in 5 minutes.");
         log.info("==========================================");
     }
+
+    @Override
+    public void sendLaundryCompletedEmail(LaundryCompletedEmail mail) {
+        log.info("========== LAUNDRY COMPLETED EMAIL ==========");
+        log.info("To: {} ({})", mail.toEmail(), mail.customerName());
+        log.info("Booking {} · {} · {} · machines {}", mail.bookingCode(), mail.serviceName(),
+                mail.branchName(), mail.machineCodes());
+        log.info("Completed at {}", mail.completedAt());
+        log.info("=============================================");
+    }
 }

@@ -67,9 +67,14 @@ public class MachineStartAuthorization {
     @Column(nullable = false, updatable = false)
     private UUID id;
 
-    /** The reservation (booking) that paid for this machine slot. */
-    @Column(name = "reservation_id", nullable = false)
+    /** The reservation (booking) that paid for this machine slot; null for admin test runs. */
+    @Column(name = "reservation_id")
     private UUID reservationId;
+
+    /** True when an admin unlocked START from the console to test the machine (no booking, no QR). */
+    @Column(name = "test_run", nullable = false)
+    @Builder.Default
+    private boolean testRun = false;
 
     /** Transaction this reservation belongs to (audit). */
     @Column(name = "transaction_id")

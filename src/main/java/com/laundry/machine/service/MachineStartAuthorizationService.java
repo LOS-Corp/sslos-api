@@ -23,6 +23,8 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
@@ -69,6 +71,7 @@ public class MachineStartAuthorizationService {
     private final MachineStartAuthorizationRepository authorizationRepository;
     private final MqttPublisher mqttPublisher;
     private final PlatformTransactionManager transactionManager;
+    private final com.laundry.booking.service.BookingLifecycleService bookingLifecycleService;
 
     /**
      * Explicit constructor with {@code @Lazy} on {@link MqttPublisher} to break
@@ -81,13 +84,15 @@ public class MachineStartAuthorizationService {
             PaymentRepository paymentRepository,
             MachineStartAuthorizationRepository authorizationRepository,
             @Lazy MqttPublisher mqttPublisher,
-            PlatformTransactionManager transactionManager) {
+            PlatformTransactionManager transactionManager,
+            com.laundry.booking.service.BookingLifecycleService bookingLifecycleService) {
         this.machineRepository = machineRepository;
         this.reservationRepository = reservationRepository;
         this.paymentRepository = paymentRepository;
         this.authorizationRepository = authorizationRepository;
         this.mqttPublisher = mqttPublisher;
         this.transactionManager = transactionManager;
+        this.bookingLifecycleService = bookingLifecycleService;
     }
 
     @Value("${app.machine.start-authorization.ttl-seconds:120}")
@@ -136,7 +141,10 @@ public class MachineStartAuthorizationService {
         Machine machine = machineRepository.findByMachineCode(machineCode)
                 .orElseThrow(() -> new MachineNotFoundException("Machine not found: " + machineCode));
 
-        // 1. Machine is enabled + online + available.
+        // 1. Machine is commissioned + online + available.
+        if (!machine.isCommissioned()) {
+            throw new CheckInRejectedException("Machine has not been commissioned yet");
+        }
         if (!machine.isOnline()) {
             throw new CheckInRejectedException("Machine is currently offline");
         }
@@ -170,14 +178,21 @@ public class MachineStartAuthorizationService {
                 .orElseThrow(() -> new CheckInRejectedException(
                         "No confirmed reservation found for this machine"));
 
-        // 4. Reservation must be CONFIRMED or ACTIVE.
+        // 4. One booking pays for one cycle: a reservation that already
+        //    started a wash cannot be checked in again.
+        if (isUsed(reservation)) {
+            throw new CheckInRejectedException(
+                    "This reservation has already been used for a wash");
+        }
+
+        // 5. Reservation must be CONFIRMED or ACTIVE.
         if (reservation.getStatus() != ReservationStatus.CONFIRMED
                 && reservation.getStatus() != ReservationStatus.ACTIVE) {
             throw new CheckInRejectedException(
                     "Reservation is not eligible (status=" + reservation.getStatus() + ")");
         }
 
-        // 5. Payment must be PAID.
+        // 6. Payment must be PAID.
         Transaction tx = reservation.getTransaction();
         UUID transactionId = tx != null ? tx.getId() : null;
         if (transactionId != null) {
@@ -193,7 +208,7 @@ public class MachineStartAuthorizationService {
             throw new CheckInRejectedException("Reservation has no transaction");
         }
 
-        // 6. Slot window: startTime must be in the past-ish (≤ now+grace) and
+        // 7. Slot window: startTime must be in the past-ish (≤ now+grace) and
         //    endTime not yet past. Avoids check-in weeks ahead or after the
         //    reservation has already expired.
         LocalDateTime now = LocalDateTime.now();
@@ -206,7 +221,7 @@ public class MachineStartAuthorizationService {
             throw new CheckInRejectedException("Reservation window has already closed");
         }
 
-        // 7. Persist the authorization row + publish the MQTT command.
+        // 8. Persist the authorization row + publish the MQTT command.
         OffsetDateTime created = OffsetDateTime.now();
         OffsetDateTime expires = created.plusSeconds(authorizationTtlSeconds);
         MachineStartAuthorization auth = MachineStartAuthorization.builder()
@@ -224,8 +239,83 @@ public class MachineStartAuthorizationService {
         log.info("[{}] Authorization created: id={} user={} reservation={} expiresAt={}",
                 machineCode, auth.getId(), userId, reservation.getId(), expires);
 
-        publishAuthorizeStart(machine, auth);
+        // Publish only after commit: the device answers AUTH_ACK within ~100 ms,
+        // and an ACK that beats the commit finds no row, so the authorization
+        // stays PENDING and the later START_REQUEST is rejected (BAD_STATUS_PENDING).
+        MachineStartAuthorization committed = auth;
+        runAfterCommit(() -> publishAuthorizeStart(machine, committed));
         return toCheckInResponse(auth);
+    }
+
+    // ─── Admin test run (no booking, no QR) ────────────────────────────────
+
+    /**
+     * Unlock the physical START button for a test cycle from the admin console.
+     * Same device protocol as {@link #checkIn}, minus the reservation and
+     * payment checks; the row is flagged {@code testRun}. The machine only has
+     * to be online with a provisioned device — it need not be commissioned,
+     * so a freshly installed machine can be run before opening it for sale.
+     */
+    @Transactional
+    public CheckInResponse adminTestStart(String machineCode, UUID adminId) {
+        if (adminId == null) {
+            throw new CheckInRejectedException("Authentication required");
+        }
+        Machine machine = machineRepository.findByMachineCode(machineCode)
+                .orElseThrow(() -> new MachineNotFoundException("Machine not found: " + machineCode));
+        if (!machine.isOnline()) {
+            throw new CheckInRejectedException("Machine is currently offline");
+        }
+        if (machine.getStatus() == MachineStatus.RUNNING || machine.getStatus() == MachineStatus.ERROR
+                || machine.getStatus() == MachineStatus.OUT_OF_SERVICE) {
+            throw new CheckInRejectedException(
+                    "Machine is not available (status=" + machine.getStatus() + ")");
+        }
+
+        Optional<MachineStartAuthorization> existing = authorizationRepository.findActiveByMachine(machine.getId());
+        if (existing.isPresent()) {
+            MachineStartAuthorization e = existing.get();
+            if (e.isTestRun() && e.getExpiresAt().isAfter(OffsetDateTime.now())) {
+                return toCheckInResponse(e);
+            }
+            throw new CheckInRejectedException(e.isTestRun()
+                    ? "A previous test authorization is still active; cancel it first"
+                    : "A customer authorization is active on this machine");
+        }
+
+        OffsetDateTime created = OffsetDateTime.now();
+        MachineStartAuthorization auth = authorizationRepository.save(MachineStartAuthorization.builder()
+                .testRun(true)
+                .userId(adminId)
+                .machineId(machine.getId())
+                .machineCode(machine.getMachineCode())
+                .status(MachineStartAuthorizationStatus.PENDING)
+                .createdAt(created)
+                .expiresAt(created.plusSeconds(authorizationTtlSeconds))
+                .build());
+        log.info("[{}] Admin test authorization created: id={} admin={}", machineCode, auth.getId(), adminId);
+
+        MachineStartAuthorization committed = auth;
+        runAfterCommit(() -> publishAuthorizeStart(machine, committed));
+        return toCheckInResponse(auth);
+    }
+
+    /** Latest test authorization on the machine (any status), for the admin console to poll. */
+    @Transactional(readOnly = true)
+    public Optional<CheckInResponse> latestTestStart(String machineCode) {
+        return machineRepository.findByMachineCode(machineCode)
+                .flatMap(m -> authorizationRepository.findFirstByMachineIdAndTestRunTrueOrderByCreatedAtDesc(m.getId()))
+                .map(this::toCheckInResponse);
+    }
+
+    /** Cancel an active test authorization; the device locks START again. */
+    @Transactional
+    public void cancelTestStart(String machineCode) {
+        Machine machine = machineRepository.findByMachineCode(machineCode)
+                .orElseThrow(() -> new MachineNotFoundException("Machine not found: " + machineCode));
+        authorizationRepository.findActiveByMachineForUpdate(machine.getId())
+                .filter(MachineStartAuthorization::isTestRun)
+                .ifPresent(a -> revokeInternal(a, "ADMIN_CANCELLED", null, true));
     }
 
     // ─── Device-driven events ──────────────────────────────────────────────
@@ -297,6 +387,18 @@ public class MachineStartAuthorizationService {
                                    String bootId) {
         MachineStartAuthorization auth = lockOrThrow(authorizationId, machine.getId());
 
+        // The device can only know this authorizationId from AUTHORIZE_START,
+        // so a START_REQUEST for a PENDING row is an implicit AUTH_ACK (the
+        // explicit ACK was lost or failed to process).
+        if (auth.getStatus() == MachineStartAuthorizationStatus.PENDING
+                && bootId != null && !bootId.isBlank()) {
+            log.info("[{}] START_REQUEST on PENDING authorization {} — treating as implicit AUTH_ACK",
+                    machine.getMachineCode(), auth.getId());
+            auth.setStatus(MachineStartAuthorizationStatus.GRANTED);
+            auth.setGrantedAt(OffsetDateTime.now());
+            auth.setDeviceBootId(bootId);
+        }
+
         if (auth.getStatus() != MachineStartAuthorizationStatus.GRANTED) {
             publishStartApproval(machine, auth, startRequestId, null,
                     "BAD_STATUS_" + auth.getStatus(), bootId);
@@ -345,8 +447,10 @@ public class MachineStartAuthorizationService {
         authorizationRepository.save(auth);
         log.info("[{}] Authorization START_PENDING: {} runId={}", machine.getMachineCode(), auth.getId(), runId);
 
-        // Publish approval — the firmware can now actually run the cycle.
-        publishStartApproval(machine, auth, startRequestId, runId, "APPROVED", bootId);
+        // Publish approval after commit so the device's STARTED reply sees
+        // START_PENDING (otherwise handleStarted ignores it and the row never
+        // reaches CONSUMED).
+        runAfterCommit(() -> publishStartApproval(machine, auth, startRequestId, runId, "APPROVED", bootId));
         return runId;
     }
 
@@ -381,6 +485,16 @@ public class MachineStartAuthorizationService {
         auth.setConsumedAt(OffsetDateTime.now());
         authorizationRepository.save(auth);
         log.info("[{}] Authorization CONSUMED: {} runId={}", machine.getMachineCode(), auth.getId(), runId);
+
+        if (auth.getReservationId() == null) return;  // admin test run: no booking to advance
+        // The booking is now in use; the machine's COMPLETED (or the sweep) closes it out.
+        reservationRepository.findById(auth.getReservationId())
+                .filter(r -> r.getStatus() == ReservationStatus.CONFIRMED)
+                .ifPresent(r -> {
+                    r.setStatus(ReservationStatus.ACTIVE);
+                    reservationRepository.saveAndFlush(r);
+                    bookingLifecycleService.onCycleStarted(r.getId());
+                });
     }
 
     /**
@@ -471,23 +585,33 @@ public class MachineStartAuthorizationService {
     // ─── Internals ─────────────────────────────────────────────────────────
 
     private Optional<MachineReservation> findEligibleReservation(Machine machine, UUID userId) {
-        // transaction.customerId is the owning user.
-        return reservationRepository
-                .findByMachineIdAndStatus(machine.getId(), ReservationStatus.CONFIRMED)
-                .stream()
+        // transaction.customerId is the owning user. Old CONFIRMED/ACTIVE rows
+        // that were never closed out must not shadow the booking just made, so
+        // prefer reservations whose window is still open, earliest start first.
+        LocalDateTime now = LocalDateTime.now();
+        List<MachineReservation> owned = java.util.stream.Stream.concat(
+                        reservationRepository.findByMachineIdAndStatus(machine.getId(), ReservationStatus.CONFIRMED).stream(),
+                        reservationRepository.findByMachineIdAndStatus(machine.getId(), ReservationStatus.ACTIVE).stream())
                 .filter(r -> {
                     Transaction tx = r.getTransaction();
                     return tx != null && userId.equals(tx.getCustomerId());
                 })
-                .findFirst()
-                .or(() -> reservationRepository
-                        .findByMachineIdAndStatus(machine.getId(), ReservationStatus.ACTIVE)
-                        .stream()
-                        .filter(r -> {
-                            Transaction tx = r.getTransaction();
-                            return tx != null && userId.equals(tx.getCustomerId());
-                        })
-                        .findFirst());
+                .toList();
+        // Skip bookings already used for a wash, so a second unused booking on
+        // the same machine is still reachable. Fall back to the full list only
+        // so checkIn can explain why nothing is eligible.
+        List<MachineReservation> unused = owned.stream().filter(r -> !isUsed(r)).toList();
+        return unused.stream()
+                .filter(r -> r.getEndTime() == null || !r.getEndTime().isBefore(now))
+                .min(java.util.Comparator.comparing(MachineReservation::getStartTime,
+                        java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+                .or(() -> unused.stream().findFirst())
+                .or(() -> owned.stream().findFirst());
+    }
+
+    private boolean isUsed(MachineReservation reservation) {
+        return authorizationRepository.existsByReservationIdAndStatus(
+                reservation.getId(), MachineStartAuthorizationStatus.CONSUMED);
     }
 
     private MachineStartAuthorization lockOrThrow(UUID authorizationId, UUID machineId) {
@@ -554,13 +678,27 @@ public class MachineStartAuthorizationService {
         });
     }
 
+    private static void runAfterCommit(Runnable action) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    action.run();
+                }
+            });
+        } else {
+            action.run();
+        }
+    }
+
     private void publishAuthorizeStart(Machine machine, MachineStartAuthorization auth) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("type", "AUTHORIZE_START");
         String commandId = "AUTH-" + auth.getId();
         payload.put("commandId", commandId);
         payload.put("authorizationId", auth.getId().toString());
-        payload.put("reservationId", auth.getReservationId().toString());
+        if (auth.getReservationId() != null) payload.put("reservationId", auth.getReservationId().toString());
+        if (auth.isTestRun()) payload.put("testRun", true);
         payload.put("machineId", machine.getMachineCode());
         payload.put("expiresInSeconds", authorizationTtlSeconds);
         payload.put("issuedAt", OffsetDateTime.now().toString());

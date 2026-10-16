@@ -40,6 +40,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -57,6 +58,19 @@ public class ScheduledBookingService {
     private final MachineReservationRepository machineReservationRepository;
     private final TransactionRepository transactionRepository;
     private final BranchBookingReadinessService readinessService;
+    private final com.laundry.machine.runtime.MachineRuntimeStateService runtimeStateService;
+
+    /** Assumed remaining time of a running cycle when the device has not reported one. */
+    @org.springframework.beans.factory.annotation.Value("${app.booking.active-session-fallback-minutes:60}")
+    private long activeSessionFallbackMinutes;
+
+    /** Longest start-time window one machine search may cover (allows overnight / 24/7 windows). */
+    static final java.time.Duration MAX_SEARCH_WINDOW = java.time.Duration.ofHours(48);
+
+    /** Machine states that mean "in use right now" but bookable once the session ends. */
+    static final Set<MachineStatus> SESSION_STATUSES = java.util.EnumSet.of(
+            MachineStatus.WAITING_START, MachineStatus.RUNNING,
+            MachineStatus.PAUSED, MachineStatus.COMPLETED);
 
     @org.springframework.beans.factory.annotation.Value("${app.booking.hold-duration-seconds:600}")
     private long holdDurationSeconds;
@@ -77,7 +91,8 @@ public class ScheduledBookingService {
             String timezone,
             LocalTime opensAt,
             LocalTime closesAt,
-            List<String> requirements
+            List<String> requirements,
+            int bufferMinutes
     ) {}
 
     record Resource(String type, UUID id, String code, String name, String location, String status) {
@@ -197,7 +212,7 @@ public class ScheduledBookingService {
         }
 
         Map<UUID, List<OccupiedInterval>> occupiedByResource =
-                occupiedIntervals(branchId, zone, dayStart, queryEnd, resourcesById);
+                occupiedIntervals(branchId, zone, dayStart, queryEnd, resourcesById, config.bufferMinutes());
         List<AvailabilityInterval> unavailableIntervals = unavailableIntervals(
                 branchId, config, dayStart, dayEnd, occupiedByResource, resourcesById);
         Map<UUID, BookingDtos.TimelineResource> timelineResources = new java.util.LinkedHashMap<>();
@@ -222,7 +237,7 @@ public class ScheduledBookingService {
                         offsetMinutes(allocation.from()), offsetMinutes(allocation.until())))
                 .toList();
         List<Instant> availableStarts = new ArrayList<>();
-        Instant earliest = Instant.now().plusSeconds(5 * 60);
+        Instant earliest = Instant.now();
         for (Instant start = dayStart; start.isBefore(dayEnd); start = start.plusSeconds(60)) {
             if (start.isBefore(earliest)) {
                 continue;
@@ -265,7 +280,8 @@ public class ScheduledBookingService {
             for (int i = 0; i < config.requirements().size(); i++) {
                 AllocationPlan allocation = plan.allocationPlans().get(i);
                 candidates.add(resourcesFor(config.branchId(), config.requirements().get(i)).stream()
-                        .filter(resource -> !resourceBusy(resource, allocation, null, null))
+                        .filter(resource -> !resourceBusy(resource, allocation, null, null,
+                                config.bufferMinutes()))
                         .toList());
             }
             collectRecommendations(config, plan, candidates, 0, new ArrayList<>(), recommendations);
@@ -278,6 +294,223 @@ public class ScheduledBookingService {
 
         return new RecommendationsResponse(desiredStartTime, plan.expectedEnd(), preferredEndTime,
                 preferredEndSatisfied, recommendations);
+    }
+
+    /**
+     * Smart machine search. For every compatible machine, finds the earliest
+     * minute in [{@code from}, {@code to}] at which the whole service (plus the
+     * turnover buffer) fits: machine bookable (online, commissioned, not in
+     * ERROR / OUT_OF_SERVICE), no live booking, active hold, legacy reservation
+     * or running session overlapping, and inside branch opening hours (which
+     * may span midnight or be 24/7). Combo services pair the machine with the
+     * first free companion resource. Results: earliestStart ASC, then price.
+     *
+     * <p>This is a read-only snapshot — {@link #createHold} re-checks the chosen
+     * start and resources under row locks before reserving anything.
+     */
+    @Transactional(readOnly = true)
+    public MachineSearchResponse machineSearch(UUID branchId, String serviceCode, Instant from, Instant to) {
+        ServiceConfig config = offering(branchId, serviceCode);
+        if (config == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "This service is not configured for the selected branch");
+        }
+        ZoneId zone;
+        try {
+            zone = ZoneId.of(config.timezone());
+        } catch (RuntimeException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Branch timezone is invalid");
+        }
+        if (to.isBefore(from)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "The search window must end after it starts");
+        }
+        if (java.time.Duration.between(from, to).compareTo(MAX_SEARCH_WINDOW) > 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "The search window can cover at most 48 hours");
+        }
+        Instant now = Instant.now();
+        if (from.isAfter(now.plus(java.time.Duration.ofDays(60)))) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Bookings can be made at most 60 days ahead");
+        }
+        Instant firstStart = ceilToMinute(from.isAfter(now) ? from : now);
+        Instant lastStart = Instant.ofEpochSecond(Math.floorDiv(to.getEpochSecond(), 60) * 60);
+        if (lastStart.isBefore(firstStart)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "The selected time window has already passed");
+        }
+
+        List<String> requirements = config.requirements();
+        Map<String, List<Resource>> resourcesByType = new java.util.LinkedHashMap<>();
+        Map<UUID, Resource> resourcesById = new java.util.HashMap<>();
+        for (String requirement : requirements) {
+            List<Resource> resources = resourcesFor(branchId, requirement);
+            resourcesByType.put(requirement, resources);
+            resources.forEach(resource -> resourcesById.put(resource.id(), resource));
+        }
+        Map<UUID, Machine> machines = new java.util.HashMap<>();
+        machineRepository.findByBranchId(branchId).forEach(machine -> machines.put(machine.getId(), machine));
+
+        Instant queryEnd = buildPlan(config, lastStart).allocationPlans().stream()
+                .map(AllocationPlan::until)
+                .max(Comparator.naturalOrder())
+                .orElse(lastStart);
+        Map<UUID, List<OccupiedInterval>> occupied = occupiedIntervals(
+                branchId, zone, firstStart, queryEnd, resourcesById, config.bufferMinutes());
+
+        // Every whole minute in the window whose service fits the opening hours.
+        boolean locker = "ASSISTED_LOCKER".equals(config.mode());
+        Map<DayOfWeek, ScheduleHours> weeklyHours = scheduleHours(branchId);
+        List<SlotPlan> plans = new ArrayList<>();
+        for (Instant start = firstStart; !start.isAfter(lastStart); start = start.plusSeconds(60)) {
+            SlotPlan plan = buildPlan(config, start);
+            Instant bookingEnd = locker ? plan.checkInEnd() : plan.expectedEnd();
+            if (isCoveredByOpeningHours(weeklyHours, zone, start, bookingEnd)) {
+                plans.add(plan);
+            }
+        }
+
+        String primaryType = requirements.getFirst();
+        List<MachineSearchOptionDto> options = new ArrayList<>();
+        List<UnavailableMachineDto> unavailable = new ArrayList<>();
+        for (Resource primary : resourcesByType.getOrDefault(primaryType, List.of())) {
+            List<Resource> combo = null;
+            SlotPlan earliest = null;
+            for (SlotPlan plan : plans) {
+                combo = freeCombination(primary, plan, requirements, resourcesByType, occupied);
+                if (combo != null) {
+                    earliest = plan;
+                    break;
+                }
+            }
+            if (combo == null) {
+                unavailable.add(unavailableDto(primary, machines.get(primary.id()), "FULLY_BOOKED"));
+                continue;
+            }
+            List<Resource> chosen = combo;
+            List<Instant> starts = plans.stream()
+                    .filter(plan -> isCombinationFree(chosen, plan, occupied))
+                    .map(SlotPlan::start)
+                    .toList();
+            options.add(searchOption(config, chosen, earliest, starts, machines));
+        }
+
+        // Compatible machines that cannot be booked at all right now.
+        if ("WASHER".equals(primaryType) || "DRYER".equals(primaryType)) {
+            MachineType machineType = MachineType.valueOf(primaryType);
+            machines.values().stream()
+                    .filter(machine -> machine.getType() == machineType && !isOperationallyUsable(machine))
+                    .forEach(machine -> unavailable.add(new UnavailableMachineDto(machine.getId(), primaryType,
+                            machine.getMachineCode(), displayNameOf(machine), machine.getCapacityKg(),
+                            unavailableReason(machine))));
+        } else {
+            jdbc.query("""
+                    SELECT id, resource_code, display_name FROM branch_service_resources
+                    WHERE branch_id = ? AND resource_type = ? AND enabled = FALSE
+                    """, rs -> {
+                unavailable.add(new UnavailableMachineDto(rs.getObject("id", UUID.class), primaryType,
+                        rs.getString("resource_code"), rs.getString("display_name"), null, "DISABLED"));
+            }, branchId, primaryType);
+        }
+
+        options.sort(Comparator.comparing(MachineSearchOptionDto::earliestStart)
+                .thenComparing(MachineSearchOptionDto::price)
+                .thenComparing(option -> option.resources().getFirst().resourceCode()));
+        unavailable.sort(Comparator.comparing(UnavailableMachineDto::resourceCode));
+        int durationMinutes = offsetMinutes(buildPlan(config, Instant.EPOCH).expectedEnd());
+        return new MachineSearchResponse(branchId, config.code(), zone.getId(), from, to, firstStart,
+                durationMinutes, config.bufferMinutes(), options, unavailable);
+    }
+
+    /** {@code primary} plus the first free companion for every other requirement, or null. */
+    static List<Resource> freeCombination(Resource primary,
+                                                  SlotPlan plan,
+                                                  List<String> requirements,
+                                                  Map<String, List<Resource>> resourcesByType,
+                                                  Map<UUID, List<OccupiedInterval>> occupied) {
+        if (!isFree(primary, plan.allocationPlans().getFirst(), occupied)) {
+            return null;
+        }
+        List<Resource> picked = new ArrayList<>(List.of(primary));
+        for (int i = 1; i < requirements.size(); i++) {
+            AllocationPlan allocation = plan.allocationPlans().get(i);
+            Resource companion = resourcesByType.getOrDefault(requirements.get(i), List.of()).stream()
+                    .filter(resource -> !picked.contains(resource) && isFree(resource, allocation, occupied))
+                    .findFirst()
+                    .orElse(null);
+            if (companion == null) {
+                return null;
+            }
+            picked.add(companion);
+        }
+        return picked;
+    }
+
+    static boolean isCombinationFree(List<Resource> resources,
+                                             SlotPlan plan,
+                                             Map<UUID, List<OccupiedInterval>> occupied) {
+        for (int i = 0; i < resources.size(); i++) {
+            if (!isFree(resources.get(i), plan.allocationPlans().get(i), occupied)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    static boolean isFree(Resource resource, AllocationPlan allocation, Map<UUID, List<OccupiedInterval>> occupied) {
+        return occupied.getOrDefault(resource.id(), List.of()).stream()
+                .noneMatch(interval -> intervalsOverlap(allocation.from(), allocation.until(),
+                        interval.start(), interval.end()));
+    }
+
+    private MachineSearchOptionDto searchOption(ServiceConfig config,
+                                                List<Resource> resources,
+                                                SlotPlan plan,
+                                                List<Instant> starts,
+                                                Map<UUID, Machine> machines) {
+        List<MachineSearchResourceDto> resourceDtos = resources.stream()
+                .map(resource -> {
+                    Machine machine = machines.get(resource.id());
+                    return new MachineSearchResourceDto(resource.id(), resource.type(), resource.code(),
+                            resource.name(), resource.location(),
+                            machine == null ? null : machine.getCapacityKg(), resource.status());
+                })
+                .toList();
+        String optionId = resources.stream()
+                .map(resource -> resource.id().toString())
+                .reduce((left, right) -> left + ":" + right)
+                .orElse("");
+        Instant reservedUntil = plan.allocationPlans().stream()
+                .map(AllocationPlan::until)
+                .max(Comparator.naturalOrder())
+                .orElse(plan.expectedEnd());
+        int totalMinutes = Math.toIntExact((plan.expectedEnd().getEpochSecond() - plan.start().getEpochSecond()) / 60);
+        return new MachineSearchOptionDto(optionId, resourceDtos, plan.start(), plan.expectedEnd(),
+                reservedUntil, config.price(), "VND", totalMinutes, toStartRanges(starts), plan.timeline());
+    }
+
+    private UnavailableMachineDto unavailableDto(Resource resource, Machine machine, String reason) {
+        return new UnavailableMachineDto(resource.id(), resource.type(), resource.code(), resource.name(),
+                machine == null ? null : machine.getCapacityKg(), reason);
+    }
+
+    private static String unavailableReason(Machine machine) {
+        if (!machine.isCommissioned()) return "NOT_COMMISSIONED";
+        if (!machine.isOnline()) return "OFFLINE";
+        if (machine.getStatus() == MachineStatus.ERROR) return "ERROR";
+        if (machine.getStatus() == MachineStatus.OUT_OF_SERVICE) return "OUT_OF_SERVICE";
+        return "OFFLINE";
+    }
+
+    private static String displayNameOf(Machine machine) {
+        return machine.getDisplayName() == null || machine.getDisplayName().isBlank()
+                ? machine.getMachineCode() : machine.getDisplayName();
+    }
+
+    static Instant ceilToMinute(Instant instant) {
+        long seconds = instant.getEpochSecond() + (instant.getNano() > 0 ? 1 : 0);
+        return Instant.ofEpochSecond(Math.floorDiv(seconds + 59, 60) * 60);
     }
 
     @Transactional
@@ -334,7 +567,8 @@ public class ScheduledBookingService {
         lockResources(resources);
         validateSelectedResources(request.branchId(), resources);
         for (int i = 0; i < resources.size(); i++) {
-            if (resourceBusy(resources.get(i), plan.allocationPlans().get(i), null, null)) {
+            if (resourceBusy(resources.get(i), plan.allocationPlans().get(i), null, null,
+                    config.bufferMinutes())) {
                 throw new ResponseStatusException(HttpStatus.CONFLICT,
                         "The selected time was just booked. Please choose another slot.");
             }
@@ -791,10 +1025,12 @@ public class ScheduledBookingService {
         branchRepository.findById(branchId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Branch not found"));
         List<BookingSettingsDto> settings = jdbc.query("""
-                SELECT branch_id, timezone FROM branch_booking_settings WHERE branch_id = ?
+                SELECT branch_id, timezone, turnover_buffer_minutes
+                FROM branch_booking_settings WHERE branch_id = ?
                 """, (rs, row) -> new BookingSettingsDto(
-                rs.getObject("branch_id", UUID.class), rs.getString("timezone")), branchId);
-        return settings.isEmpty() ? new BookingSettingsDto(branchId, null) : settings.getFirst();
+                rs.getObject("branch_id", UUID.class), rs.getString("timezone"),
+                rs.getInt("turnover_buffer_minutes")), branchId);
+        return settings.isEmpty() ? new BookingSettingsDto(branchId, null, 0) : settings.getFirst();
     }
 
     @Transactional
@@ -816,11 +1052,16 @@ public class ScheduledBookingService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Cannot change timezone while future holds or confirmed bookings exist");
         }
+        // A changed buffer only affects bookings made from now on; existing
+        // allocations keep the occupancy window they were created with.
+        Integer buffer = request.turnoverBufferMinutes();
         jdbc.update("""
-                INSERT INTO branch_booking_settings(branch_id, timezone) VALUES (?, ?)
-                ON CONFLICT (branch_id) DO UPDATE SET timezone = EXCLUDED.timezone
-                """, branchId, zone.getId());
-        return new BookingSettingsDto(branchId, zone.getId());
+                INSERT INTO branch_booking_settings(branch_id, timezone, turnover_buffer_minutes)
+                VALUES (?, ?, COALESCE(?, 0))
+                ON CONFLICT (branch_id) DO UPDATE SET timezone = EXCLUDED.timezone,
+                    turnover_buffer_minutes = COALESCE(?, branch_booking_settings.turnover_buffer_minutes)
+                """, branchId, zone.getId(), buffer, buffer);
+        return getBookingSettings(branchId);
     }
 
     @Transactional(readOnly = true)
@@ -919,7 +1160,7 @@ public class ScheduledBookingService {
                 rs.getInt("secondary_processing_minutes"), rs.getInt("check_in_minutes"),
                 rs.getInt("checkout_minutes"), rs.getInt("transfer_minutes"),
                 rs.getInt("pickup_deadline_hours"), null, null, null, null, null,
-                requirementsFor(rs.getString("code"))), code);
+                requirementsFor(rs.getString("code")), 0), code);
         if (definitions.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Service not found");
         }
@@ -931,7 +1172,7 @@ public class ScheduledBookingService {
         List<ServiceConfig> configured = jdbc.query("""
                 SELECT o.price, COALESCE(o.processing_minutes_override, d.processing_minutes) processing_minutes,
                        COALESCE(o.secondary_processing_minutes_override, d.secondary_processing_minutes) secondary_processing_minutes,
-                       s.timezone
+                       s.timezone, s.turnover_buffer_minutes
                 FROM branch_service_offerings o
                 JOIN booking_service_definitions d ON d.code = o.service_code
                 JOIN branch_booking_settings s ON s.branch_id = o.branch_id
@@ -942,7 +1183,7 @@ public class ScheduledBookingService {
                 definition.checkInMinutes(), definition.checkoutMinutes(), definition.transferMinutes(),
                 definition.pickupDeadlineHours(), rs.getBigDecimal("price"), branchId,
                 rs.getString("timezone"), null, null,
-                definition.requirements()), branchId, serviceCode);
+                definition.requirements(), rs.getInt("turnover_buffer_minutes")), branchId, serviceCode);
         if (configured.isEmpty()) {
             return null;
         }
@@ -1152,9 +1393,14 @@ public class ScheduledBookingService {
                                                                  ZoneId branchZone,
                                                                  Instant from,
                                                                  Instant until,
-                                                                 Map<UUID, Resource> resourcesById) {
+                                                                 Map<UUID, Resource> resourcesById,
+                                                                 int bufferMinutes) {
         Map<UUID, List<OccupiedInterval>> result = new java.util.HashMap<>();
         if (resourcesById.isEmpty()) return result;
+        Instant now = Instant.now();
+        resourcesById.values().forEach(resource -> activeSession(resource, bufferMinutes, now)
+                .ifPresent(session -> result.computeIfAbsent(resource.id(), ignored -> new ArrayList<>())
+                        .add(session)));
         jdbc.query("""
                 SELECT a.resource_id, a.occupied_from, a.occupied_until
                 FROM booking_resource_allocations a
@@ -1248,7 +1494,7 @@ public class ScheduledBookingService {
         ZoneId zone = ZoneId.of(config.timezone());
         Instant bookingEnd = "ASSISTED_LOCKER".equals(config.mode())
                 ? plan.checkInEnd() : plan.expectedEnd();
-        return !start.isBefore(Instant.now().plusSeconds(5 * 60))
+        return !start.isBefore(Instant.now())
                 && isCoveredByOpeningHours(scheduleHours(config.branchId()), zone, start, bookingEnd);
     }
 
@@ -1364,15 +1610,18 @@ public class ScheduledBookingService {
             timeline.add(new SlotPhaseDto("CHECK_OUT", type, primaryEnd, expectedEnd));
         }
 
+        // The turnover buffer (cleaning / unloading) keeps each resource
+        // blocked a little longer, so the next booking starts after it.
+        long buffer = Math.max(0, config.bufferMinutes()) * 60L;
         List<AllocationPlan> allocations = new ArrayList<>();
         for (String type : config.requirements()) {
             if (combo && "WASHER".equals(type)) {
-                allocations.add(new AllocationPlan(type, "WASHING", start, transferEnd));
+                allocations.add(new AllocationPlan(type, "WASHING", start, transferEnd.plusSeconds(buffer)));
             } else if (combo && "DRYER".equals(type)) {
-                allocations.add(new AllocationPlan(type, "DRYING", transferEnd, expectedEnd));
+                allocations.add(new AllocationPlan(type, "DRYING", transferEnd, expectedEnd.plusSeconds(buffer)));
             } else {
                 allocations.add(new AllocationPlan(type, type, start,
-                        locker ? resourceEnd : expectedEnd));
+                        (locker ? resourceEnd : expectedEnd).plusSeconds(buffer)));
             }
         }
         return new SlotPlan(start, checkInEnd, primaryEnd, transferEnd, secondaryEnd,
@@ -1419,6 +1668,24 @@ public class ScheduledBookingService {
                                  AllocationPlan plan,
                                  UUID excludeBookingId,
                                  UUID excludeTransactionId) {
+        return resourceBusy(resource, plan, excludeBookingId, excludeTransactionId, 0);
+    }
+
+    /**
+     * True when {@code plan} overlaps a live booking/hold allocation, a legacy
+     * machine reservation, or the machine's current session (running cycle).
+     */
+    private boolean resourceBusy(Resource resource,
+                                 AllocationPlan plan,
+                                 UUID excludeBookingId,
+                                 UUID excludeTransactionId,
+                                 int bufferMinutes) {
+        boolean sessionConflict = activeSession(resource, bufferMinutes, Instant.now())
+                .filter(session -> intervalsOverlap(plan.from(), plan.until(), session.start(), session.end()))
+                .isPresent();
+        if (sessionConflict) {
+            return true;
+        }
         Integer scheduledCount = jdbc.queryForObject("""
                 SELECT COUNT(*)
                 FROM booking_resource_allocations a
@@ -1447,10 +1714,51 @@ public class ScheduledBookingService {
                 .findAny().isPresent();
     }
 
+    /**
+     * Machines that can take a booking: online, commissioned and either idle or
+     * in a session that will end (that session is then treated as occupied,
+     * see {@link #activeSession}). ERROR / OUT_OF_SERVICE / offline are excluded.
+     */
     private boolean isOperationallyUsable(Machine machine) {
-        return machine.isOnline()
+        return machine.isOnline() && machine.isCommissioned()
                 && (machine.getStatus() == MachineStatus.AVAILABLE
-                || machine.getStatus() == MachineStatus.RESERVED);
+                || machine.getStatus() == MachineStatus.RESERVED
+                || SESSION_STATUSES.contains(machine.getStatus()));
+    }
+
+    /**
+     * The interval a machine is busy because of what it is doing right now:
+     * remaining cycle time reported by the device (or a configured fallback)
+     * plus the turnover buffer. Empty for idle machines and non-machine resources.
+     */
+    Optional<OccupiedInterval> activeSession(Resource resource, int bufferMinutes, Instant now) {
+        if (resource.status() == null
+                || (!"WASHER".equals(resource.type()) && !"DRYER".equals(resource.type()))) {
+            return Optional.empty();
+        }
+        MachineStatus status;
+        try {
+            status = MachineStatus.valueOf(resource.status());
+        } catch (IllegalArgumentException e) {
+            return Optional.empty();
+        }
+        if (!SESSION_STATUSES.contains(status)) {
+            return Optional.empty();
+        }
+        long remainingSeconds = switch (status) {
+            case RUNNING, PAUSED -> runtimeStateService.get(resource.id())
+                    .map(com.laundry.machine.runtime.MachineRuntimeState::getRemainingSeconds)
+                    .filter(seconds -> seconds != null && seconds > 0)
+                    .map(Integer::longValue)
+                    .orElse(activeSessionFallbackMinutes * 60);
+            // Waiting for START is covered by its reservation; a finished cycle only needs unloading.
+            default -> 0L;
+        };
+        Instant end = now.plusSeconds(remainingSeconds + Math.max(0, bufferMinutes) * 60L);
+        // Round up to a whole minute so it lines up with minute-precision start times.
+        long epochMinute = (end.getEpochSecond() + 59) / 60;
+        end = Instant.ofEpochSecond(epochMinute * 60);
+        return end.isAfter(now) ? Optional.of(new OccupiedInterval(now, end)) : Optional.empty();
     }
 
     private void validateSelectedResources(UUID branchId, List<Resource> resources) {
@@ -1458,7 +1766,9 @@ public class ScheduledBookingService {
             if (!"WASHER".equals(resource.type()) && !"DRYER".equals(resource.type())) continue;
             List<Boolean> valid = jdbc.query("""
                     SELECT branch_id = ? AND type = ? AND online = TRUE
-                           AND status IN ('AVAILABLE', 'RESERVED')
+                           AND deployment_status = 'ACTIVE'
+                           AND status IN ('AVAILABLE', 'RESERVED', 'WAITING_START',
+                                          'RUNNING', 'PAUSED', 'COMPLETED')
                     FROM machines WHERE id = ? FOR UPDATE
                     """, (rs, row) -> rs.getBoolean(1), branchId, resource.type(), resource.id());
             if (valid.isEmpty() || !valid.getFirst()) {

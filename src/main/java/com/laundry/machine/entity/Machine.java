@@ -76,6 +76,23 @@ public class Machine {
     @Column(name = "location_description", length = 200)
     private String locationDescription;
 
+    /** Rated load in kilograms, shown to customers when choosing a machine; null when unknown. */
+    @Column(name = "capacity_kg", precision = 5, scale = 1)
+    private java.math.BigDecimal capacityKg;
+
+    /**
+     * Commissioning lifecycle. Only {@link MachineDeploymentStatus#ACTIVE}
+     * machines are offered for booking and check-in.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "deployment_status", nullable = false, length = 20)
+    @Builder.Default
+    private MachineDeploymentStatus deploymentStatus = MachineDeploymentStatus.UNASSIGNED;
+
+    /** ESP32 identity (e.g. "ESP-24A1B2C3D4E5") bound to this machine; null when unassigned. */
+    @Column(name = "device_id", length = 64)
+    private String deviceId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 
@@ -110,6 +127,11 @@ public class Machine {
     @Column(name = "error_code", length = 100)
     @Builder.Default
     private String errorCode = "";
+
+    /** True when the machine finished commissioning and may be sold to customers. */
+    public boolean isCommissioned() {
+        return deploymentStatus == MachineDeploymentStatus.ACTIVE;
+    }
 
     @PrePersist
     void onCreate() {

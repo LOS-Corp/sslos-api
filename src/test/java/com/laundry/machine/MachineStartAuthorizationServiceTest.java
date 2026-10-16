@@ -64,6 +64,8 @@ class MachineStartAuthorizationServiceTest {
     private TransactionRepository transactionRepository;
     @Autowired
     private PaymentRepository paymentRepository;
+    @Autowired
+    private com.laundry.transaction.scheduler.ReservationWindowCloseScheduler reservationWindowCloseScheduler;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -74,6 +76,7 @@ class MachineStartAuthorizationServiceTest {
      */
     @MockitoBean
     private com.laundry.mqtt.service.MqttPublisher mqttPublisher;
+
 
     // ── Fixtures ──────────────────────────────────────────────────────────────
 
@@ -95,6 +98,7 @@ class MachineStartAuthorizationServiceTest {
                 .branchId(UUID.randomUUID())
                 .type(MachineType.WASHER)
                 .status(MachineStatus.AVAILABLE)
+                .deploymentStatus(MachineDeploymentStatus.ACTIVE)
                 .online(true)
                 .build();
         machineRepository.save(machine);
@@ -147,6 +151,7 @@ class MachineStartAuthorizationServiceTest {
                 .branchId(UUID.randomUUID())
                 .type(MachineType.WASHER)
                 .status(MachineStatus.AVAILABLE)
+                .deploymentStatus(MachineDeploymentStatus.ACTIVE)
                 .online(true)
                 .build()).getId();
         Transaction tx = newTransaction(customerId);
@@ -240,6 +245,51 @@ class MachineStartAuthorizationServiceTest {
         reload(response.authorizationId());
         var after = authorizationRepository.findById(response.authorizationId()).orElseThrow();
         assertThat(after.isTerminal()).isTrue();
+    }
+
+    // ── Admin test run (no booking, no QR) ─────────────────────────────────
+
+    @Test
+    @DisplayName("Admin test run goes PENDING → CONSUMED without any reservation")
+    void adminTestRun_fullCycleWithoutReservation() {
+        UUID adminId = UUID.randomUUID();
+        var response = service.adminTestStart("WM001", adminId);
+        verifyPublished(mqttPublisher, 1);
+
+        var auth = authorizationRepository.findById(response.authorizationId()).orElseThrow();
+        assertThat(auth.isTestRun()).isTrue();
+        assertThat(auth.getReservationId()).isNull();
+        assertThat(auth.getStatus()).isEqualTo(MachineStartAuthorizationStatus.PENDING);
+
+        service.handleAuthAck(machine, response.authorizationId(), "cmd", true, "ACCEPTED", null, "boot-A");
+        UUID runId = service.handleStartRequest(machine, response.authorizationId(), "req-1", "boot-A");
+        service.handleStarted(machine, response.authorizationId(), "req-1", runId, "boot-A");
+
+        reload(response.authorizationId());
+        assertThat(authorizationRepository.findById(response.authorizationId()).orElseThrow().getStatus())
+                .isEqualTo(MachineStartAuthorizationStatus.CONSUMED);
+        assertThat(service.latestTestStart("WM001")).get()
+                .extracting(r -> r.authorizationStatus()).isEqualTo(MachineStartAuthorizationStatus.CONSUMED);
+    }
+
+    @Test
+    @DisplayName("Admin test run never overrides a customer authorization; cancel revokes only test rows")
+    void adminTestRun_respectsCustomerAuthorizationAndCancels() {
+        seedReservationAndPayment(true, false);
+        var customer = service.checkIn("WM001", customerId);
+        assertThatThrownBy(() -> service.adminTestStart("WM001", UUID.randomUUID()))
+                .isInstanceOf(CheckInRejectedException.class);
+
+        service.cancelTestStart("WM001");   // must not touch the customer's row
+        reload(customer.authorizationId());
+        assertThat(authorizationRepository.findById(customer.authorizationId()).orElseThrow().isActive()).isTrue();
+
+        authorizationRepository.deleteAll();
+        var test = service.adminTestStart("WM001", UUID.randomUUID());
+        service.cancelTestStart("WM001");
+        reload(test.authorizationId());
+        assertThat(authorizationRepository.findById(test.authorizationId()).orElseThrow().getStatus())
+                .isEqualTo(MachineStartAuthorizationStatus.REVOKED);
     }
 
     // ── 9. Double QR check-in ───────────────────────────────────────────────
@@ -527,6 +577,78 @@ class MachineStartAuthorizationServiceTest {
         reload(response.authorizationId());
         var after = authorizationRepository.findById(response.authorizationId()).orElseThrow();
         assertThat(after.getStatus()).isEqualTo(MachineStartAuthorizationStatus.REVOKED);
+    }
+
+    @Test
+    @DisplayName("A stale CONFIRMED reservation does not shadow the one just booked")
+    void case26_staleReservationDoesNotShadowNewOne() {
+        seedReservationWithOffset(-300, -180);   // ended 3 h ago, never closed out
+        seedReservationAndPayment(true, false);  // current window
+        var response = service.checkIn("WM001", customerId);
+        assertThat(response.authorizationId()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("Window sweep: used → COMPLETED, no-show → EXPIRED, open window untouched")
+    void case27_reservationWindowSweep() {
+        UUID usedId = seedReservationAndPayment(true, false);
+        var response = service.checkIn("WM001", customerId);
+        service.handleAuthAck(machine, response.authorizationId(), "cmd", true, "ACCEPTED", null, "boot-A");
+        UUID runId = service.handleStartRequest(machine, response.authorizationId(), "req-1", "boot-A");
+        service.handleStarted(machine, response.authorizationId(), "req-1", runId, "boot-A");
+        MachineReservation used = reservationRepository.findById(usedId).orElseThrow();
+        used.setEndTime(LocalDateTime.now().minusHours(2));
+        reservationRepository.save(used);
+
+        Transaction staleTx = transactionRepository.save(newTransaction(customerId));
+        MachineReservation stale = reservation(staleTx, machine.getId(), ReservationStatus.CONFIRMED);
+        stale.setStartTime(LocalDateTime.now().minusHours(4));
+        stale.setEndTime(LocalDateTime.now().minusHours(2));
+        UUID staleId = reservationRepository.save(stale).getId();
+
+        UUID openId = seedReservationAndPayment(true, false);
+
+        reservationWindowCloseScheduler.sweep();
+        entityManager.clear();
+
+        assertThat(reservationRepository.findById(usedId).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.COMPLETED);
+        assertThat(reservationRepository.findById(staleId).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.EXPIRED);
+        assertThat(reservationRepository.findById(openId).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.CONFIRMED);
+    }
+
+    @Test
+    @DisplayName("A reservation that already ran a wash cannot be checked in again")
+    void case28_reservationUsedOnlyOnce() {
+        UUID reservationId = seedReservationAndPayment(true, false);
+        var response = service.checkIn("WM001", customerId);
+        service.handleAuthAck(machine, response.authorizationId(), "cmd", true, "ACCEPTED", null, "boot-A");
+        UUID runId = service.handleStartRequest(machine, response.authorizationId(), "req-1", "boot-A");
+        service.handleStarted(machine, response.authorizationId(), "req-1", runId, "boot-A");
+
+        entityManager.clear();
+        assertThat(reservationRepository.findById(reservationId).orElseThrow().getStatus())
+                .isEqualTo(ReservationStatus.ACTIVE);
+        assertThatThrownBy(() -> service.checkIn("WM001", customerId))
+                .isInstanceOf(CheckInRejectedException.class)
+                .hasMessageContaining("already been used");
+    }
+
+    @Test
+    @DisplayName("A used reservation does not hide a second, unused booking on the same machine")
+    void case29_secondBookingStillUsable() {
+        seedReservationAndPayment(true, false);
+        var first = service.checkIn("WM001", customerId);
+        service.handleAuthAck(machine, first.authorizationId(), "cmd", true, "ACCEPTED", null, "boot-A");
+        UUID runId = service.handleStartRequest(machine, first.authorizationId(), "req-1", "boot-A");
+        service.handleStarted(machine, first.authorizationId(), "req-1", runId, "boot-A");
+
+        UUID secondReservation = seedReservationAndPayment(true, false);
+        var second = service.checkIn("WM001", customerId);
+        var auth = authorizationRepository.findById(second.authorizationId()).orElseThrow();
+        assertThat(auth.getReservationId()).isEqualTo(secondReservation);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────

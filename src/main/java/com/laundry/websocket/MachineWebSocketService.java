@@ -141,6 +141,23 @@ public class MachineWebSocketService implements MachineWebSocketBroadcaster {
             OffsetDateTime timestamp
     ) {}
 
+    private static final java.util.Set<String> RUNNING_PHASES = java.util.Set.of("CHECKING", "WASHING", "SPINNING");
+
+    /**
+     * The DB only stores RUNNING while the device reports the cycle phase
+     * (CHECKING / WASHING / SPINNING) on the runtime topic. Send the phase here
+     * too, otherwise the two pushes alternate and the UI badge flickers.
+     */
+    private static String displayStatus(Machine m, MachineRuntimeState runtime) {
+        if (m.getStatus() == null) return "AVAILABLE";
+        String runtimeStatus = runtime != null ? runtime.getStatus() : null;
+        if (m.getStatus() == com.laundry.machine.entity.MachineStatus.RUNNING
+                && runtimeStatus != null && RUNNING_PHASES.contains(runtimeStatus.toUpperCase())) {
+            return runtimeStatus.toUpperCase();
+        }
+        return m.getStatus().name();
+    }
+
     private MachineStatusMessage buildStatusMessage(Machine m, Boolean doorClosed, Boolean leakDetected) {
         MachineRuntimeState runtime = runtimeStateService.get(m.getId()).orElse(null);
 
@@ -156,7 +173,7 @@ public class MachineWebSocketService implements MachineWebSocketBroadcaster {
                 m.getId(),
                 m.getMachineCode(),
                 m.getBranchId(),
-                m.getStatus() != null ? m.getStatus().name() : "AVAILABLE",
+                displayStatus(m, runtime),
                 runtime != null ? runtime.getPhase() : null,
                 runtime != null ? runtime.getRunning() : null,
                 runtime != null ? runtime.getAvailable() : null,

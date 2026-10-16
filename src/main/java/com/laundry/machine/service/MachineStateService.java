@@ -19,26 +19,35 @@ import java.util.Set;
  *
  * <p>State transition table:
  * <pre>
- * AVAILABLE      → RESERVED, OFFLINE
- * RESERVED       → WAITING_START, AVAILABLE, OFFLINE (booking cancelled/expired)
+ * AVAILABLE      → RESERVED, RUNNING, ERROR, OFFLINE
+ * RESERVED       → WAITING_START, RUNNING, AVAILABLE, ERROR, OFFLINE (booking cancelled/expired)
  * WAITING_START  → RUNNING, RESERVED, ERROR, OFFLINE
- * RUNNING        → COMPLETED, PAUSED, ERROR, OFFLINE
+ * RUNNING        → COMPLETED, AVAILABLE, PAUSED, ERROR, OFFLINE
  * PAUSED         → RUNNING, ERROR, OFFLINE
  * COMPLETED      → AVAILABLE, OFFLINE
  * ERROR          → AVAILABLE, OUT_OF_SERVICE, OFFLINE
  * OFFLINE        → AVAILABLE (reconnect), ERROR
  * OUT_OF_SERVICE → AVAILABLE (staff action)
  * </pre>
+ *
+ * <p>AVAILABLE/RESERVED → RUNNING is allowed because the firmware only runs a
+ * cycle after the START authorization handshake (QR check-in or admin test
+ * run → AUTHORIZE_START → START_REQUEST → START_APPROVAL); the device is the
+ * source of truth for the physical drum. RUNNING → AVAILABLE covers a lost
+ * COMPLETED message (status is published with QoS 0).
  */
 @Component
 @Slf4j
 public class MachineStateService {
 
     private static final Map<MachineStatus, Set<MachineStatus>> VALID_TRANSITIONS = Map.of(
-        MachineStatus.AVAILABLE,      EnumSet.of(MachineStatus.RESERVED, MachineStatus.OFFLINE, MachineStatus.OUT_OF_SERVICE),
-        MachineStatus.RESERVED,       EnumSet.of(MachineStatus.WAITING_START, MachineStatus.AVAILABLE, MachineStatus.OFFLINE),
+        MachineStatus.AVAILABLE,      EnumSet.of(MachineStatus.RESERVED, MachineStatus.RUNNING, MachineStatus.ERROR,
+                                                 MachineStatus.OFFLINE, MachineStatus.OUT_OF_SERVICE),
+        MachineStatus.RESERVED,       EnumSet.of(MachineStatus.WAITING_START, MachineStatus.RUNNING, MachineStatus.AVAILABLE,
+                                                 MachineStatus.ERROR, MachineStatus.OFFLINE),
         MachineStatus.WAITING_START,  EnumSet.of(MachineStatus.RUNNING, MachineStatus.RESERVED, MachineStatus.ERROR, MachineStatus.OFFLINE),
-        MachineStatus.RUNNING,        EnumSet.of(MachineStatus.COMPLETED, MachineStatus.PAUSED, MachineStatus.ERROR, MachineStatus.OFFLINE),
+        MachineStatus.RUNNING,        EnumSet.of(MachineStatus.COMPLETED, MachineStatus.AVAILABLE, MachineStatus.PAUSED,
+                                                 MachineStatus.ERROR, MachineStatus.OFFLINE),
         MachineStatus.PAUSED,         EnumSet.of(MachineStatus.RUNNING, MachineStatus.ERROR, MachineStatus.OFFLINE),
         MachineStatus.COMPLETED,      EnumSet.of(MachineStatus.AVAILABLE, MachineStatus.OFFLINE),
         MachineStatus.ERROR,          EnumSet.of(MachineStatus.AVAILABLE, MachineStatus.OUT_OF_SERVICE, MachineStatus.OFFLINE),
@@ -82,7 +91,8 @@ public class MachineStateService {
             case "OUT_OF_SERVICE" -> MachineStatus.OUT_OF_SERVICE;
             // Legacy/alternate ESP32 values
             case "IDLE"           -> MachineStatus.AVAILABLE;
-            case "WASH", "WASHING" -> MachineStatus.RUNNING;
+            // Firmware GA25 cycle phases: CHECKING → WASHING → SPINNING
+            case "WASH", "WASHING", "CHECKING", "SPINNING", "SPIN" -> MachineStatus.RUNNING;
             case "DONE", "FINISHED" -> MachineStatus.COMPLETED;
             case "FAULT", "ERR"   -> MachineStatus.ERROR;
             default -> {

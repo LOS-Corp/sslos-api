@@ -53,4 +53,8 @@ public class CreateMachineRequest {
 
     @Size(max = 200, message = "locationDescription must be at most 200 characters")
     private String locationDescription;
+
+    @jakarta.validation.constraints.DecimalMin(value = "0.1", message = "capacityKg must be greater than 0")
+    @jakarta.validation.constraints.DecimalMax(value = "9999.9", message = "capacityKg is too large")
+    private java.math.BigDecimal capacityKg;
 }

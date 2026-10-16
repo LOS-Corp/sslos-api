@@ -68,6 +68,7 @@ public class MachineService {
     private final MachineWebSocketBroadcaster broadcaster;
     private final MachineRuntimeStateService runtimeStateService;
     private final BranchRepository branchRepository;
+    private final com.laundry.booking.service.BookingLifecycleService bookingLifecycleService;
 
     @Autowired
     public MachineService(
@@ -77,7 +78,8 @@ public class MachineService {
             MachineStateService machineStateService,
             MachineWebSocketBroadcaster broadcaster,
             MachineRuntimeStateService runtimeStateService,
-            BranchRepository branchRepository) {
+            BranchRepository branchRepository,
+            com.laundry.booking.service.BookingLifecycleService bookingLifecycleService) {
         this.machineRepository = machineRepository;
         this.deviceEventRepository = deviceEventRepository;
         this.deviceCommandRepository = deviceCommandRepository;
@@ -85,6 +87,7 @@ public class MachineService {
         this.broadcaster = broadcaster;
         this.runtimeStateService = runtimeStateService;
         this.branchRepository = branchRepository;
+        this.bookingLifecycleService = bookingLifecycleService;
     }
 
     @Value("${app.machine.heartbeat-timeout-seconds:30}")
@@ -146,6 +149,13 @@ public class MachineService {
                 persistentStateChanged = true;
                 persistEvent(machine, DeviceEventType.STATUS_CHANGED,
                         "Status: " + previousStatus + " → " + machine.getStatus(), null);
+                // A cycle ended (COMPLETED, or straight back to AVAILABLE if that message was lost).
+                boolean wasRunning = previousStatus == MachineStatus.RUNNING || previousStatus == MachineStatus.PAUSED;
+                boolean nowIdle = machine.getStatus() == MachineStatus.COMPLETED
+                        || machine.getStatus() == MachineStatus.AVAILABLE;
+                if (wasRunning && nowIdle) {
+                    bookingLifecycleService.onMachineCycleFinished(machine.getId());
+                }
             }
         }
 
@@ -539,7 +549,9 @@ public class MachineService {
                 .branchId(branchId)
                 .displayName(request.getDisplayName())
                 .locationDescription(request.getLocationDescription())
+                .capacityKg(request.getCapacityKg())
                 .status(MachineStatus.AVAILABLE)
+                .deploymentStatus(MachineDeploymentStatus.UNASSIGNED)
                 .online(false)
                 .errorCode("")
                 .build();
@@ -598,6 +610,12 @@ public class MachineService {
         if (request.getLocationDescription() != null
                 && !request.getLocationDescription().equals(machine.getLocationDescription())) {
             machine.setLocationDescription(request.getLocationDescription());
+            changed = true;
+        }
+        if (request.getCapacityKg() != null
+                && request.getCapacityKg().compareTo(
+                        machine.getCapacityKg() == null ? java.math.BigDecimal.ZERO : machine.getCapacityKg()) != 0) {
+            machine.setCapacityKg(request.getCapacityKg());
             changed = true;
         }
         if (request.getStatus() != null && request.getStatus() != machine.getStatus()) {
@@ -661,21 +679,28 @@ public class MachineService {
                 .or(() -> runtimeStateService.loadPersisted(m.getId()))
                 .orElse(null);
 
-        return MachineDto.builder()
+        MachineDto dto = MachineDto.builder()
                 .id(m.getId())
                 .machineCode(m.getMachineCode())
                 .branchId(m.getBranchId())
                 .type(m.getType())
                 .status(m.getStatus())
+                .deploymentStatus(m.getDeploymentStatus())
+                .deviceId(m.getDeviceId())
                 .online(m.isOnline() || (runtime != null && Boolean.TRUE.equals(runtime.getOnline())))
                 .lastHeartbeatAt(m.getLastHeartbeatAt())
                 .runtime(runtime)
                 .errorCode(m.getErrorCode())
                 .displayName(m.getDisplayName())
                 .locationDescription(m.getLocationDescription())
+                .capacityKg(m.getCapacityKg())
                 .createdAt(m.getCreatedAt())
                 .updatedAt(m.getUpdatedAt())
                 .build();
+        // Every caller (public machine page, customer orders, admin) gets the
+        // live phase / remaining time at the top level, not only inside runtime.
+        dto.flattenRuntime();
+        return dto;
     }
 
     @Transactional(readOnly = true)

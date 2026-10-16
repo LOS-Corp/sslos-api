@@ -16,6 +16,11 @@ import java.util.UUID;
 @Component
 public class MqttTopicBuilder {
 
+    /** {@code laundry/washer/{branchId}/{machineId}} — the prefix every device channel hangs off. */
+    public String baseTopic(UUID branchId, String machineId) {
+        return MqttTopics.ROOT + "/" + branchId + "/" + machineId.trim();
+    }
+
     public String commandTopic(UUID branchId, String machineId) {
         return build(branchId, machineId, "command");
     }

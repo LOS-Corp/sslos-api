@@ -1,6 +1,7 @@
 package com.laundry.machine.dto;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import com.laundry.machine.entity.MachineDeploymentStatus;
 import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.entity.MachineType;
 import com.laundry.machine.runtime.MachineRuntimeState;
@@ -36,6 +37,10 @@ public class MachineDto {
     private UUID branchId;
     private MachineType type;
     private MachineStatus status;
+    /** Commissioning lifecycle; only ACTIVE machines are bookable. */
+    private MachineDeploymentStatus deploymentStatus;
+    /** Bound ESP32 identity, null when unassigned. */
+    private String deviceId;
     private boolean online;
     private OffsetDateTime lastHeartbeatAt;
 
@@ -60,6 +65,7 @@ public class MachineDto {
     private String errorCode;
     private String displayName;
     private String locationDescription;
+    private java.math.BigDecimal capacityKg;
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;
 

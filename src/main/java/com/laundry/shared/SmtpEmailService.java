@@ -51,6 +51,72 @@ public class SmtpEmailService implements EmailService {
         }
     }
 
+    @Override
+    public void sendLaundryCompletedEmail(LaundryCompletedEmail mail) {
+        try {
+            MimeMessage message = mailSender.createMimeMessage();
+            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
+            helper.setFrom(fromEmail);
+            helper.setTo(mail.toEmail());
+            helper.setSubject("[" + appName + "] Đồ của bạn đã giặt xong");
+            helper.setText(buildCompletedBody(mail), true);
+            mailSender.send(message);
+            log.info("Laundry completed email sent to: {}", mail.toEmail());
+        } catch (MessagingException | MailException e) {
+            log.error("Failed to send laundry completed email to: {}. Error: {}", mail.toEmail(), e.getMessage());
+            throw new RuntimeException("Failed to send laundry completed email", e);
+        }
+    }
+
+    private static final java.time.format.DateTimeFormatter VN_TIME = java.time.format.DateTimeFormatter
+            .ofPattern("HH:mm dd/MM/yyyy").withZone(java.time.ZoneId.of("Asia/Ho_Chi_Minh"));
+
+    private String buildCompletedBody(LaundryCompletedEmail mail) {
+        String total = java.text.NumberFormat.getCurrencyInstance(java.util.Locale.of("vi", "VN"))
+                .format(mail.totalAmount());
+        return """
+<!DOCTYPE html>
+<html lang="vi">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:20px;background:#f3f7f5;font-family:'Segoe UI',Arial,sans-serif;color:#183b3a">
+  <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:14px;overflow:hidden;border:1px solid #e2ebe6">
+    <div style="background:#0f766e;padding:26px 28px;color:#fff">
+      <div style="font-size:13px;opacity:.85;letter-spacing:1px">LAUNDRYOS</div>
+      <h1 style="margin:6px 0 0;font-size:22px">Đồ của bạn đã giặt xong ✓</h1>
+    </div>
+    <div style="padding:26px 28px;font-size:15px;line-height:1.6">
+      <p style="margin:0 0 14px">Xin chào <strong>%s</strong>,</p>
+      <p style="margin:0 0 18px">Máy đã hoàn tất chu trình. Bạn có thể đến lấy đồ ngay để máy sẵn sàng cho khách tiếp theo.</p>
+      <table style="width:100%%;border-collapse:collapse;font-size:14px">
+        <tr><td style="padding:8px 0;color:#6b7d78;width:42%%">Mã đặt chỗ</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7d78">Dịch vụ</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7d78">Máy</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7d78">Chi nhánh</td><td style="padding:8px 0;font-weight:600">%s<br><span style="font-weight:400;color:#6b7d78">%s</span></td></tr>
+        <tr><td style="padding:8px 0;color:#6b7d78">Bắt đầu</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7d78">Hoàn tất</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7d78;border-top:1px dashed #e2ebe6">Đã thanh toán</td><td style="padding:8px 0;font-weight:700;border-top:1px dashed #e2ebe6">%s</td></tr>
+      </table>
+    </div>
+    <div style="padding:16px 28px;background:#f8faf9;font-size:12px;color:#8a9a95;text-align:center">
+      Email tự động từ LaundryOS — vui lòng không trả lời email này.
+    </div>
+  </div>
+</body>
+</html>
+""".formatted(
+                escape(mail.customerName()), escape(mail.bookingCode()), escape(mail.serviceName()),
+                escape(mail.machineCodes() == null ? "—" : mail.machineCodes()),
+                escape(mail.branchName()), escape(mail.branchAddress() == null ? "" : mail.branchAddress()),
+                mail.startedAt() == null ? "—" : VN_TIME.format(mail.startedAt()),
+                mail.completedAt() == null ? "—" : VN_TIME.format(mail.completedAt()),
+                total);
+    }
+
+    private static String escape(String value) {
+        if (value == null) return "";
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+    }
+
     private String buildHtmlEmailBody(String customerName, String otpCode) {
         return """
 <!DOCTYPE html>

@@ -56,9 +56,13 @@ public final class BookingConfigDtos {
             List<ServiceReadiness> services
     ) {}
 
-    public record BookingSettingsDto(UUID branchId, String timezone) {}
+    /** {@code turnoverBufferMinutes}: idle time kept after every booking before the next one may start. */
+    public record BookingSettingsDto(UUID branchId, String timezone, int turnoverBufferMinutes) {}
 
-    public record BookingSettingsUpdate(@NotBlank @Size(max = 80) String timezone) {}
+    public record BookingSettingsUpdate(
+            @NotBlank @Size(max = 80) String timezone,
+            @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(120)
+            Integer turnoverBufferMinutes) {}
 
     public record ServiceOfferingDto(
             String code,

@@ -85,8 +85,12 @@ public class SecurityConfig {
                 // Machine commands — require authentication
                 .requestMatchers(HttpMethod.POST, "/api/machines/**").authenticated()
 
-                // Admin machine CRUD — admin/owner only
+                // Admin machine CRUD + pairing/self-test/commissioning — admin/owner only
                 .requestMatchers("/api/admin/machines", "/api/admin/machines/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_OWNER")
+                .requestMatchers("/api/admin/iot-devices", "/api/admin/iot-devices/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_OWNER")
+
+                // ESP32 activation — device authenticates with HMAC challenge-response, not JWT
+                .requestMatchers(HttpMethod.POST, "/api/devices/activate", "/api/devices/activate/challenge").permitAll()
 
                 // Branch read — public (kiosks, dropdowns, customer apps)
                 .requestMatchers(HttpMethod.GET, "/api/branches", "/api/branches/**").permitAll()
@@ -99,6 +103,7 @@ public class SecurityConfig {
                 .requestMatchers(HttpMethod.GET, "/api/services", "/api/services/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/bookings/timeline-availability").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/bookings/recommendations").permitAll()
+                .requestMatchers(HttpMethod.GET, "/api/bookings/machine-search").permitAll()
                 .requestMatchers("/api/admin/bookings/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_OWNER")
                 .requestMatchers("/api/bookings/**", "/api/users/me/bookings").authenticated()
                 

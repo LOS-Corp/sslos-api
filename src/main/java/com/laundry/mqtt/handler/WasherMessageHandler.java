@@ -1,7 +1,9 @@
 package com.laundry.mqtt.handler;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.laundry.iot.service.CommissioningService;
 import com.laundry.machine.entity.Machine;
 import com.laundry.machine.exception.MachineNotFoundException;
 import com.laundry.machine.repository.MachineRepository;
@@ -60,6 +62,7 @@ public class WasherMessageHandler {
     private final MachineRuntimeStateService runtimeStateService;
     private final MachineRepository machineRepository;
     private final MachineWebSocketBroadcaster broadcaster;
+    private final CommissioningService commissioningService;
 
     // ── /status ────────────────────────────────────────────────────────────
 
@@ -174,6 +177,8 @@ public class WasherMessageHandler {
      * {@code Machine.status} — that is owned by /status and /telemetry.
      */
     public void handleEvent(UUID branchId, String machineId, String payload) {
+        if (handleSelfTestResult(branchId, machineId, payload)) return;
+
         WasherPayloads.EventPayload data = parse(payload, WasherPayloads.EventPayload.class);
         if (data == null) return;
 
@@ -185,6 +190,27 @@ public class WasherMessageHandler {
 
         machineService.processDeviceEvent(branchId, machineId, snapshot,
                 data.getEvent(), data.getDetail(), data.getBookingId());
+    }
+
+    /**
+     * Commissioning self-test report: {@code {"event":"SELF_TEST_RESULT","commandId":..,"passed":..,"checks":{..}}}.
+     * Returns true when the payload was a self-test result (handled or ignored).
+     */
+    private boolean handleSelfTestResult(UUID branchId, String machineId, String payload) {
+        JsonNode node;
+        try {
+            node = objectMapper.readTree(payload);
+        } catch (JsonProcessingException e) {
+            return false;
+        }
+        if (node == null || !"SELF_TEST_RESULT".equalsIgnoreCase(node.path("event").asText(""))) {
+            return false;
+        }
+        commissioningService.handleSelfTestResult(branchId, machineId,
+                node.path("commandId").asText(null),
+                node.path("passed").asBoolean(false),
+                node.path("checks").toString());
+        return true;
     }
 
     // ── /command/ack ───────────────────────────────────────────────────────

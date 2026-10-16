@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
+import static com.laundry.booking.dto.BookingDtos.MachineSearchResponse;
 import static com.laundry.booking.dto.BookingDtos.RecommendationsResponse;
 import static com.laundry.booking.dto.BookingDtos.TimelineAvailabilityResponse;
 
@@ -40,6 +41,19 @@ public class CustomerBookingController {
                                                                @RequestParam String serviceCode,
                                                                @RequestParam LocalDate date) {
         return bookingService.timelineAvailability(branchId, serviceCode, date);
+    }
+
+    /**
+     * Smart machine search: every compatible machine's earliest valid start
+     * inside [{@code from}, {@code to}] (start times, minute precision). The
+     * window may cross midnight; it is capped at 48 hours.
+     */
+    @GetMapping("/machine-search")
+    public MachineSearchResponse machineSearch(@RequestParam UUID branchId,
+                                               @RequestParam String serviceCode,
+                                               @RequestParam Instant from,
+                                               @RequestParam Instant to) {
+        return bookingService.machineSearch(branchId, serviceCode, from, to);
     }
 
     @GetMapping("/recommendations")

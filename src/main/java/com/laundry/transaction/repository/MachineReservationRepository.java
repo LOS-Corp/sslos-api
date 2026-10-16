@@ -88,4 +88,28 @@ public interface MachineReservationRepository extends JpaRepository<MachineReser
         @Param("transactionIds") List<UUID> transactionIds,
         @Param("now") LocalDateTime now
     );
+
+    /**
+     * Close out CONFIRMED/ACTIVE reservations whose window ended before
+     * {@code cutoff} and whose machine was actually started (a CONSUMED
+     * start authorization exists) → COMPLETED.
+     */
+    @Modifying
+    @Query("UPDATE MachineReservation mr SET mr.status = 'COMPLETED', mr.updatedAt = :now " +
+           "WHERE mr.status IN ('CONFIRMED', 'ACTIVE') AND mr.endTime < :cutoff " +
+           "AND EXISTS (SELECT 1 FROM MachineStartAuthorization msa " +
+           "            WHERE msa.reservationId = mr.id AND msa.status = :consumed)")
+    int completeEnded(@Param("cutoff") LocalDateTime cutoff,
+                      @Param("now") LocalDateTime now,
+                      @Param("consumed") com.laundry.machine.entity.MachineStartAuthorizationStatus consumed);
+
+    /**
+     * Remaining CONFIRMED/ACTIVE reservations past their window were never
+     * used (no-show) → EXPIRED. Run after {@link #completeEnded}.
+     */
+    @Modifying
+    @Query("UPDATE MachineReservation mr SET mr.status = 'EXPIRED', mr.updatedAt = :now " +
+           "WHERE mr.status IN ('CONFIRMED', 'ACTIVE') AND mr.endTime < :cutoff")
+    int expireEnded(@Param("cutoff") LocalDateTime cutoff,
+                    @Param("now") LocalDateTime now);
 }

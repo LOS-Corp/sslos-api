@@ -79,7 +79,7 @@ class BookingResourceAvailabilityTest {
         ScheduledBookingService.ServiceConfig config = new ScheduledBookingService.ServiceConfig(
                 "WASH_DRY", "Wash and dry", "SELF_SERVICE", "", 35, 45,
                 5, 5, 10, 0, BigDecimal.ONE, UUID.randomUUID(), "UTC",
-                LocalTime.MIN, LocalTime.MAX, List.of("WASHER", "DRYER"));
+                LocalTime.MIN, LocalTime.MAX, List.of("WASHER", "DRYER"), 0);
 
         ScheduledBookingService.SlotPlan plan = ScheduledBookingService.buildPlan(config, START);
 
@@ -95,7 +95,7 @@ class BookingResourceAvailabilityTest {
         ScheduledBookingService.ServiceConfig config = new ScheduledBookingService.ServiceConfig(
                 "WASH_ONLY", "Wash", "SELF_SERVICE", "", 35, 0,
                 5, 5, 0, 0, BigDecimal.ONE, UUID.randomUUID(), "UTC",
-                LocalTime.MIN, LocalTime.MAX, List.of("WASHER"));
+                LocalTime.MIN, LocalTime.MAX, List.of("WASHER"), 0);
 
         ScheduledBookingService.SlotPlan plan = ScheduledBookingService.buildPlan(config, START);
 

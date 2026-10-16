@@ -70,6 +70,57 @@ public final class BookingDtos {
             List<SlotPhaseDto> timeline
     ) {}
 
+    /** One machine (plus companion resources for combo services) able to serve the search window. */
+    public record MachineSearchResourceDto(
+            UUID resourceId,
+            String resourceType,
+            String resourceCode,
+            String displayName,
+            String location,
+            BigDecimal capacityKg,
+            String currentStatus
+    ) {}
+
+    /**
+     * {@code reservedUntil} includes the turnover buffer; {@code availableStartRanges}
+     * lists every other start (minute precision) this exact resource set can take.
+     */
+    public record MachineSearchOptionDto(
+            String optionId,
+            List<MachineSearchResourceDto> resources,
+            Instant earliestStart,
+            Instant expectedCompletion,
+            Instant reservedUntil,
+            BigDecimal price,
+            String currency,
+            int totalMinutes,
+            List<AvailableStartRange> availableStartRanges,
+            List<SlotPhaseDto> timeline
+    ) {}
+
+    /** Reason codes: OFFLINE, ERROR, OUT_OF_SERVICE, NOT_COMMISSIONED, DISABLED, FULLY_BOOKED. */
+    public record UnavailableMachineDto(
+            UUID resourceId,
+            String resourceType,
+            String resourceCode,
+            String displayName,
+            BigDecimal capacityKg,
+            String reason
+    ) {}
+
+    public record MachineSearchResponse(
+            UUID branchId,
+            String serviceCode,
+            String timezone,
+            Instant windowStart,
+            Instant windowEnd,
+            Instant searchedFrom,
+            int durationMinutes,
+            int bufferMinutes,
+            List<MachineSearchOptionDto> options,
+            List<UnavailableMachineDto> unavailable
+    ) {}
+
     public record RecommendationsResponse(
             Instant requestedStartTime,
             Instant expectedEndTime,

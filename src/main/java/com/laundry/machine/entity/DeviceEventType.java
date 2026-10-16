@@ -65,5 +65,24 @@ public enum DeviceEventType {
     STATUS_CHANGED,
 
     /** New machine registered in the system (admin action). */
-    MACHINE_REGISTERED
+    MACHINE_REGISTERED,
+
+    // ── Provisioning / commissioning ────────────────────────────────────────
+    /** Admin scanned the device QR and opened a pairing session. */
+    DEVICE_PAIRING_STARTED,
+
+    /** Device authenticated and received its own EMQX identity. */
+    DEVICE_PROVISIONED,
+
+    /** Device reported a passing commissioning self-test. */
+    SELF_TEST_PASSED,
+
+    /** Device reported a failing commissioning self-test. */
+    SELF_TEST_FAILED,
+
+    /** Admin commissioned the machine; it is now bookable. */
+    MACHINE_COMMISSIONED,
+
+    /** Device identity revoked and its EMQX credentials removed. */
+    DEVICE_REVOKED
 }
