@@ -3,6 +3,7 @@ package com.laundry.booking.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.laundry.booking.dto.BookingDtos;
+import com.laundry.booking.dto.MachineProgramDtos.MachineProgramDto;
 import com.laundry.branch.entity.Branch;
 import com.laundry.branch.entity.BranchStatus;
 import com.laundry.branch.repository.BranchRepository;
@@ -59,6 +60,7 @@ public class ScheduledBookingService {
     private final TransactionRepository transactionRepository;
     private final BranchBookingReadinessService readinessService;
     private final com.laundry.machine.runtime.MachineRuntimeStateService runtimeStateService;
+    private final MachineProgramService programService;
 
     /** Assumed remaining time of a running cycle when the device has not reported one. */
     @org.springframework.beans.factory.annotation.Value("${app.booking.active-session-fallback-minutes:60}")
@@ -155,7 +157,7 @@ public class ScheduledBookingService {
         List<Branch> branches = branchRepository.findByStatusOrderByNameAsc(BranchStatus.ACTIVE);
         List<BranchServiceDto> result = new ArrayList<>();
         for (Branch branch : branches) {
-            ServiceConfig offered = offering(branch.getId(), serviceCode);
+            ServiceConfig offered = customerOffering(branch.getId(), serviceCode, null, null);
             if (offered == null || !readinessService.isCustomerEligible(branch.getId(), serviceCode)) {
                 continue;
             }
@@ -174,8 +176,9 @@ public class ScheduledBookingService {
     }
 
     @Transactional(readOnly = true)
-    public TimelineAvailabilityResponse timelineAvailability(UUID branchId, String serviceCode, LocalDate date) {
-        ServiceConfig config = offering(branchId, serviceCode);
+    public TimelineAvailabilityResponse timelineAvailability(UUID branchId, String serviceCode, LocalDate date,
+                                                             String washProgram, String dryProgram) {
+        ServiceConfig config = customerOffering(branchId, serviceCode, washProgram, dryProgram);
         if (config == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "This service is not configured for the selected branch");
@@ -261,12 +264,13 @@ public class ScheduledBookingService {
 
     @Transactional(readOnly = true)
     public RecommendationsResponse recommendations(UUID branchId, String serviceCode,
-                                                    Instant desiredStartTime, Instant preferredEndTime) {
+                                                    Instant desiredStartTime, Instant preferredEndTime,
+                                                    String washProgram, String dryProgram) {
         if (!isMinuteAligned(desiredStartTime)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Start time must be aligned to a whole minute");
         }
-        ServiceConfig config = offering(branchId, serviceCode);
+        ServiceConfig config = customerOffering(branchId, serviceCode, washProgram, dryProgram);
         if (config == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "This service is not configured for the selected branch");
@@ -309,8 +313,9 @@ public class ScheduledBookingService {
      * start and resources under row locks before reserving anything.
      */
     @Transactional(readOnly = true)
-    public MachineSearchResponse machineSearch(UUID branchId, String serviceCode, Instant from, Instant to) {
-        ServiceConfig config = offering(branchId, serviceCode);
+    public MachineSearchResponse machineSearch(UUID branchId, String serviceCode, Instant from, Instant to,
+                                               String washProgram, String dryProgram) {
+        ServiceConfig config = customerOffering(branchId, serviceCode, washProgram, dryProgram);
         if (config == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "This service is not configured for the selected branch");
@@ -533,11 +538,14 @@ public class ScheduledBookingService {
         }
 
         lockBranchConfiguration(request.branchId());
-        ServiceConfig config = offering(request.branchId(), request.serviceCode());
-        if (config == null) {
+        ServiceConfig offered = offering(request.branchId(), request.serviceCode());
+        if (offered == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND,
                     "This service is not configured for the selected branch");
         }
+        List<MachineProgramDto> programs = programService.resolve(
+                offered.requirements(), request.washProgram(), request.dryProgram());
+        ServiceConfig config = withPrograms(offered, programs);
         Branch branch = branchRepository.findById(request.branchId())
                 .filter(candidate -> candidate.getStatus() == BranchStatus.ACTIVE)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Branch not found"));
@@ -596,13 +604,13 @@ public class ScheduledBookingService {
         jdbc.update("""
                 INSERT INTO scheduled_bookings
                   (id, transaction_id, branch_id, service_code, status, start_time,
-                   expected_end_time, hold_expires_at, timeline, idempotency_key)
-                VALUES (?, ?, ?, ?, 'HELD', ?, ?, ?, CAST(? AS JSONB), ?)
+                   expected_end_time, hold_expires_at, timeline, idempotency_key, programs)
+                VALUES (?, ?, ?, ?, 'HELD', ?, ?, ?, CAST(? AS JSONB), ?, CAST(? AS JSONB))
                 """, bookingId, transaction.getId(), branch.getId(), config.code(),
                 OffsetDateTime.ofInstant(plan.start(), ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(plan.expectedEnd(), ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(holdExpiresAt, ZoneOffset.UTC),
-                timelineJson, request.idempotencyKey());
+                timelineJson, request.idempotencyKey(), programService.toJson(programs));
 
         for (int i = 0; i < resources.size(); i++) {
             Resource resource = resources.get(i);
@@ -639,7 +647,7 @@ public class ScheduledBookingService {
                        t.status transaction_status, sb.branch_id, b.name branch_name,
                        b.address branch_address, b.phone branch_phone, sb.start_time,
                        sb.expected_end_time, sb.hold_expires_at, t.total_amount,
-                       sb.timeline::text timeline,
+                       sb.timeline::text timeline, sb.programs::text programs,
                        p.payment_id, p.status payment_status, p.checkout_url payment_url, p.qr_code,
                        allocated.booking_resources
                 FROM scheduled_bookings sb
@@ -681,7 +689,7 @@ public class ScheduledBookingService {
                        t.status transaction_status, sb.branch_id, b.name branch_name,
                        b.address branch_address, b.phone branch_phone, sb.start_time,
                        sb.expected_end_time, sb.hold_expires_at, t.total_amount,
-                       sb.timeline::text timeline,
+                       sb.timeline::text timeline, sb.programs::text programs,
                        p.payment_id, p.status payment_status, p.checkout_url payment_url, p.qr_code,
                        allocated.booking_resources
                 FROM scheduled_bookings sb
@@ -1142,6 +1150,7 @@ public class ScheduledBookingService {
                 rs.getString("branch_name"), rs.getString("branch_address"),
                 rs.getString("branch_phone"), start.value(), end.value(), holdExpires.value(),
                 rs.getBigDecimal("total_amount"), "VND", timeline, resources,
+                programService.fromJson(rs.getString("programs")),
                 rs.getObject("payment_id", UUID.class), rs.getString("payment_status"),
                 rs.getString("payment_url"), rs.getString("qr_code"));
     }
@@ -1188,6 +1197,38 @@ public class ScheduledBookingService {
             return null;
         }
         return configured.getFirst();
+    }
+
+    /** The branch offering with the chosen (or default) wash / dry programs applied. */
+    private ServiceConfig customerOffering(UUID branchId, String serviceCode, String washProgram, String dryProgram) {
+        ServiceConfig config = offering(branchId, serviceCode);
+        if (config == null) {
+            return null;
+        }
+        return withPrograms(config, programService.resolve(config.requirements(), washProgram, dryProgram));
+    }
+
+    /**
+     * A machine program replaces the processing time of its machine (first
+     * requirement = primary, second = secondary) and adds its surcharge.
+     */
+    static ServiceConfig withPrograms(ServiceConfig config, List<MachineProgramDto> programs) {
+        if (programs.isEmpty()) {
+            return config;
+        }
+        int primary = config.processingMinutes();
+        int secondary = config.secondaryProcessingMinutes();
+        BigDecimal price = config.price();
+        for (MachineProgramDto program : programs) {
+            int index = config.requirements().indexOf(program.machineType());
+            if (index == 0) primary = program.totalMinutes();
+            else if (index == 1) secondary = program.totalMinutes();
+            if (price != null && program.surcharge() != null) price = price.add(program.surcharge());
+        }
+        return new ServiceConfig(config.code(), config.name(), config.mode(), config.description(),
+                primary, secondary, config.checkInMinutes(), config.checkoutMinutes(), config.transferMinutes(),
+                config.pickupDeadlineHours(), price, config.branchId(), config.timezone(), config.opensAt(),
+                config.closesAt(), config.requirements(), config.bufferMinutes());
     }
 
     private List<String> requirementsFor(String serviceCode) {

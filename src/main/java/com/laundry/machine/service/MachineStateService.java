@@ -93,6 +93,8 @@ public class MachineStateService {
             case "IDLE"           -> MachineStatus.AVAILABLE;
             // Firmware GA25 cycle phases: CHECKING → WASHING → SPINNING
             case "WASH", "WASHING", "CHECKING", "SPINNING", "SPIN" -> MachineStatus.RUNNING;
+            // Firmware DRYER cycle phases: CHECKING → DRYING → COOLING
+            case "DRYING", "COOLING" -> MachineStatus.RUNNING;
             case "DONE", "FINISHED" -> MachineStatus.COMPLETED;
             case "FAULT", "ERR"   -> MachineStatus.ERROR;
             default -> {

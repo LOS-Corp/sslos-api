@@ -72,6 +72,7 @@ public class MachineStartAuthorizationService {
     private final MqttPublisher mqttPublisher;
     private final PlatformTransactionManager transactionManager;
     private final com.laundry.booking.service.BookingLifecycleService bookingLifecycleService;
+    private final com.laundry.booking.service.MachineProgramService programService;
 
     /**
      * Explicit constructor with {@code @Lazy} on {@link MqttPublisher} to break
@@ -85,7 +86,8 @@ public class MachineStartAuthorizationService {
             MachineStartAuthorizationRepository authorizationRepository,
             @Lazy MqttPublisher mqttPublisher,
             PlatformTransactionManager transactionManager,
-            com.laundry.booking.service.BookingLifecycleService bookingLifecycleService) {
+            com.laundry.booking.service.BookingLifecycleService bookingLifecycleService,
+            com.laundry.booking.service.MachineProgramService programService) {
         this.machineRepository = machineRepository;
         this.reservationRepository = reservationRepository;
         this.paymentRepository = paymentRepository;
@@ -93,10 +95,14 @@ public class MachineStartAuthorizationService {
         this.mqttPublisher = mqttPublisher;
         this.transactionManager = transactionManager;
         this.bookingLifecycleService = bookingLifecycleService;
+        this.programService = programService;
     }
 
     @Value("${app.machine.start-authorization.ttl-seconds:120}")
     private int authorizationTtlSeconds;
+
+    /** START pressed → STARTED normally takes ~1 s; the device gives up after 5 s. */
+    private static final int START_PENDING_MAX_SECONDS = 15;
 
     /**
      * Pre-configured REQUIRES_NEW template — used by {@link #revokeAndCommitInNewTx}
@@ -442,6 +448,10 @@ public class MachineStartAuthorizationService {
         }
 
         auth.setStatus(MachineStartAuthorizationStatus.START_PENDING);
+        // The device drops an approval after 5 s; if STARTED never comes, let the sweep
+        // close the row soon instead of leaving it START_PENDING for the whole TTL.
+        OffsetDateTime startDeadline = OffsetDateTime.now().plusSeconds(START_PENDING_MAX_SECONDS);
+        if (auth.getExpiresAt().isAfter(startDeadline)) auth.setExpiresAt(startDeadline);
         UUID runId = UUID.randomUUID();
         auth.setRunId(runId);
         authorizationRepository.save(auth);
@@ -702,6 +712,12 @@ public class MachineStartAuthorizationService {
         payload.put("machineId", machine.getMachineCode());
         payload.put("expiresInSeconds", authorizationTtlSeconds);
         payload.put("issuedAt", OffsetDateTime.now().toString());
+        // The program the booking paid for (test runs: the default). Without
+        // one the firmware runs its built-in default program.
+        if (machine.getType() != null) {
+            programService.devicePayload(auth.getTransactionId(), machine.getType().name())
+                    .ifPresent(program -> payload.put("program", program));
+        }
         String topic = mqttPublisher.buildWasherCommandTopic(machine.getBranchId(), machine.getMachineCode());
         try {
             mqttPublisher.publish(topic, new com.fasterxml.jackson.databind.ObjectMapper()

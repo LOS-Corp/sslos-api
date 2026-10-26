@@ -16,7 +16,22 @@ import java.util.UUID;
 @Component
 public class MqttTopicBuilder {
 
+<<<<<<< Updated upstream
     /** {@code laundry/washer/{branchId}/{machineId}} — the prefix every device channel hangs off. */
+=======
+    public static final String ROOT = "laundry/washer";
+
+    /** Every branch, machine and channel. */
+    public static final String BACKEND_SUBSCRIPTION = ROOT + "/+/+/#";
+
+    /** Backend-to-device channel. */
+    public static final String COMMAND = "command";
+
+    /** Device debug log (plain text Serial lines); for people with an MQTT client, not processed here. */
+    public static final String LOG = "log";
+
+    /** {@code laundry/washer/{branchId}/{machineId}} — the prefix of every device channel. */
+>>>>>>> Stashed changes
     public String baseTopic(UUID branchId, String machineId) {
         return MqttTopics.ROOT + "/" + branchId + "/" + machineId.trim();
     }

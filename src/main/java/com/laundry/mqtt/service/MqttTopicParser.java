@@ -58,7 +58,33 @@ public class MqttTopicParser {
             return Optional.empty();
         }
 
+<<<<<<< Updated upstream
         UUID branchId;
+=======
+        String machineId = parts[1].trim();
+        if (machineId.isEmpty()) {
+            log.warn("Ignoring MQTT topic '{}': machineId is empty", topic);
+            return Optional.empty();
+        }
+
+        String channelPath = parts[2];
+        if (MqttTopicBuilder.COMMAND.equals(channelPath) || MqttTopicBuilder.LOG.equals(channelPath)) {
+            // The wildcard subscription also delivers the commands this backend publishes
+            // and the devices' debug log; neither is processed here.
+            return Optional.empty();
+        }
+
+        Optional<MqttChannel> channel = MqttChannel.fromPath(channelPath);
+        if (channel.isEmpty()) {
+            log.warn("Ignoring MQTT topic '{}': unknown channel '{}'", topic, channelPath);
+            return Optional.empty();
+        }
+
+        return Optional.of(new ParsedMqttTopic(branchId, machineId, channel.get()));
+    }
+
+    private static UUID parseUuid(String value) {
+>>>>>>> Stashed changes
         try {
             branchId = UUID.fromString(parts[2].trim());
         } catch (IllegalArgumentException e) {

@@ -39,8 +39,10 @@ public class CustomerBookingController {
     @GetMapping("/timeline-availability")
     public TimelineAvailabilityResponse timelineAvailability(@RequestParam UUID branchId,
                                                                @RequestParam String serviceCode,
-                                                               @RequestParam LocalDate date) {
-        return bookingService.timelineAvailability(branchId, serviceCode, date);
+                                                               @RequestParam LocalDate date,
+                                                               @RequestParam(required = false) String washProgram,
+                                                               @RequestParam(required = false) String dryProgram) {
+        return bookingService.timelineAvailability(branchId, serviceCode, date, washProgram, dryProgram);
     }
 
     /**
@@ -52,16 +54,21 @@ public class CustomerBookingController {
     public MachineSearchResponse machineSearch(@RequestParam UUID branchId,
                                                @RequestParam String serviceCode,
                                                @RequestParam Instant from,
-                                               @RequestParam Instant to) {
-        return bookingService.machineSearch(branchId, serviceCode, from, to);
+                                               @RequestParam Instant to,
+                                               @RequestParam(required = false) String washProgram,
+                                               @RequestParam(required = false) String dryProgram) {
+        return bookingService.machineSearch(branchId, serviceCode, from, to, washProgram, dryProgram);
     }
 
     @GetMapping("/recommendations")
     public RecommendationsResponse recommendations(@RequestParam UUID branchId,
                                                     @RequestParam String serviceCode,
                                                     @RequestParam Instant desiredStartTime,
-                                                    @RequestParam(required = false) Instant preferredEndTime) {
-        return bookingService.recommendations(branchId, serviceCode, desiredStartTime, preferredEndTime);
+                                                    @RequestParam(required = false) Instant preferredEndTime,
+                                                    @RequestParam(required = false) String washProgram,
+                                                    @RequestParam(required = false) String dryProgram) {
+        return bookingService.recommendations(branchId, serviceCode, desiredStartTime, preferredEndTime,
+                washProgram, dryProgram);
     }
 
     @PostMapping("/holds")

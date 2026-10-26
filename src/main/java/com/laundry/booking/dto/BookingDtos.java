@@ -190,7 +190,10 @@ public final class BookingDtos {
             @NotBlank String serviceCode,
             @NotNull Instant startTime,
             @NotNull List<UUID> resourceIds,
-            @NotBlank String idempotencyKey
+            @NotBlank String idempotencyKey,
+            /* Program codes; null or blank picks the machine type's default. */
+            String washProgram,
+            String dryProgram
     ) {}
 
     public record BookingDto(
@@ -212,6 +215,7 @@ public final class BookingDtos {
             String currency,
             List<SlotPhaseDto> timeline,
             List<RecommendedResourceDto> resources,
+            List<MachineProgramDtos.MachineProgramDto> programs,
             UUID paymentId,
             String paymentStatus,
             String paymentUrl,

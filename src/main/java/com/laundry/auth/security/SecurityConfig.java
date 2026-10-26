@@ -97,6 +97,8 @@ public class SecurityConfig {
 
                 // Admin branch CRUD — admin/owner only
                 .requestMatchers("/api/admin/branches", "/api/admin/branches/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_OWNER")
+                // Operator accounts and their roles: platform admin only.
+                .requestMatchers("/api/admin/users", "/api/admin/users/**").hasAuthority("ROLE_ADMIN")
                 .requestMatchers("/api/admin/booking-config/**").hasAnyAuthority("ROLE_ADMIN", "ROLE_OWNER")
 
                 // Public service discovery; booking actions are customer-authenticated.

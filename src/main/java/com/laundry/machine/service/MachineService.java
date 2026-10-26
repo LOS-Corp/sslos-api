@@ -160,6 +160,8 @@ public class MachineService {
         }
 
         String errMsg = snapshot.getErrorMessage();
+        // Back to AVAILABLE (RESET / clean STOP) means the old fault is gone, even from firmware that omits "error".
+        if (errMsg == null && machine.getStatus() == MachineStatus.AVAILABLE) errMsg = "";
         if (errMsg != null && !errMsg.equals(machine.getErrorCode())) {
             machine.setErrorCode(errMsg);
             persistentStateChanged = true;

@@ -29,7 +29,7 @@ public class EmqxAdminClient {
 
     /** Device-side channels; must match MqttTopicBuilder / MqttTopicParser. */
     private static final List<String> DEVICE_PUBLISH_CHANNELS =
-            List.of("status", "heartbeat", "telemetry", "event", "auth", "command/ack");
+            List.of("status", "heartbeat", "telemetry", "event", "auth", "command/ack", "log");
 
     private final EmqxAdminProperties properties;
     private final RestClient restClient;
