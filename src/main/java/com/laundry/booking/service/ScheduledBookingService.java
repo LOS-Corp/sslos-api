@@ -124,7 +124,9 @@ public class ScheduledBookingService {
 
     @Transactional(readOnly = true)
     public List<ServiceDto> listServices() {
-        return jdbc.query("""
+        // Map rows first, resolve requirements afterwards: a nested query inside the
+        // RowMapper runs while the outer ResultSet is still open on the same connection.
+        List<ServiceDto> services = jdbc.query("""
                 SELECT code, name, service_mode, description, processing_minutes,
                        secondary_processing_minutes, check_in_minutes, transfer_minutes,
                        checkout_minutes, pickup_deadline_hours,
@@ -147,8 +149,16 @@ public class ScheduledBookingService {
                     rs.getInt("checkout_minutes"),
                     rs.getInt("pickup_deadline_hours"),
                     rs.getBigDecimal("starting_price"),
-                    requirementsFor(code));
+                    List.<String>of());
         });
+        return services.stream()
+                .map(s -> new ServiceDto(
+                        s.code(), s.name(), s.mode(), s.description(),
+                        s.processingMinutes(), s.secondaryProcessingMinutes(),
+                        s.checkInMinutes(), s.transferMinutes(), s.checkoutMinutes(),
+                        s.pickupDeadlineHours(), s.startingPrice(),
+                        requirementsFor(s.code())))
+                .toList();
     }
 
     @Transactional(readOnly = true)
@@ -1258,7 +1268,7 @@ public class ScheduledBookingService {
         Integer count = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM scheduled_bookings
                 WHERE branch_id = ? AND start_time > NOW()
-                  AND (status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING')
+                  AND (status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING', 'READY_FOR_PICKUP')
                        OR (status = 'HELD' AND hold_expires_at > NOW()))
                 """, Integer.class, branchId);
         return count != null && count > 0;
@@ -1268,7 +1278,7 @@ public class ScheduledBookingService {
         Integer count = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM scheduled_bookings
                 WHERE branch_id = ? AND service_code = ? AND start_time > NOW()
-                  AND (status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING')
+                  AND (status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING', 'READY_FOR_PICKUP')
                        OR (status = 'HELD' AND hold_expires_at > NOW()))
                 """, Integer.class, branchId, serviceCode);
         return count != null && count > 0;
@@ -1280,7 +1290,7 @@ public class ScheduledBookingService {
                 FROM booking_resource_allocations a
                 JOIN scheduled_bookings b ON b.id = a.booking_id
                 WHERE a.resource_id = ? AND b.start_time > NOW()
-                  AND (b.status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING')
+                  AND (b.status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING', 'READY_FOR_PICKUP')
                        OR (b.status = 'HELD' AND b.hold_expires_at > NOW()))
                 """, Integer.class, resourceId);
         return count != null && count > 0;
@@ -1297,7 +1307,7 @@ public class ScheduledBookingService {
         List<LocalDateTime[]> reservations = jdbc.query("""
                 SELECT start_time, expected_end_time FROM scheduled_bookings
                 WHERE branch_id = ? AND start_time > NOW()
-                  AND (status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING')
+                  AND (status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING', 'READY_FOR_PICKUP')
                        OR (status = 'HELD' AND hold_expires_at > NOW()))
                 """, (rs, row) -> new LocalDateTime[] {
                 rs.getTimestamp("start_time").toInstant().atZone(zone).toLocalDateTime(),
@@ -1395,6 +1405,8 @@ public class ScheduledBookingService {
         Set<String> requiredTypes = Set.copyOf(config.requirements());
         for (Machine machine : machineRepository.findByBranchId(branchId)) {
             String type = machine.getType().name();
+            // A locker cabinet is not booked itself; its compartments are (filtered in resourcesFor).
+            if (machine.getType() == MachineType.LOCKER) continue;
             if (requiredTypes.contains(type) && !isOperationallyUsable(machine)) {
                 String code = machine.getMachineCode();
                 result.add(new AvailabilityInterval(dayStart, dayEnd, "UNAVAILABLE",
@@ -1696,13 +1708,23 @@ public class ScheduledBookingService {
                             machine.getLocationDescription(), machine.getStatus().name()))
                     .toList();
         }
+        // A compartment fitted to a smart locker is only bookable while its cabinet
+        // is usable (online, commissioned); unlinked compartments are managed by hand.
+        Set<UUID> usableCabinets = machineRepository.findByBranchId(branchId).stream()
+                .filter(machine -> machine.getType() == MachineType.LOCKER && isOperationallyUsable(machine))
+                .map(Machine::getId)
+                .collect(java.util.stream.Collectors.toSet());
         return jdbc.query("""
-                SELECT id, resource_code, display_name FROM branch_service_resources
+                SELECT id, resource_code, display_name, locker_machine_id FROM branch_service_resources
                 WHERE branch_id = ? AND resource_type = ? AND enabled = TRUE
                 ORDER BY resource_code
-                """, (rs, row) -> new Resource(type, rs.getObject("id", UUID.class),
-                rs.getString("resource_code"), rs.getString("display_name"), null, "ENABLED"),
-                branchId, type);
+                """, (rs, row) -> {
+                    UUID cabinet = rs.getObject("locker_machine_id", UUID.class);
+                    return cabinet == null || usableCabinets.contains(cabinet)
+                            ? new Resource(type, rs.getObject("id", UUID.class), rs.getString("resource_code"),
+                                    rs.getString("display_name"), null, "ENABLED")
+                            : null;
+                }, branchId, type).stream().filter(java.util.Objects::nonNull).toList();
     }
 
     private boolean resourceBusy(Resource resource,

@@ -4,167 +4,128 @@ import com.laundry.mqtt.config.MqttProperties;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.paho.client.mqttv3.*;
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
+import org.eclipse.paho.client.mqttv3.MqttCallbackExtended;
+import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
+import org.eclipse.paho.client.mqttv3.MqttException;
+import org.eclipse.paho.client.mqttv3.MqttMessage;
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
-import java.util.concurrent.atomic.AtomicBoolean;
-
 /**
- * Manages the lifecycle of the MQTT connection to EMQX Cloud.
- *
- * <p>Responsibilities:
- * <ol>
- *   <li>Connect on startup (called by {@link MqttLifecycleBean}).
- *   <li>Reconnect automatically if the connection is lost.
- *   <li>Re-subscribe to all topics after reconnect.
- *   <li>Disconnect cleanly on shutdown.
- * </ol>
- *
- * <p>The MQTT callback is kept lightweight: it delegates message routing to
- * {@link MqttMessageRouter} which dispatches to the appropriate handler on a
- * separate thread pool — never blocking the Paho network thread.
+ * Owns the single backend connection to the broker: connects once the application
+ * is ready, (re)subscribes after every connect, and disconnects on shutdown.
+ * Lost connections are recovered by Paho's automatic reconnect.
  */
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class MqttConnectionManager implements MqttCallbackExtended {
 
-    private final MqttProperties mqttProperties;
-    private final MqttMessageRouter messageRouter;
-    private final MqttSubscriber mqttSubscriber;
+    private static final int SUBSCRIBE_QOS = 1;
 
-    private MqttClient mqttClient;
-    private final AtomicBoolean connecting = new AtomicBoolean(false);
+    private final MqttProperties properties;
+    private final MqttMessageRouter router;
 
-    // ── Connection lifecycle ──────────────────────────────────────────────────
+    private volatile MqttClient client;
 
-    /**
-     * Connect to EMQX Cloud. Called on application startup.
-     * Thread-safe: will not attempt duplicate connections.
-     */
+    /** Runs after the whole context is ready, so every handler exists before the first message. */
+    @EventListener(ApplicationReadyEvent.class)
     public synchronized void connect() {
-        if (mqttClient != null && mqttClient.isConnected()) {
-            log.debug("MQTT already connected — skipping connect()");
+        if (isConnected()) {
             return;
         }
-        if (connecting.getAndSet(true)) {
-            log.debug("MQTT connection already in progress");
-            return;
-        }
-
-        String brokerUri = mqttProperties.buildBrokerUri();
-        log.info("Connecting to MQTT broker: {} (clientId={})", brokerUri, mqttProperties.getClientId());
-
+        String brokerUri = properties.brokerUri();
         try {
-            mqttClient = new MqttClient(brokerUri, mqttProperties.getClientId(), new MemoryPersistence());
-            mqttClient.setCallback(this);
-
-            MqttConnectOptions options = buildConnectOptions();
-            mqttClient.connect(options);
-
-            log.info("✅ Connected to EMQX broker at {}", brokerUri);
-            mqttSubscriber.subscribeAll(mqttClient);
-
+            if (client == null) {
+                client = new MqttClient(brokerUri, properties.getClientId(), new MemoryPersistence());
+                client.setCallback(this);
+            }
+            log.info("Connecting to MQTT broker {} as {}", brokerUri, properties.getClientId());
+            client.connect(connectOptions());
         } catch (MqttException e) {
-            log.error("❌ Failed to connect to MQTT broker {}: {}", brokerUri, e.getMessage(), e);
-        } finally {
-            connecting.set(false);
+            log.error("Failed to connect to MQTT broker {}", brokerUri, e);
         }
     }
 
-    private MqttConnectOptions buildConnectOptions() {
-        MqttConnectOptions options = new MqttConnectOptions();
-
-        String username = mqttProperties.getUsername();
-        String password = mqttProperties.getPassword();
-
-        if (username != null && !username.isBlank()) {
-            options.setUserName(username);
-        }
-        if (password != null && !password.isBlank()) {
-            options.setPassword(password.toCharArray());
-        }
-
-        options.setCleanSession(mqttProperties.isCleanSession());
-        options.setConnectionTimeout(mqttProperties.getConnectionTimeoutSeconds());
-        options.setKeepAliveInterval(mqttProperties.getKeepAliveIntervalSeconds());
-        options.setAutomaticReconnect(true);  // Paho built-in reconnect (with backoff)
-
-        // For TLS (ssl://), Paho uses the JVM trust store by default.
-        // EMQX Cloud uses a CA-signed certificate, which Java trusts out of the box.
-        // For self-signed certs, configure a custom SSLSocketFactory here.
-
-        return options;
+    public boolean isConnected() {
+        return client != null && client.isConnected();
     }
 
-    // ── MqttCallback implementation ───────────────────────────────────────────
+    /** @throws IllegalStateException if the broker is not connected */
+    public MqttClient client() {
+        if (!isConnected()) {
+            throw new IllegalStateException("MQTT broker is not connected");
+        }
+        return client;
+    }
 
-    /**
-     * Called when the connection is lost. Paho will attempt automatic reconnect
-     * because setAutomaticReconnect(true) is set. After reconnect, connectComplete()
-     * is called and we re-subscribe.
-     */
+    @PreDestroy
+    public synchronized void disconnect() {
+        if (client == null) {
+            return;
+        }
+        try {
+            if (client.isConnected()) {
+                client.disconnect();
+            }
+            client.close();
+            log.info("MQTT client disconnected");
+        } catch (MqttException e) {
+            log.warn("Error while disconnecting MQTT client: {}", e.getMessage());
+        }
+    }
+
+    // Paho callbacks
+
+    /** Called after the first connect and every reconnect; a clean session loses its subscriptions. */
+    @Override
+    public void connectComplete(boolean reconnect, String serverUri) {
+        log.info("MQTT {} to {}", reconnect ? "reconnected" : "connected", serverUri);
+        try {
+            client.subscribe(MqttTopicBuilder.BACKEND_SUBSCRIPTION, SUBSCRIBE_QOS);
+            log.info("Subscribed to {}", MqttTopicBuilder.BACKEND_SUBSCRIPTION);
+        } catch (MqttException e) {
+            log.error("Failed to subscribe to {}", MqttTopicBuilder.BACKEND_SUBSCRIPTION, e);
+        }
+    }
+
     @Override
     public void connectionLost(Throwable cause) {
-        log.warn("⚠️ MQTT connection lost: {}. Paho automatic reconnect is active.", cause.getMessage());
+        log.warn("MQTT connection lost: {}. Automatic reconnect is active.", cause.getMessage());
     }
 
-    /**
-     * Called when Paho successfully (re)connects. We must re-subscribe here
-     * because a clean session loses all subscriptions on reconnect.
-     */
-    @Override
-    public void connectComplete(boolean reconnect, String serverURI) {
-        if (reconnect) {
-            log.info("✅ MQTT reconnected to {}. Re-subscribing to topics...", serverURI);
-            mqttSubscriber.subscribeAll(mqttClient);
-        }
-    }
-
-    /**
-     * Called by Paho on the network thread when a message arrives.
-     * MUST be fast — delegate immediately to the async router.
-     */
+    /** Runs on the Paho network thread: hand off immediately, never block here. */
     @Override
     public void messageArrived(String topic, MqttMessage message) {
-        // Paho network thread — do NOT block here
-        messageRouter.route(topic, message);
+        router.route(topic, message);
     }
 
     @Override
     public void deliveryComplete(IMqttDeliveryToken token) {
-        // Called when a QoS 1/2 publish is confirmed; not used here
+        // Delivery confirmations are not tracked.
     }
 
-    // ── Publisher access ──────────────────────────────────────────────────────
-
-    /**
-     * Returns the active MQTT client for publishing.
-     * @throws IllegalStateException if not connected
-     */
-    public MqttClient getClient() {
-        if (mqttClient == null || !mqttClient.isConnected()) {
-            throw new IllegalStateException("MQTT client is not connected");
+    private MqttConnectOptions connectOptions() {
+        MqttConnectOptions options = new MqttConnectOptions();
+        if (hasText(properties.getUsername())) {
+            options.setUserName(properties.getUsername());
         }
-        return mqttClient;
-    }
-
-    public boolean isConnected() {
-        return mqttClient != null && mqttClient.isConnected();
-    }
-
-    @PreDestroy
-    public void disconnect() {
-        if (mqttClient != null && mqttClient.isConnected()) {
-            try {
-                log.info("Disconnecting MQTT client...");
-                mqttClient.disconnect();
-                mqttClient.close();
-                log.info("MQTT client disconnected cleanly.");
-            } catch (MqttException e) {
-                log.warn("Error during MQTT disconnect: {}", e.getMessage());
-            }
+        if (hasText(properties.getPassword())) {
+            options.setPassword(properties.getPassword().toCharArray());
         }
+        options.setCleanSession(properties.isCleanSession());
+        options.setConnectionTimeout(properties.getConnectionTimeoutSeconds());
+        options.setKeepAliveInterval(properties.getKeepAliveIntervalSeconds());
+        options.setAutomaticReconnect(true);
+        // TLS uses the JVM trust store, which already trusts EMQX Cloud's CA-signed certificate.
+        return options;
+    }
+
+    private static boolean hasText(String value) {
+        return value != null && !value.isBlank();
     }
 }

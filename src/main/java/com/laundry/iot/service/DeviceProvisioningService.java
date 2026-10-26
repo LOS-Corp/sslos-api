@@ -261,7 +261,7 @@ public class DeviceProvisioningService {
 
         log.info("[IOT] Device {} activated for {}/{}", deviceId, machine.getBranchId(), machine.getMachineCode());
         return new ActivateResponse(mqttHost(), mqttPort(), username, password, deviceId,
-                machine.getBranchId(), machine.getMachineCode(), topicBase);
+                machine.getBranchId(), machine.getMachineCode(), topicBase, machine.getType().name());
     }
 
     /** MANUAL mode: the credential the admin must create in the EMQX console. */

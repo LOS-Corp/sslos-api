@@ -101,7 +101,7 @@ public class MachineRuntimeStateService {
      * (the device wouldn't be publishing otherwise).
      *
      * @param machine     the resolved {@link Machine} (null = unknown device, skipped)
-     * @param snapshot    the parsed payload (see {@link com.laundry.mqtt.handler.WasherPayloads.TelemetryPayload})
+     * @param snapshot    the parsed payload (see {@link com.laundry.mqtt.handler.WasherPayloads.DeviceSnapshot})
      */
     public void applyTelemetry(Machine machine, MachineRuntimeState snapshot) {
         if (machine == null || snapshot == null) return;

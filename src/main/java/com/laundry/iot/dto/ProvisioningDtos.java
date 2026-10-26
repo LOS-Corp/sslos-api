@@ -60,8 +60,10 @@ public final class ProvisioningDtos {
             @NotBlank String proof,
             String firmwareVersion) {}
 
+    /** {@code machineType} lets a board refuse a record of the wrong kind (a locker paired to a dryer). */
     public record ActivateResponse(String mqttHost, int mqttPort, String username, String password,
-                                   String clientId, UUID branchId, String machineCode, String topicBase) {}
+                                   String clientId, UUID branchId, String machineCode, String topicBase,
+                                   String machineType) {}
 
     /** MANUAL mode only: what the admin must enter in the EMQX console. */
     public record MqttCredentialResponse(String username, String password, String clientId,

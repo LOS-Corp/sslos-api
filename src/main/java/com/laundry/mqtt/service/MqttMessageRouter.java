@@ -1,5 +1,6 @@
 package com.laundry.mqtt.service;
 
+import com.laundry.mqtt.config.MqttConfig;
 import com.laundry.mqtt.handler.AuthChannelHandler;
 import com.laundry.mqtt.handler.WasherMessageHandler;
 import lombok.RequiredArgsConstructor;
@@ -9,15 +10,11 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Routes incoming MQTT messages to the appropriate domain handler.
- *
- * <p>Single entry point from the Paho callback thread.
- * Dispatches asynchronously using {@code @Async("mqttTaskExecutor")}.
- * Uses {@link MqttTopicParser} to parse and validate branch-scoped topics.
+ * Dispatches incoming device messages to their handler on the MQTT worker pool,
+ * off the Paho network thread.
  */
 @Service
 @RequiredArgsConstructor
@@ -25,28 +22,21 @@ import java.util.UUID;
 public class MqttMessageRouter {
 
     private final MqttTopicParser topicParser;
-    private final WasherMessageHandler washerMessageHandler;
-    private final AuthChannelHandler authChannelHandler;
+    private final WasherMessageHandler washerHandler;
+    private final AuthChannelHandler authHandler;
 
-    /**
-     * Route an incoming MQTT message.
-     * Called from Paho callback thread — delegates async processing immediately.
-     */
-    @Async("mqttTaskExecutor")
+    @Async(MqttConfig.MQTT_EXECUTOR)
     public void route(String topic, MqttMessage message) {
         String payload = new String(message.getPayload(), StandardCharsets.UTF_8);
+        topicParser.parse(topic).ifPresent(parsed -> dispatch(parsed, payload));
+    }
 
-        Optional<ParsedMqttTopic> parsedOpt = topicParser.parse(topic);
-        if (parsedOpt.isEmpty()) {
-            return; // Topic parser already logged WARN
-        }
+    private void dispatch(ParsedMqttTopic topic, String payload) {
+        UUID branchId = topic.branchId();
+        String machineId = topic.machineId();
+        MqttChannel channel = topic.channel();
 
-        ParsedMqttTopic parsed = parsedOpt.get();
-        UUID branchId = parsed.branchId();
-        String machineId = parsed.machineId();
-        MqttChannel channel = parsed.channel();
-
-        if (channel == MqttChannel.TELEMETRY) {
+        if (channel == MqttChannel.TELEMETRY || channel == MqttChannel.HEARTBEAT) {
             log.debug("MQTT RX branch={} machine={} channel={}", branchId, machineId, channel);
         } else {
             log.info("MQTT RX branch={} machine={} channel={}", branchId, machineId, channel);
@@ -54,16 +44,16 @@ public class MqttMessageRouter {
 
         try {
             switch (channel) {
-                case STATUS -> washerMessageHandler.handleStatus(branchId, machineId, payload);
-                case TELEMETRY -> washerMessageHandler.handleTelemetry(branchId, machineId, payload);
-                case EVENT -> washerMessageHandler.handleEvent(branchId, machineId, payload);
-                case COMMAND -> washerMessageHandler.handleCommandAck(branchId, machineId, payload);
-                case HEARTBEAT -> washerMessageHandler.handleHeartbeat(branchId, machineId, payload);
-                case AUTH -> authChannelHandler.handle(branchId, machineId, payload);
+                case STATUS -> washerHandler.handleStatus(branchId, machineId, payload);
+                case TELEMETRY -> washerHandler.handleTelemetry(branchId, machineId, payload);
+                case HEARTBEAT -> washerHandler.handleHeartbeat(branchId, machineId, payload);
+                case EVENT -> washerHandler.handleEvent(branchId, machineId, payload);
+                case COMMAND_ACK -> washerHandler.handleCommandAck(branchId, machineId, payload);
+                case AUTH -> authHandler.handle(branchId, machineId, payload);
             }
-        } catch (Exception e) {
-            log.error("Unhandled error routing MQTT message for branch={} machine={} channel={}: {}",
-                    branchId, machineId, channel, e.getMessage(), e);
+        } catch (RuntimeException e) {
+            log.error("Failed to handle MQTT message branch={} machine={} channel={}",
+                    branchId, machineId, channel, e);
         }
     }
 }

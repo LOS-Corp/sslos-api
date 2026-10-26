@@ -292,6 +292,26 @@ class MachineStartAuthorizationServiceTest {
                 .isEqualTo(MachineStartAuthorizationStatus.REVOKED);
     }
 
+    @Test
+    @DisplayName("Simulated START press only works on a GRANTED test run, never on a customer authorization")
+    void pressTestStart_onlyForGrantedTestRun() {
+        seedReservationAndPayment(true, false);
+        var customer = service.checkIn("WM001", customerId);
+        service.handleAuthAck(machine, customer.authorizationId(), "cmd", true, "ACCEPTED", null, "boot-A");
+        assertThatThrownBy(() -> service.pressTestStart("WM001"))
+                .isInstanceOf(CheckInRejectedException.class);
+
+        authorizationRepository.deleteAll();
+        var test = service.adminTestStart("WM001", UUID.randomUUID());
+        assertThatThrownBy(() -> service.pressTestStart("WM001"))   // still PENDING: device has not acked
+                .isInstanceOf(CheckInRejectedException.class);
+
+        service.handleAuthAck(machine, test.authorizationId(), "cmd", true, "ACCEPTED", null, "boot-A");
+        org.mockito.Mockito.clearInvocations(mqttPublisher);
+        service.pressTestStart("WM001");
+        verifyPublished(mqttPublisher, 1);
+    }
+
     // ── 9. Double QR check-in ───────────────────────────────────────────────
 
     @Test

@@ -37,7 +37,7 @@ import java.util.concurrent.CompletableFuture;
 public class BookingLifecycleService {
 
     private static final String OPEN_BOOKING_STATUSES =
-            "('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING')";
+            "('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING', 'READY_FOR_PICKUP')";
 
     private final JdbcTemplate jdbc;
     private final EmailService emailService;
@@ -59,6 +59,14 @@ public class BookingLifecycleService {
     /** The machine finished its cycle: close its active reservation and advance the booking. */
     public void onMachineCycleFinished(UUID machineId) {
         afterCommit("cycle finished " + machineId, () -> markFinished(machineId));
+    }
+
+    /**
+     * The customer took the laundry out of the locker (assisted service): closes the
+     * booking through the same exactly-once path as a machine booking, with the email.
+     */
+    public void completeAfterPickup(UUID transactionId) {
+        advanceBooking(transactionId, true);
     }
 
     private void markStarted(UUID reservationId) {

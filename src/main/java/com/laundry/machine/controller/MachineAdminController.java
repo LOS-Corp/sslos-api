@@ -162,6 +162,13 @@ public class MachineAdminController {
                 .orElse(ResponseEntity.noContent().build());
     }
 
+    @PostMapping("/{machineCode}/test-start/press")
+    @Operation(summary = "Simulate pressing the physical START button during an admin test run")
+    public ResponseEntity<Void> pressTestStart(@PathVariable String machineCode) {
+        startAuthorizationService.pressTestStart(machineCode);
+        return ResponseEntity.accepted().build();
+    }
+
     @PostMapping("/{machineCode}/test-start/cancel")
     @Operation(summary = "Cancel the active admin test-run authorization")
     public ResponseEntity<Void> cancelTestStart(@PathVariable String machineCode) {

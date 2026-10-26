@@ -314,6 +314,41 @@ public class MachineStartAuthorizationService {
                 .map(this::toCheckInResponse);
     }
 
+    /**
+     * Simulate pressing the physical START button during an admin test run.
+     * The device runs the same path as a real press (interlocks, START_REQUEST,
+     * START_APPROVAL), so the full flow is exercised. Only a GRANTED test-run
+     * authorization qualifies; customer cycles still need a person at the machine.
+     */
+    @Transactional(readOnly = true)
+    public void pressTestStart(String machineCode) {
+        Machine machine = machineRepository.findByMachineCode(machineCode)
+                .orElseThrow(() -> new MachineNotFoundException("Machine not found: " + machineCode));
+        if (!machine.isOnline()) {
+            throw new CheckInRejectedException("Machine is currently offline");
+        }
+        MachineStartAuthorization auth = authorizationRepository.findActiveByMachine(machine.getId())
+                .filter(MachineStartAuthorization::isTestRun)
+                .filter(a -> a.getStatus() == MachineStartAuthorizationStatus.GRANTED)
+                .filter(a -> a.getExpiresAt().isAfter(OffsetDateTime.now()))
+                .orElseThrow(() -> new CheckInRejectedException(
+                        "No granted test-run authorization on this machine; unlock START first"));
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "PRESS_START");
+        payload.put("commandId", "PRESS-" + auth.getId());
+        payload.put("authorizationId", auth.getId().toString());
+        payload.put("machineId", machine.getMachineCode());
+        String topic = mqttPublisher.buildWasherCommandTopic(machine.getBranchId(), machine.getMachineCode());
+        try {
+            mqttPublisher.publish(topic, new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(payload));
+        } catch (Exception e) {
+            log.error("[{}] Failed to publish PRESS_START for auth={}: {}", machineCode, auth.getId(), e.getMessage(), e);
+            throw new CheckInRejectedException("Could not send the START press to the machine");
+        }
+        log.info("[{}] Simulated START press sent for test auth={}", machineCode, auth.getId());
+    }
+
     /** Cancel an active test authorization; the device locks START again. */
     @Transactional
     public void cancelTestStart(String machineCode) {

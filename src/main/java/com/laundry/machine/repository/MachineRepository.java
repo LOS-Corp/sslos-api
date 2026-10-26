@@ -46,7 +46,7 @@ public interface MachineRepository extends JpaRepository<Machine, UUID> {
                 FROM booking_resource_allocations a
                 JOIN scheduled_bookings b ON b.id = a.booking_id
                 WHERE a.resource_id = :machineId
-                  AND (b.status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING')
+                  AND (b.status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING', 'READY_FOR_PICKUP')
                        OR (b.status = 'HELD' AND b.hold_expires_at > NOW()))
             )
             """, nativeQuery = true)

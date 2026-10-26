@@ -1,30 +1,35 @@
 package com.laundry.mqtt.service;
 
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Component;
-
-import java.util.UUID;
+import java.util.Arrays;
+import java.util.Optional;
 
 /**
- * Valid channel types for laundry machine MQTT topics.
- *
- * <p>Contract: {@code laundry/washer/{branchId}/{machineId}/{channel}}
+ * Device-to-backend channels, i.e. the topic suffix after
+ * {@code laundry/washer/{branchId}/{machineId}/}.
  */
 public enum MqttChannel {
-    STATUS,
-    TELEMETRY,
-    EVENT,
-    COMMAND,
-    HEARTBEAT,
-    /**
-     * QR check-in + physical START authorization channel.
-     * Device-publishes:
-     *   AUTH_ACK         — boot-time acknowledgement of the previous AUTHORIZE_START.
-     *   START_REQUEST    — customer pressed the physical START button.
-     *   STARTED          — cycle actually started on the device.
-     *   START_REJECTED   — device refused to start (safety / mismatch).
-     *   START_FAILED     — device accepted then failed mid-launch.
-     *   AUTH_EXPIRED     — boot-id changed or local timer expired before START_REQUEST.
-     */
-    AUTH
+
+    STATUS("status"),
+    TELEMETRY("telemetry"),
+    HEARTBEAT("heartbeat"),
+    EVENT("event"),
+    COMMAND_ACK("command/ack"),
+    /** QR check-in and physical START authorization (AUTH_ACK, START_REQUEST, STARTED, ...). */
+    AUTH("auth");
+
+    private final String path;
+
+    MqttChannel(String path) {
+        this.path = path;
+    }
+
+    public String path() {
+        return path;
+    }
+
+    public static Optional<MqttChannel> fromPath(String path) {
+        return Arrays.stream(values())
+                .filter(channel -> channel.path.equals(path))
+                .findFirst();
+    }
 }

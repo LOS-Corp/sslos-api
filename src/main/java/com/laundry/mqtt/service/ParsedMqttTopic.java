@@ -3,14 +3,9 @@ package com.laundry.mqtt.service;
 import java.util.UUID;
 
 /**
- * Value object representing a parsed branch-scoped laundry MQTT topic.
+ * A validated device topic: {@code laundry/washer/{branchId}/{machineId}/{channel}}.
  *
- * @param branchId   branch identifier — UUID of the physical branch the machine belongs to
- * @param machineId  machine identifier (e.g., "WM001")
- * @param channel    channel type (STATUS, TELEMETRY, EVENT, COMMAND, HEARTBEAT)
+ * @param machineId the machine code, e.g. {@code WM001}
  */
-public record ParsedMqttTopic(
-    UUID branchId,
-    String machineId,
-    MqttChannel channel
-) {}
+public record ParsedMqttTopic(UUID branchId, String machineId, MqttChannel channel) {
+}
