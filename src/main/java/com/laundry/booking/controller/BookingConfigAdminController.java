@@ -11,10 +11,9 @@ import com.laundry.booking.dto.BookingDtos.BranchOfferingRequest;
 import com.laundry.booking.dto.BookingDtos.CreateResourceRequest;
 import com.laundry.booking.dto.BookingDtos.ResourceDto;
 import com.laundry.booking.service.BranchBookingReadinessService;
-import com.laundry.booking.service.ScheduledBookingService;
+import com.laundry.booking.service.BranchBookingConfigService;
 import com.laundry.machine.dto.MachineDto;
-import com.laundry.machine.repository.MachineRepository;
-import com.laundry.machine.service.MachineService;
+import com.laundry.machine.service.MachineCatalogService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,9 +32,8 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class BookingConfigAdminController {
     private final BranchBookingReadinessService readinessService;
-    private final ScheduledBookingService bookingService;
-    private final MachineRepository machineRepository;
-    private final MachineService machineService;
+    private final BranchBookingConfigService configService;
+    private final MachineCatalogService machineCatalogService;
 
     @GetMapping
     public List<BranchReadiness> overview() {
@@ -54,60 +52,58 @@ public class BookingConfigAdminController {
 
     @GetMapping("/{branchId}/settings")
     public BookingSettingsDto settings(@PathVariable UUID branchId) {
-        return bookingService.getBookingSettings(branchId);
+        return configService.getBookingSettings(branchId);
     }
 
     @PutMapping("/{branchId}/settings")
     public BookingSettingsDto updateSettings(@PathVariable UUID branchId,
                                              @Valid @RequestBody BookingSettingsUpdate request) {
-        return bookingService.configureBookingSettings(branchId, request);
+        return configService.configureBookingSettings(branchId, request);
     }
 
     @GetMapping("/{branchId}/hours")
     public List<BranchHoursDto> hours(@PathVariable UUID branchId) {
-        return bookingService.getOpeningHours(branchId);
+        return configService.getOpeningHours(branchId);
     }
 
     @PutMapping("/{branchId}/hours")
     public void updateHours(@PathVariable UUID branchId,
                             @Valid @RequestBody BookingHoursRequest request) {
-        bookingService.configureHours(branchId, request);
+        configService.configureHours(branchId, request);
     }
 
     @GetMapping("/{branchId}/services")
     public List<ServiceOfferingDto> services(@PathVariable UUID branchId) {
-        return bookingService.listOfferings(branchId);
+        return configService.listOfferings(branchId);
     }
 
     @PutMapping("/{branchId}/services/{serviceCode}")
     public void updateService(@PathVariable UUID branchId,
                               @PathVariable String serviceCode,
                               @Valid @RequestBody BranchOfferingRequest request) {
-        bookingService.configureOffering(branchId, serviceCode, request);
+        configService.configureOffering(branchId, serviceCode, request);
     }
 
     @GetMapping("/{branchId}/machines")
     public List<MachineDto> machines(@PathVariable UUID branchId) {
-        return machineRepository.findByBranchId(branchId).stream()
-                .map(machineService::toDto)
-                .toList();
+        return machineCatalogService.listByBranch(branchId);
     }
 
     @GetMapping("/{branchId}/resources")
     public List<ResourceDto> resources(@PathVariable UUID branchId) {
-        return bookingService.listResources(branchId);
+        return configService.listResources(branchId);
     }
 
     @PostMapping("/{branchId}/resources")
     public ResourceDto createResource(@PathVariable UUID branchId,
                                       @Valid @RequestBody CreateResourceRequest request) {
-        return bookingService.addResource(branchId, request);
+        return configService.addResource(branchId, request);
     }
 
     @PutMapping("/{branchId}/resources/{resourceId}")
     public ResourceDto updateResource(@PathVariable UUID branchId,
                                       @PathVariable UUID resourceId,
                                       @Valid @RequestBody ResourceUpdate request) {
-        return bookingService.updateResource(branchId, resourceId, request);
+        return configService.updateResource(branchId, resourceId, request);
     }
 }

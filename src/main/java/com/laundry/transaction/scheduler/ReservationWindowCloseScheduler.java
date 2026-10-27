@@ -1,5 +1,6 @@
 package com.laundry.transaction.scheduler;
 
+import com.laundry.shared.scheduling.JobLock;
 import com.laundry.machine.entity.MachineStartAuthorizationStatus;
 import com.laundry.transaction.repository.MachineReservationRepository;
 import lombok.RequiredArgsConstructor;
@@ -26,6 +27,7 @@ import java.time.LocalDateTime;
 public class ReservationWindowCloseScheduler {
 
     private final MachineReservationRepository reservationRepository;
+    private final JobLock jobLock;
 
     @Value("${app.reservation.close-grace-minutes:30}")
     private long graceMinutes;
@@ -34,6 +36,9 @@ public class ReservationWindowCloseScheduler {
                initialDelay = 30_000)
     @Transactional
     public void sweep() {
+        if (!jobLock.tryLockForTransaction("reservation-window-close")) {
+            return;
+        }
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime cutoff = now.minusMinutes(graceMinutes);
         int completed = reservationRepository.completeEnded(

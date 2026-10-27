@@ -1,20 +1,17 @@
 package com.laundry.machine.exception;
 
-/**
- * Thrown when a customer's check-in attempt is rejected by business rules
- * (machine offline / wrong branch / reservation not eligible / etc.).
- * Maps to HTTP 400 by the global exception handler.
- */
-public class CheckInRejectedException extends RuntimeException {
-    public CheckInRejectedException(String message) {
-        super(message);
-    }
+import com.laundry.shared.error.BusinessException;
+import com.laundry.shared.error.ErrorCode;
 
-    /**
-     * Returns a stable string code that the frontend can branch on without
-     * parsing free-form messages.
-     */
-    public String code() {
-        return "CHECK_IN_REJECTED";
+import java.util.Map;
+
+/**
+ * QR check-in refused by a business rule (wrong machine, unpaid, window closed…).
+ * {@code fields.code} is kept for clients written before {@code ApiError.code} existed.
+ */
+public class CheckInRejectedException extends BusinessException {
+
+    public CheckInRejectedException(String message) {
+        super(ErrorCode.CHECK_IN_REJECTED, message, Map.of("code", ErrorCode.CHECK_IN_REJECTED.name()));
     }
 }

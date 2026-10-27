@@ -154,17 +154,6 @@ public class PayOSGateway implements PaymentGateway {
     }
 
     @Override
-    public boolean verifyCallback(String transactionId, String signature) {
-        if (checksumKey == null || checksumKey.isBlank() || transactionId == null || signature == null) {
-            return false;
-        }
-        String expectedSignature = hmacSha256Hex(transactionId, checksumKey);
-        return MessageDigest.isEqual(
-                expectedSignature.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII),
-                signature.toLowerCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII));
-    }
-
-    @Override
     public Optional<GatewayPaymentStatus> getPaymentStatus(String transactionReference) {
         if (clientId == null || clientId.isBlank()
                 || apiKey == null || apiKey.isBlank()

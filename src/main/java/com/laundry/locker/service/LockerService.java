@@ -1,8 +1,15 @@
 package com.laundry.locker.service;
 
+import com.laundry.shared.error.ErrorCode;
+
+import com.laundry.shared.error.BusinessException;
+import com.laundry.shared.security.CurrentUser;
+import com.laundry.user.service.BranchScopeService;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.laundry.booking.service.BookingLifecycleService;
+import com.laundry.config.BookingProperties;
 import com.laundry.locker.dto.LockerDtos.CompartmentBooking;
 import com.laundry.locker.dto.LockerDtos.CompartmentDto;
 import com.laundry.locker.dto.LockerDtos.CompartmentState;
@@ -18,14 +25,11 @@ import com.laundry.mqtt.service.MqttPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.security.SecureRandom;
 import java.sql.Timestamp;
@@ -84,15 +88,14 @@ public class LockerService {
     /** Lazy: MqttPublisher → connection → router → WasherMessageHandler → this service. */
     private final ObjectProvider<MqttPublisher> mqttPublisherProvider;
     private final BookingLifecycleService lifecycleService;
+    private final BranchScopeService branchScope;
+    private final BookingProperties bookingProps;
     private final SecureRandom random = new SecureRandom();
 
     /** Live door states reported by each cabinet, by machine id. */
     private final Map<UUID, Map<Integer, CompartmentState>> compartmentStates = new ConcurrentHashMap<>();
     private final Map<UUID, Deque<Instant>> failedPins = new ConcurrentHashMap<>();
 
-    /** Minutes after the booking start that the drop-off PIN keeps working. */
-    @Value("${app.locker.drop-off-window-minutes:60}")
-    private long dropOffWindowMinutes;
 
     /** The locker compartment a booking holds, with its cabinet (null cabinet = not fitted). */
     record Slot(UUID bookingId, UUID transactionId, String bookingStatus, Instant start,
@@ -105,7 +108,7 @@ public class LockerService {
     @Transactional
     public CustomerLockerAccess customerAccess(UUID customerId, UUID bookingId) {
         Slot slot = slotForBooking(bookingId, customerId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Locker booking not found"));
+                .orElseThrow(() -> BusinessException.of(ErrorCode.NOT_FOUND, "Locker booking not found"));
         Machine cabinet = slot.machineId() == null ? null : machineRepository.findById(slot.machineId()).orElse(null);
         String stage = switch (slot.bookingStatus()) {
             case "HELD", "PAYMENT_REVIEW_REQUIRED" -> "PAYMENT";
@@ -120,7 +123,7 @@ public class LockerService {
         Access access = null;
         if (cabinet != null && "DROP_OFF".equals(stage)) {
             access = liveCode(slot, "DROP_OFF").orElseGet(() -> issueCode(slot, "DROP_OFF",
-                    slot.start().minusSeconds(15 * 60), slot.start().plusSeconds(dropOffWindowMinutes * 60)));
+                    slot.start().minusSeconds(15 * 60), slot.start().plus(bookingProps.assistedDropOffWindow())));
         } else if (cabinet != null && "PICKUP".equals(stage)) {
             access = liveCode(slot, "PICKUP").orElseGet(() -> issuePickupCode(slot));
         }
@@ -254,10 +257,21 @@ public class LockerService {
     // ── Staff ─────────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    public List<LockerCabinetDto> cabinets(UUID branchId) {
+    /** Cabinets the viewer may see: Owner every branch, Staff only assigned branches (BR-01). */
+    public List<LockerCabinetDto> cabinets(UUID branchId, CurrentUser viewer) {
+        if (branchId != null) {
+            branchScope.require(viewer, branchId);
+        }
+        java.util.Optional<java.util.Set<UUID>> visible = branchScope.visibleBranches(viewer);
+        return cabinetDtos((branchId == null ? machineRepository.findAll() : machineRepository.findByBranchId(branchId))
+                .stream()
+                .filter(m -> m.getType() == MachineType.LOCKER)
+                .filter(m -> visible.isEmpty() || visible.get().contains(m.getBranchId()))
+                .toList());
+    }
+
+    private List<LockerCabinetDto> cabinetDtos(List<Machine> cabinets) {
         List<LockerCabinetDto> result = new ArrayList<>();
-        List<Machine> cabinets = (branchId == null ? machineRepository.findAll() : machineRepository.findByBranchId(branchId))
-                .stream().filter(m -> m.getType() == MachineType.LOCKER).toList();
         for (Machine cabinet : cabinets) {
             Map<Integer, CompartmentState> states = compartmentStates.getOrDefault(cabinet.getId(), Map.of());
             List<CompartmentDto> compartments = jdbc.query("""
@@ -316,19 +330,20 @@ public class LockerService {
                     """, UUID.randomUUID(), cabinet.getBranchId(), code,
                     displayName(cabinet) + " · Ô " + no, machineId, no);
         }
-        return cabinets(cabinet.getBranchId()).stream()
-                .filter(c -> c.machineId().equals(machineId)).findFirst().orElseThrow();
+        return cabinetDtos(List.of(cabinet)).getFirst();
     }
 
     @Transactional
-    public void staffOpen(UUID machineId, int compartmentNo, String action, UUID staffId) {
+    public void staffOpen(UUID machineId, int compartmentNo, String action, CurrentUser staff) {
+        UUID staffId = staff.id();
         String act = action == null ? "" : action.trim().toUpperCase(Locale.ROOT);
         if (!STAFF_ACTIONS.contains(act)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "action must be COLLECT, RETURN or INSPECT");
+            throw BusinessException.of(ErrorCode.INVALID_REQUEST, "action must be COLLECT, RETURN or INSPECT");
         }
         Machine cabinet = cabinet(machineId);
+        branchScope.require(staff, cabinet.getBranchId());
         if (!cabinet.isOnline()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Tủ đang mất kết nối");
+            throw BusinessException.of(ErrorCode.CONFLICT, "Tủ đang mất kết nối");
         }
         List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT r.id AS resource_id,
@@ -341,7 +356,7 @@ public class LockerService {
                 WHERE r.locker_machine_id = ? AND r.compartment_no = ?
                 """, machineId, compartmentNo);
         if (rows.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Ô tủ chưa được tạo");
+            throw BusinessException.of(ErrorCode.NOT_FOUND, "Ô tủ chưa được tạo");
         }
         UUID resourceId = (UUID) rows.getFirst().get("resource_id");
         UUID bookingId = (UUID) rows.getFirst().get("booking_id");
@@ -350,7 +365,7 @@ public class LockerService {
             String status = bookingId == null ? null
                     : jdbc.queryForObject("SELECT status FROM scheduled_bookings WHERE id = ?", String.class, bookingId);
             if (!needed.equals(status)) {
-                throw new ResponseStatusException(HttpStatus.CONFLICT, "COLLECT".equals(act)
+                throw BusinessException.of(ErrorCode.CONFLICT, "COLLECT".equals(act)
                         ? "Ô này chưa có đồ khách gửi" : "Đơn này chưa được lấy đi xử lý");
             }
         }
@@ -502,7 +517,7 @@ public class LockerService {
             return new Access(id, slot.bookingId(), slot.resourceId(), purpose, pin, "ACTIVE", from, until, null,
                     slot.compartmentNo() == null ? 0 : slot.compartmentNo(), slot.bookingStatus(), slot.transactionId());
         }
-        throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Không tạo được mã PIN, thử lại");
+        throw BusinessException.of(ErrorCode.SERVICE_UNAVAILABLE, "Không tạo được mã PIN, thử lại");
     }
 
     private boolean moveBooking(UUID bookingId, String from, String to) {
@@ -549,9 +564,9 @@ public class LockerService {
 
     private Machine cabinet(UUID machineId) {
         Machine machine = machineRepository.findById(machineId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Locker not found"));
+                .orElseThrow(() -> BusinessException.of(ErrorCode.NOT_FOUND, "Locker not found"));
         if (machine.getType() != MachineType.LOCKER) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Thiết bị này không phải tủ locker");
+            throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Thiết bị này không phải tủ locker");
         }
         return machine;
     }

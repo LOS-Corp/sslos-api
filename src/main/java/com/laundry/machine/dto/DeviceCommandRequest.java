@@ -1,6 +1,7 @@
 package com.laundry.machine.dto;
 
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -18,6 +19,8 @@ import java.util.UUID;
  *
  * <p>The bookingId is required for START (to validate authorization).
  * It is optional/ignored for RESET, TARE, STATUS.
+ *
+ * <p>{@code reason} is mandatory for every Staff/Owner/Admin override except STATUS (BR-25).
  */
 @Data
 @NoArgsConstructor
@@ -31,4 +34,8 @@ public class DeviceCommandRequest {
      * that authorizes this machine start.
      */
     private UUID bookingId;
+
+    /** Why an operator overrides the machine (BR-25); kept in the audit log. */
+    @Size(max = 500, message = "reason must be at most 500 characters")
+    private String reason;
 }

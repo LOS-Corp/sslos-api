@@ -2,6 +2,9 @@ package com.laundry.machine.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.laundry.audit.service.AuditAction;
+import com.laundry.audit.service.AuditService;
+import com.laundry.audit.service.AuditService.AuditEntry;
 import com.laundry.machine.dto.DeviceCommandDto;
 import com.laundry.machine.dto.DeviceCommandRequest;
 import com.laundry.machine.entity.DeviceCommand;
@@ -12,32 +15,36 @@ import com.laundry.machine.entity.MachineStartAuthorizationStatus;
 import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.repository.DeviceCommandRepository;
 import com.laundry.machine.repository.MachineRepository;
+import com.laundry.machine.exception.MachineNotFoundException;
 import com.laundry.machine.repository.MachineStartAuthorizationRepository;
-import com.laundry.mqtt.service.MqttPublisher;
+import com.laundry.shared.error.BusinessException;
+import com.laundry.shared.error.ErrorCode;
+import com.laundry.shared.security.CurrentUser;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
 /**
- * Service for issuing and tracking commands sent to devices.
+ * Issues commands to devices (UC-18).
  *
  * <p>Command flow:
  * <ol>
- *   <li>Authenticate user (done by Spring Security before reaching here).</li>
- *   <li>Validate machine exists and is online.</li>
- *   <li>Validate machine state allows this command.</li>
- *   <li>For START: validate booking ownership and payment.</li>
- *   <li>Create {@link DeviceCommand} record (PENDING).</li>
- *   <li>Publish MQTT message to {@code laundry/washer/{branchId}/{machineId}/command}.</li>
- *   <li>Update record to SENT.</li>
+ *   <li>{@link RemoteCommandAuthorizer} decides whether the caller may send this command (FR-ACT-06, BR-25).</li>
+ *   <li>Validate the machine is online and its state allows the command.</li>
+ *   <li>For START: an active START authorization must exist for the booking.</li>
+ *   <li>Persist {@link DeviceCommand} as PENDING and write the audit entry — one transaction.</li>
+ *   <li>After commit, {@link DeviceCommandDispatcher} publishes to MQTT and marks it SENT or FAILED,
+ *       so a rolled-back request never reaches a device (ADR-08).</li>
  * </ol>
  *
  * <p>STOP semantics: STOP cancels the current cycle. It does NOT mark the
@@ -52,7 +59,9 @@ public class DeviceCommandService {
     private final MachineRepository machineRepository;
     private final DeviceCommandRepository deviceCommandRepository;
     private final MachineStartAuthorizationRepository startAuthorizationRepository;
-    private final MqttPublisher mqttPublisher;
+    private final RemoteCommandAuthorizer commandAuthorizer;
+    private final AuditService auditService;
+    private final ApplicationEventPublisher events;
     private final ObjectMapper objectMapper;
 
     @Value("${app.machine.command-timeout-seconds:15}")
@@ -66,81 +75,54 @@ public class DeviceCommandService {
      */
     private static final Set<String> UNRESTRICTED_COMMANDS = Set.of("RESET", "STATUS");
 
-    /**
-     * Issue a command to a machine.
-     *
-     * @param machineCode the machine's code (e.g., "WM001")
-     * @param request     the command request DTO
-     * @param userId      the authenticated user issuing the command
-     * @return the created DeviceCommand DTO
-     */
     @Transactional
-    public DeviceCommandDto issueCommand(String machineCode, DeviceCommandRequest request, UUID userId) {
-        String cmd = request.getCommand().toUpperCase().trim();
-
-        // 1. Find machine
+    public DeviceCommandDto issueCommand(String machineCode, DeviceCommandRequest request, CurrentUser actor) {
+        String cmd = request.getCommand().toUpperCase(Locale.ROOT).trim();
         Machine machine = machineRepository.findByMachineCode(machineCode)
-                .orElseThrow(() -> new IllegalArgumentException("Machine not found: " + machineCode));
+                .orElseThrow(() -> MachineNotFoundException.byCode(machineCode));
 
-        // 2. Validate machine is online
+        commandAuthorizer.check(actor, machine, cmd, request.getReason());
         if (!machine.isOnline()) {
-            throw new IllegalStateException("Machine " + machineCode + " is currently offline");
+            throw BusinessException.of(ErrorCode.MACHINE_OFFLINE, "Machine " + machineCode + " is currently offline");
         }
-
-        // 3. Validate machine status allows this command
         validateCommandForStatus(cmd, machine);
 
-        // 4. For START: validate booking
         UUID bookingId = request.getBookingId();
         if (COMMANDS_REQUIRING_BOOKING.contains(cmd)) {
             if (bookingId == null) {
-                throw new IllegalArgumentException("bookingId is required for START command");
+                throw BusinessException.of(ErrorCode.VALIDATION_FAILED, "bookingId is required for START command");
             }
-            validateBookingForStart(machine, bookingId, userId);
+            validateBookingForStart(machine, bookingId);
         }
 
-        // 5. Create DeviceCommand record
-        String commandId = "CMD-" + UUID.randomUUID();
         OffsetDateTime now = OffsetDateTime.now();
-
-        DeviceCommand command = DeviceCommand.builder()
+        String commandId = "CMD-" + UUID.randomUUID();
+        DeviceCommand command = deviceCommandRepository.save(DeviceCommand.builder()
                 .commandId(commandId)
                 .machineId(machine.getId())
                 .machineCode(machineCode)
                 .command(cmd)
                 .bookingId(bookingId)
-                .issuedByUserId(userId)
+                .issuedByUserId(actor.id())
                 .status(DeviceCommandStatus.PENDING)
                 .timeoutAt(now.plusSeconds(commandTimeoutSeconds))
-                .build();
+                .build());
 
-        command = deviceCommandRepository.save(command);
-        log.info("[{}] Command created: commandId={}, cmd={}, user={}", machineCode, commandId, cmd, userId);
-
-        // 6. Build and publish MQTT payload
-        String mqttPayload = buildCommandPayload(cmd, commandId, bookingId, now);
-        UUID branchId = machine.getBranchId();
-        String topic = mqttPublisher.buildWasherCommandTopic(branchId, machineCode);
-
-        try {
-            mqttPublisher.publish(topic, mqttPayload);
-
-            // 7. Update status to SENT
-            command.setStatus(DeviceCommandStatus.SENT);
-            command.setSentAt(OffsetDateTime.now());
-            command = deviceCommandRepository.save(command);
-
-            log.info("[{}] Command published: commandId={}, topic={}", machineCode, commandId, topic);
-
-        } catch (Exception e) {
-            command.setStatus(DeviceCommandStatus.FAILED);
-            command.setAckReason("Publish failed: " + e.getMessage());
-            deviceCommandRepository.save(command);
-            log.error("[{}] Failed to publish command: {}", machineCode, e.getMessage(), e);
-            throw new IllegalStateException("Failed to send command to device: " + e.getMessage(), e);
-        }
-
+        auditService.record(AuditEntry.of(AuditAction.REMOTE_COMMAND, "MACHINE", machineCode,
+                        machine.getBranchId(), actor)
+                .withReason(request.getReason())
+                .withChange(Map.of("status", String.valueOf(machine.getStatus())),
+                        Map.of("command", cmd, "commandId", commandId)));
+        events.publishEvent(new DeviceCommandRequested(command.getId(),
+                mqttTopicPayload(machine, cmd, commandId, bookingId, now)));
+        log.info("[{}] Command {} queued by {} ({})", machineCode, cmd, actor.id(), actor.primaryRole());
         return toDto(command);
+    }
+
+    private DeviceCommandRequested.Payload mqttTopicPayload(Machine machine, String cmd, String commandId,
+                                                            UUID bookingId, OffsetDateTime issuedAt) {
+        return new DeviceCommandRequested.Payload(machine.getBranchId(), machine.getMachineCode(),
+                buildCommandPayload(cmd, commandId, bookingId, issuedAt));
     }
 
     /**
@@ -207,20 +189,17 @@ public class DeviceCommandService {
             case "TARE" -> {
                 // TARE is allowed whenever the device is online (handled by caller).
             }
-            default -> log.warn("Unrecognized command '{}' — allowing with no status restriction", cmd);
+            default -> {
+                // RemoteCommandAuthorizer refuses unknown commands before this point.
+            }
         }
     }
 
-    private void validateBookingForStart(Machine machine, UUID bookingId, UUID userId) {
-        // Phase 9 wiring: the customer's START request now goes through the
-        // QR check-in flow (POST /api/machines/check-in) and the physical
-        // START button is unlocked via MachineStartAuthorization. The legacy
-        // remote-START REST endpoint is kept for staff / admin override only —
-        // we still require an active authorization tied to a reservation.
-        if (userId == null) {
-            throw new IllegalArgumentException(
-                    "Authentication is required to START a machine (no user context)");
-        }
+    /**
+     * Customers start machines through QR check-in; this remote START is an operator override and
+     * still requires the active authorization of that booking.
+     */
+    private void validateBookingForStart(Machine machine, UUID bookingId) {
         var active = startAuthorizationRepository.findActiveByMachine(machine.getId());
         if (active.isEmpty()) {
             throw new IllegalStateException(

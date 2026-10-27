@@ -150,7 +150,7 @@ public interface MachineRepository extends JpaRepository<Machine, UUID> {
             nativeQuery = true)
     int deleteRuntimeSnapshot(@Param("machineId") UUID machineId);
 
-    // ── Admin search (Slice 1) ────────────────────────────────────────────────
+    // ── Admin search ────────────────────────────────────────────────
 
     /**
      * Admin search: free-text q + status + type + branchId, with paging.

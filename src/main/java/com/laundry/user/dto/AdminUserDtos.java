@@ -6,9 +6,10 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 import java.time.OffsetDateTime;
+import java.util.List;
 import java.util.UUID;
 
-/** Admin management of operator accounts (ADMIN, OWNER, STAFF). */
+/** Operator accounts: Admin manages Admin/Owner accounts, the Owner manages Staff and their branches. */
 public final class AdminUserDtos {
     private AdminUserDtos() {}
 
@@ -22,7 +23,9 @@ public final class AdminUserDtos {
             String phone,
             String role,
             String status,
-            OffsetDateTime createdAt
+            OffsetDateTime createdAt,
+            /** Assigned branches of a Staff account; empty for chain-wide Admin and Owner. */
+            List<UUID> branchIds
     ) {}
 
     public record CreateUserRequest(
@@ -30,13 +33,15 @@ public final class AdminUserDtos {
             @NotBlank @Email @Size(max = 254) String email,
             @NotBlank @Pattern(regexp = "^\\+[1-9][0-9]{7,14}$", message = "Số điện thoại phải theo dạng +84…") String phone,
             @NotBlank String role,
-            @NotBlank @Size(min = 8, max = 72) @Pattern(regexp = PASSWORD_RULE, message = PASSWORD_MESSAGE) String password
+            @NotBlank @Size(min = 8, max = 72) @Pattern(regexp = PASSWORD_RULE, message = PASSWORD_MESSAGE) String password,
+            List<UUID> branchIds
     ) {}
 
     public record UpdateUserRequest(
             @NotBlank @Size(max = 120) String fullName,
             @NotBlank @Pattern(regexp = "^\\+[1-9][0-9]{7,14}$", message = "Số điện thoại phải theo dạng +84…") String phone,
-            @NotBlank String role
+            @NotBlank String role,
+            List<UUID> branchIds
     ) {}
 
     /** ACTIVE or LOCKED. */

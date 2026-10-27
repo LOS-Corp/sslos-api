@@ -76,4 +76,15 @@ public class DeviceEvent {
             createdAt = OffsetDateTime.now();
         }
     }
+
+    /** An audit row of something the device or the backend did to a machine. */
+    public static DeviceEvent of(Machine machine, DeviceEventType type, String detail, java.util.UUID bookingId) {
+        return DeviceEvent.builder()
+                .machineId(machine.getId())
+                .machineCode(machine.getMachineCode())
+                .eventType(type)
+                .detail(detail)
+                .bookingId(bookingId)
+                .build();
+    }
 }

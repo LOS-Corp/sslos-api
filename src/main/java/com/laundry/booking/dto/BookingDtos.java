@@ -193,7 +193,9 @@ public final class BookingDtos {
             @NotBlank String idempotencyKey,
             /* Program codes; null or blank picks the machine type's default. */
             String washProgram,
-            String dryProgram
+            String dryProgram,
+            /* Laundry the customer brings (kg); never booked on a smaller machine (BR-26). Optional. */
+            @DecimalMin(value = "0.1") BigDecimal declaredLoadKg
     ) {}
 
     public record BookingDto(
@@ -222,7 +224,8 @@ public final class BookingDtos {
             String qrCode
     ) {}
 
-    public record CheckoutDto(UUID transactionId, String idempotencyKey) {}
+    /** {@code useWallet} null or true: wallet credit is used first (FR-PAY-04); false pays everything through payOS. */
+    public record CheckoutDto(UUID transactionId, String idempotencyKey, Boolean useWallet) {}
 
     public record BookingHoursRequest(
             @NotBlank String timezone,

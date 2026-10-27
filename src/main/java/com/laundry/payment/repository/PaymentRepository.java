@@ -25,6 +25,9 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
 
     Optional<Payment> findByIdempotencyKey(String idempotencyKey);
 
+    @Query(value = "SELECT customer_id FROM transactions WHERE id = :transactionId", nativeQuery = true)
+    Optional<UUID> findCustomerOfTransaction(@Param("transactionId") UUID transactionId);
+
     Optional<Payment> findByGatewayTransactionId(String gatewayTransactionId);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)

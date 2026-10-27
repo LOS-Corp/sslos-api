@@ -1,43 +1,21 @@
 package com.laundry.refund.dto.request;
 
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
- * Request DTO for creating a refund request
- * SRS: FR-PAY-05 - Staff tạo Refund Request
+ * Exception refund raised by Staff or the Owner. The transaction and branch are derived from the
+ * payment, and the requester from the token — the body cannot choose them (BR-01).
  */
-@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-public class CreateRefundRequest {
-
-    @NotNull(message = "Payment ID is required")
-    private UUID paymentId;
-
-    private UUID orderId;
-
-    @NotNull(message = "Transaction ID is required")
-    private UUID transactionId;
-
-    @NotNull(message = "Branch ID is required")
-    private UUID branchId;
-
-    @NotNull(message = "Amount is required")
-    @Positive(message = "Amount must be positive")
-    private BigDecimal amount;
-
-    @NotBlank(message = "Reason is required")
-    private String reason;
-
-    private String evidence;  // Evidence description or attachment URLs
+public record CreateRefundRequest(
+        @NotNull UUID paymentId,
+        @NotNull @DecimalMin(value = "1") @Digits(integer = 8, fraction = 0) BigDecimal amount,
+        @NotBlank @Size(max = 1000) String reason,
+        @Size(max = 2000) String evidence) {
 }

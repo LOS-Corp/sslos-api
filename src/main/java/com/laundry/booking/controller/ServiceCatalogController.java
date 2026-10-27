@@ -1,30 +1,27 @@
 package com.laundry.booking.controller;
 
+import com.laundry.shared.error.BusinessException;
 import com.laundry.booking.dto.BookingDtos.ServiceDto;
 import com.laundry.booking.dto.MachineProgramDtos.MachineProgramDto;
 import com.laundry.booking.service.MachineProgramService;
-import com.laundry.booking.service.ScheduledBookingService;
+import com.laundry.booking.service.BookingAvailabilityService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
-
-import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/services")
 @RequiredArgsConstructor
 public class ServiceCatalogController {
-    private final ScheduledBookingService bookingService;
+    private final BookingAvailabilityService availabilityService;
     private final MachineProgramService programService;
 
     @GetMapping
     public java.util.List<ServiceDto> list() {
-        return bookingService.listServices();
+        return availabilityService.listServices();
     }
 
     /** Active wash / dry programs, optionally of one machine type (WASHER / DRYER). */
@@ -35,9 +32,9 @@ public class ServiceCatalogController {
 
     @GetMapping("/{code}")
     public ServiceDto get(@PathVariable String code) {
-        return bookingService.listServices().stream()
+        return availabilityService.listServices().stream()
                 .filter(service -> service.code().equalsIgnoreCase(code))
                 .findFirst()
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Service not found"));
+                .orElseThrow(() -> BusinessException.notFound("Service not found"));
     }
 }

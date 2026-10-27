@@ -1,6 +1,9 @@
 package com.laundry.websocket;
 
+import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
@@ -23,7 +26,18 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
  */
 @Configuration
 @EnableWebSocketMessageBroker
+@RequiredArgsConstructor
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
+
+    private final StompAuthChannelInterceptor stompAuthChannelInterceptor;
+
+    @Value("${app.cors.allowed-origins:}")
+    private String allowedOrigins;
+
+    @Override
+    public void configureClientInboundChannel(ChannelRegistration registration) {
+        registration.interceptors(stompAuthChannelInterceptor);
+    }
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
@@ -36,10 +50,20 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         // Main WebSocket endpoint — clients connect here (both raw WS and SockJS)
+        String[] origins = allowedOrigins();
         registry.addEndpoint("/ws")
-                .setAllowedOriginPatterns("*");
+                .setAllowedOriginPatterns(origins);
         registry.addEndpoint("/ws")
-                .setAllowedOriginPatterns("*")
+                .setAllowedOriginPatterns(origins)
                 .withSockJS();                  // SockJS fallback for browsers without WS support
+    }
+
+    /** Same origins as the REST CORS policy; "*" only when none are configured (local development). */
+    private String[] allowedOrigins() {
+        if (allowedOrigins == null || allowedOrigins.isBlank()) {
+            return new String[] {"*"};
+        }
+        return java.util.Arrays.stream(allowedOrigins.split(",")).map(String::trim)
+                .filter(origin -> !origin.isEmpty()).toArray(String[]::new);
     }
 }

@@ -6,8 +6,8 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.junit.jupiter.api.Test;
+import org.springframework.security.web.AuthenticationEntryPoint;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
 
@@ -21,7 +21,7 @@ class JwtAuthenticationFilterTest {
     @Test
     void doesNotConvertDownstreamErrorsIntoAuthenticationFailures() throws Exception {
         JwtService jwtService = mock(JwtService.class);
-        JwtAuthenticationEntryPoint entryPoint = mock(JwtAuthenticationEntryPoint.class);
+        AuthenticationEntryPoint entryPoint = mock(AuthenticationEntryPoint.class);
         JwtAuthenticationFilter filter = new JwtAuthenticationFilter(jwtService, entryPoint);
         HttpServletRequest request = mock(HttpServletRequest.class);
         HttpServletResponse response = mock(HttpServletResponse.class);

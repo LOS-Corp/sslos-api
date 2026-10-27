@@ -78,27 +78,7 @@ public class UserService {
         return UserProfileResponse.from(user);
     }
 
-    /**
-     * Get profile by user ID.
-     * Implements ownership check - users can only view their own profile.
-     * 
-     * @param userId User ID to lookup
-     * @return UserProfileResponse
-     * @throws org.springframework.security.access.AccessDeniedException if not owner
-     */
-    @Transactional(readOnly = true)
-    public UserProfileResponse getProfileById(UUID userId) {
-        UUID currentUserId = getCurrentUserId();
-        if (!currentUserId.equals(userId)) {
-            throw new org.springframework.security.access.AccessDeniedException(
-                "You can only view your own profile"
-            );
-        }
-        return userRepository.findById(userId)
-            .map(UserProfileResponse::from)
-            .orElseThrow(() -> new IllegalStateException("User not found"));
-    }
-
+    
     /**
      * Update profile of the currently authenticated user.
      * Only allows updating fullName and phone.
@@ -149,29 +129,5 @@ public class UserService {
         refreshTokenRepository.revokeAllByUser(user);
     }
 
-    /**
-     * Check if current user has a specific role.
-     * 
-     * @param roleName Role name to check (e.g., "CUSTOMER", "ADMIN")
-     * @return true if user has the role
-     */
-    public boolean currentUserHasRole(String roleName) {
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-        if (authentication == null) {
-            return false;
-        }
-        return authentication.getAuthorities().stream()
-            .anyMatch(auth -> auth.getAuthority().equals("ROLE_" + roleName));
+    
     }
-
-    /**
-     * Get user by ID (internal use for ownership checks).
-     * 
-     * @param userId User ID
-     * @return User entity
-     */
-    @Transactional(readOnly = true)
-    public User getUserById(UUID userId) {
-        return userRepository.findById(userId).orElse(null);
-    }
-}

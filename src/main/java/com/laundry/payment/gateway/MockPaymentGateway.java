@@ -32,13 +32,6 @@ public class MockPaymentGateway implements PaymentGateway {
     }
 
     @Override
-    public boolean verifyCallback(String transactionId, String signature) {
-        // Mock always returns true for development
-        log.info("Mock callback verified: transactionId={}", transactionId);
-        return true;
-    }
-
-    @Override
     public String getGatewayName() {
         return "MOCK";
     }

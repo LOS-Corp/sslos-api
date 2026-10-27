@@ -35,6 +35,10 @@ public class MqttConnectionManager implements MqttCallbackExtended {
     /** Runs after the whole context is ready, so every handler exists before the first message. */
     @EventListener(ApplicationReadyEvent.class)
     public synchronized void connect() {
+        if (!properties.isEnabled()) {
+            log.info("MQTT disabled (app.mqtt.enabled=false); device messaging is off");
+            return;
+        }
         if (isConnected()) {
             return;
         }

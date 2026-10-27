@@ -1,10 +1,10 @@
 package com.laundry.booking.service;
 
+import com.laundry.shared.scheduling.JobLock;
 import com.laundry.shared.EmailService;
 import com.laundry.shared.LaundryCompletedEmail;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -40,12 +40,12 @@ public class BookingLifecycleService {
             "('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING', 'READY_FOR_PICKUP')";
 
     private final JdbcTemplate jdbc;
+    private final JobLock jobLock;
     private final EmailService emailService;
     private final org.springframework.transaction.PlatformTransactionManager transactionManager;
+    private final com.laundry.config.BookingProperties props;
 
     /** How long after a reservation's planned end the sweep waits before closing it. */
-    @Value("${app.booking.completion-grace-minutes:15}")
-    private long completionGraceMinutes;
 
     /**
      * A machine accepted START for {@code reservationId}: the customer's booking is now in use.
@@ -98,7 +98,10 @@ public class BookingLifecycleService {
     @Scheduled(fixedDelayString = "${app.booking.completion-sweep-ms:60000}", initialDelay = 30_000)
     @Transactional
     public void sweepFinishedReservations() {
-        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(completionGraceMinutes);
+        if (!jobLock.tryLockForTransaction("booking-completion-sweep")) {
+            return;
+        }
+        LocalDateTime cutoff = LocalDateTime.now().minusMinutes(props.completionGraceMinutes());
         List<UUID> transactions = jdbc.query("""
                 UPDATE machine_reservations mr SET status = 'COMPLETED', updated_at = NOW()
                 FROM machines m

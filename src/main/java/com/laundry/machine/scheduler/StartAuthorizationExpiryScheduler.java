@@ -1,5 +1,6 @@
 package com.laundry.machine.scheduler;
 
+import com.laundry.shared.scheduling.JobLock;
 import com.laundry.machine.service.MachineStartAuthorizationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +28,7 @@ import java.time.OffsetDateTime;
 public class StartAuthorizationExpiryScheduler {
 
     private final MachineStartAuthorizationService startAuthorizationService;
+    private final JobLock jobLock;
 
     /**
      * Sweep expiry every 5 s.
@@ -35,6 +37,10 @@ public class StartAuthorizationExpiryScheduler {
     @Scheduled(fixedDelayString = "${app.machine.start-authorization.sweep-millis:5000}",
                initialDelay = 10_000)
     public void sweep() {
+        jobLock.runExclusive("start-authorization-expiry", this::sweepOnce);
+    }
+
+    private void sweepOnce() {
         try {
             int n = startAuthorizationService.sweepExpired(OffsetDateTime.now());
             if (n > 0) {

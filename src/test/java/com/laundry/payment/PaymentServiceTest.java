@@ -10,6 +10,8 @@ import com.laundry.payment.gateway.GatewayPaymentStatus;
 import com.laundry.payment.gateway.PaymentGateway;
 import com.laundry.payment.repository.PaymentRepository;
 import com.laundry.payment.service.PaymentService;
+import com.laundry.payment.service.WalletPaymentService;
+import com.laundry.shared.money.Money;
 import com.laundry.transaction.dto.response.TransactionResponse;
 import com.laundry.transaction.entity.TransactionStatus;
 import com.laundry.transaction.service.PurchaseService;
@@ -35,7 +37,7 @@ class PaymentServiceTest {
         PurchaseService purchaseService = mock(PurchaseService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, paymentGateway, purchaseService, bookingService);
+                paymentRepository, paymentGateway, purchaseService, noWallet(), bookingService);
         UUID transactionId = UUID.randomUUID();
         when(purchaseService.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
                 .transactionId(transactionId)
@@ -50,7 +52,7 @@ class PaymentServiceTest {
 
         assertThatThrownBy(() -> paymentService.createPayment(request))
                 .isInstanceOf(PaymentException.class)
-                .hasMessageContaining("does not match transaction total");
+                .hasMessageContaining("does not match the amount still due");
         verify(paymentRepository, never()).save(any(Payment.class));
     }
 
@@ -60,7 +62,7 @@ class PaymentServiceTest {
         PurchaseService purchaseService = mock(PurchaseService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, mock(PaymentGateway.class), purchaseService, bookingService);
+                paymentRepository, mock(PaymentGateway.class), purchaseService, noWallet(), bookingService);
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         UUID customerId = UUID.randomUUID();
@@ -92,7 +94,7 @@ class PaymentServiceTest {
         PurchaseService purchaseService = mock(PurchaseService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, mock(PaymentGateway.class), purchaseService, bookingService);
+                paymentRepository, mock(PaymentGateway.class), purchaseService, noWallet(), bookingService);
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         Payment payment = Payment.builder()
@@ -121,7 +123,7 @@ class PaymentServiceTest {
         PurchaseService purchaseService = mock(PurchaseService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, paymentGateway, purchaseService, bookingService);
+                paymentRepository, paymentGateway, purchaseService, noWallet(), bookingService);
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         UUID customerId = UUID.randomUUID();
@@ -156,7 +158,7 @@ class PaymentServiceTest {
         PaymentGateway paymentGateway = mock(PaymentGateway.class);
         PurchaseService purchaseService = mock(PurchaseService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, paymentGateway, purchaseService, mock(ScheduledBookingService.class));
+                paymentRepository, paymentGateway, purchaseService, noWallet(), mock(ScheduledBookingService.class));
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         UUID customerId = UUID.randomUUID();
@@ -179,5 +181,13 @@ class PaymentServiceTest {
                 .isInstanceOf(PaymentException.class)
                 .hasMessageContaining("does not match");
         verify(paymentRepository, never()).save(any(Payment.class));
+    }
+
+    /** No wallet balance: the whole amount is due through payOS. */
+    private static WalletPaymentService noWallet() {
+        WalletPaymentService walletPayments = mock(WalletPaymentService.class);
+        when(walletPayments.activeWalletPart(org.mockito.ArgumentMatchers.any())).thenReturn(Money.ZERO);
+        when(walletPayments.walletPortion(org.mockito.ArgumentMatchers.any())).thenReturn(Money.ZERO);
+        return walletPayments;
     }
 }

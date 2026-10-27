@@ -1,6 +1,5 @@
 package com.laundry.auth.service;
 
-import com.laundry.auth.dto.request.ChangePasswordRequest;
 import com.laundry.auth.dto.request.ForgotPasswordRequest;
 import com.laundry.auth.dto.request.LoginRequest;
 import com.laundry.auth.dto.request.RefreshTokenRequest;
@@ -10,6 +9,8 @@ import com.laundry.auth.dto.response.AuthenticatedUserResponse;
 import com.laundry.auth.dto.response.LoginResponse;
 import com.laundry.auth.dto.response.LogoutResponse;
 import com.laundry.auth.dto.response.MessageResponse;
+import com.laundry.shared.error.BusinessException;
+import com.laundry.shared.error.ErrorCode;
 import com.laundry.auth.dto.response.RefreshTokenResponse;
 import com.laundry.auth.entity.OtpCode;
 import com.laundry.auth.entity.RefreshToken;
@@ -53,6 +54,7 @@ public class AuthService {
     private final JwtService jwtService;
     private final EmailService emailService;
     private final long refreshTokenExpirationSeconds;
+    private final LoginAttemptService loginAttempts;
 
     public AuthService(UserRepository userRepository,
                        RoleRepository roleRepository,
@@ -61,7 +63,8 @@ public class AuthService {
                        PasswordEncoder passwordEncoder,
                        JwtService jwtService,
                        EmailService emailService,
-                       @Value("${app.jwt.refresh-token-expiration-seconds:604800}") long refreshTokenExpirationSeconds) {
+                       @Value("${app.jwt.refresh-token-expiration-seconds:604800}") long refreshTokenExpirationSeconds,
+                       LoginAttemptService loginAttempts) {
         this.userRepository = userRepository;
         this.roleRepository = roleRepository;
         this.refreshTokenRepository = refreshTokenRepository;
@@ -70,6 +73,7 @@ public class AuthService {
         this.jwtService = jwtService;
         this.emailService = emailService;
         this.refreshTokenExpirationSeconds = refreshTokenExpirationSeconds;
+        this.loginAttempts = loginAttempts;
     }
 
     @Transactional
@@ -101,10 +105,21 @@ public class AuthService {
 
     @Transactional
     public LoginResponse login(LoginRequest request) {
-        User user = userRepository.findByEmail(normalizeEmail(request.email()))
+        String loginKey = normalizeEmail(request.email());
+        loginAttempts.requireNotLocked(loginKey);
+        User user = userRepository.findByEmail(loginKey)
             .filter(candidate -> passwordEncoder.matches(request.password(), candidate.getPasswordHash()))
-            .filter(candidate -> "ACTIVE".equals(candidate.getStatus()))
-            .orElseThrow(InvalidCredentialsException::new);
+            .orElse(null);
+        if (user == null) {
+            loginAttempts.recordFailure(loginKey);
+            throw new InvalidCredentialsException();
+        }
+        // Only someone who knows the password learns that the account is locked (UC-01 exception 3b).
+        if (!"ACTIVE".equals(user.getStatus())) {
+            throw BusinessException.of(ErrorCode.ACCOUNT_LOCKED,
+                "Your account is locked. Please contact the shop owner.");
+        }
+        loginAttempts.recordSuccess(loginKey);
         String role = user.getRoles().stream()
             .map(Role::getName)
             .sorted()

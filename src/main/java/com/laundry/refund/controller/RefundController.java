@@ -1,99 +1,74 @@
 package com.laundry.refund.controller;
 
-import com.laundry.refund.dto.request.ApproveRefundRequest;
 import com.laundry.refund.dto.request.CreateRefundRequest;
+import com.laundry.refund.dto.request.RefundDecisionRequest;
 import com.laundry.refund.dto.response.RefundResponse;
 import com.laundry.refund.service.RefundService;
+import com.laundry.shared.security.CurrentUser;
+import com.laundry.shared.security.Roles;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 import java.util.UUID;
 
-/**
- * Refund API Controller
- * SRS: FR-PAY-05 - Staff tạo Refund Request
- * SRS: FR-PAY-06 - Manager của đúng branch Approve/Reject
- */
+/** Exception refunds: Staff/Owner raise with evidence, an Owner who did not raise it decides (BR-14). */
 @RestController
 @RequestMapping("/api/refunds")
 @RequiredArgsConstructor
-@Slf4j
-@Tag(name = "Refund", description = "Refund request management API")
+@Tag(name = "Refund", description = "Exception refund requests")
 public class RefundController {
 
     private final RefundService refundService;
 
-    /**
-     * FR-PAY-05: Create a refund request (Staff only)
-     */
     @PostMapping
-    @PreAuthorize("hasRole('STAFF')")
-    @Operation(summary = "Create refund request", description = "Staff creates a refund request")
-    public ResponseEntity<RefundResponse> createRefundRequest(
-            @Valid @RequestBody CreateRefundRequest request,
-            @RequestHeader(value = "X-User-Id", required = false) UUID staffId) {
-        log.info("Create refund request: paymentId={}, staffId={}", request.getPaymentId(), staffId);
-        RefundResponse response = refundService.createRefundRequest(request, staffId);
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+    @ResponseStatus(HttpStatus.CREATED)
+    @PreAuthorize(Roles.OPERATOR)
+    @Operation(summary = "Raise an exception refund request (Staff of the branch or Owner)")
+    public RefundResponse raise(@Valid @RequestBody CreateRefundRequest request, CurrentUser requester) {
+        return refundService.raise(request, requester);
     }
 
-    /**
-     * Get refund request by ID
-     */
     @GetMapping("/{id}")
-    @PreAuthorize("hasAnyRole('STAFF', 'MANAGER', 'OWNER', 'ADMIN')")
-    @Operation(summary = "Get refund request", description = "Get refund request by ID")
-    public ResponseEntity<RefundResponse> getRefundRequest(@PathVariable UUID id) {
-        RefundResponse response = refundService.getRefundRequest(id);
-        return ResponseEntity.ok(response);
+    @PreAuthorize(Roles.OPERATOR)
+    @Operation(summary = "Get a refund request")
+    public RefundResponse get(@PathVariable UUID id, CurrentUser viewer) {
+        return refundService.get(id, viewer);
     }
 
-    /**
-     * FR-PAY-06: Get pending refund requests for manager's branch
-     */
     @GetMapping("/pending")
-    @PreAuthorize("hasAnyRole('MANAGER', 'OWNER', 'ADMIN')")
-    @Operation(summary = "Get pending refunds", description = "Get pending refund requests for a branch")
-    public ResponseEntity<List<RefundResponse>> getPendingRefunds(
-            @RequestParam UUID branchId) {
-        List<RefundResponse> responses = refundService.getPendingRefundsByBranch(branchId);
-        return ResponseEntity.ok(responses);
+    @PreAuthorize(Roles.OPERATOR)
+    @Operation(summary = "Pending refund requests visible to the caller, optionally for one branch")
+    public List<RefundResponse> pending(@RequestParam(required = false) UUID branchId, CurrentUser viewer) {
+        return refundService.pending(branchId, viewer);
     }
 
-    /**
-     * FR-PAY-06: Approve refund request (Manager only)
-     */
     @PostMapping("/{id}/approve")
-    @PreAuthorize("hasRole('MANAGER')")
-    @Operation(summary = "Approve refund request", description = "Manager approves a refund request")
-    public ResponseEntity<RefundResponse> approveRefundRequest(
-            @PathVariable UUID id,
-            @Valid @RequestBody ApproveRefundRequest request) {
-        log.info("Approve refund request: id={}, managerId={}", id, request.getManagerId());
-        RefundResponse response = refundService.approveRefundRequest(id, request);
-        return ResponseEntity.ok(response);
+    @PreAuthorize(Roles.OWNER)
+    @Operation(summary = "Approve an exception refund (Owner, not the requester)")
+    public RefundResponse approve(@PathVariable UUID id,
+                                  @Valid @RequestBody(required = false) RefundDecisionRequest decision,
+                                  CurrentUser owner) {
+        return refundService.approve(id, decision == null ? null : decision.reason(), owner);
     }
 
-    /**
-     * FR-PAY-06: Reject refund request (Manager only)
-     */
     @PostMapping("/{id}/reject")
-    @PreAuthorize("hasRole('MANAGER')")
-    @Operation(summary = "Reject refund request", description = "Manager rejects a refund request")
-    public ResponseEntity<RefundResponse> rejectRefundRequest(
-            @PathVariable UUID id,
-            @Valid @RequestBody ApproveRefundRequest request,
-            @RequestParam String rejectionReason) {
-        log.info("Reject refund request: id={}, managerId={}", id, request.getManagerId());
-        RefundResponse response = refundService.rejectRefundRequest(id, request, rejectionReason);
-        return ResponseEntity.ok(response);
+    @PreAuthorize(Roles.OWNER)
+    @Operation(summary = "Reject an exception refund with a reason (Owner, not the requester)")
+    public RefundResponse reject(@PathVariable UUID id, @Valid @RequestBody RefundDecisionRequest decision,
+                                 CurrentUser owner) {
+        return refundService.reject(id, decision.reason(), owner);
     }
 }

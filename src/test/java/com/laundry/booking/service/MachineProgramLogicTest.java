@@ -1,5 +1,6 @@
 package com.laundry.booking.service;
 
+import com.laundry.booking.domain.SlotPlanner;
 import com.laundry.booking.dto.MachineProgramDtos.MachineProgramDto;
 import org.junit.jupiter.api.Test;
 
@@ -18,7 +19,7 @@ class MachineProgramLogicTest {
 
     @Test
     void comboTakesWasherAndDryerDurationsAndBothSurcharges() {
-        ScheduledBookingService.ServiceConfig config = ScheduledBookingService.withPrograms(
+        SlotPlanner.ServiceConfig config = SlotPlanner.withPrograms(
                 service("WASH_DRY", 35, 45, List.of("WASHER", "DRYER")),
                 List.of(washer("WASH_HEAVY", 45, 8, "10000"), dryer("DRY_LOW", 40, 5, "5000")));
 
@@ -26,12 +27,12 @@ class MachineProgramLogicTest {
         assertEquals(45, config.secondaryProcessingMinutes());
         assertEquals(new BigDecimal("55000"), config.price());
         // 5 check-in + 53 wash + 10 transfer + 45 dry + 5 check-out.
-        assertEquals(START.plusSeconds(118 * 60), ScheduledBookingService.buildPlan(config, START).expectedEnd());
+        assertEquals(START.plusSeconds(118 * 60), SlotPlanner.buildPlan(config, START).expectedEnd());
     }
 
     @Test
     void dryOnlyProgramSetsThePrimaryDuration() {
-        ScheduledBookingService.ServiceConfig config = ScheduledBookingService.withPrograms(
+        SlotPlanner.ServiceConfig config = SlotPlanner.withPrograms(
                 service("DRY_ONLY", 45, 0, List.of("DRYER")), List.of(dryer("DRY_REFRESH", 15, 1, "0")));
 
         assertEquals(16, config.processingMinutes());
@@ -40,8 +41,8 @@ class MachineProgramLogicTest {
 
     @Test
     void noProgramKeepsTheOffering() {
-        ScheduledBookingService.ServiceConfig config = service("IRON_ONLY", 30, 0, List.of("IRON_STATION"));
-        assertSame(config, ScheduledBookingService.withPrograms(config, List.of()));
+        SlotPlanner.ServiceConfig config = service("IRON_ONLY", 30, 0, List.of("IRON_STATION"));
+        assertSame(config, SlotPlanner.withPrograms(config, List.of()));
     }
 
     @Test
@@ -59,9 +60,9 @@ class MachineProgramLogicTest {
         assertEquals(true, dry.get("uv"));
     }
 
-    private static ScheduledBookingService.ServiceConfig service(String code, int primary, int secondary,
+    private static SlotPlanner.ServiceConfig service(String code, int primary, int secondary,
                                                                  List<String> requirements) {
-        return new ScheduledBookingService.ServiceConfig(code, code, "SELF_SERVICE", "", primary, secondary,
+        return new SlotPlanner.ServiceConfig(code, code, "SELF_SERVICE", "", primary, secondary,
                 5, 5, 10, 0, new BigDecimal("40000"), UUID.randomUUID(), "UTC",
                 LocalTime.MIN, LocalTime.MAX, requirements, 0);
     }

@@ -16,11 +16,6 @@ public interface PaymentGateway {
     PaymentResult createPayment(UUID paymentId, BigDecimal amount, String returnUrl);
 
     /**
-     * Verify a callback from the payment gateway
-     */
-    boolean verifyCallback(String transactionId, String signature);
-
-    /**
      * Query the provider for an existing payment, when supported.
      */
     default Optional<GatewayPaymentStatus> getPaymentStatus(String transactionReference) {

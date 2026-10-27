@@ -1,6 +1,9 @@
 package com.laundry.booking.service;
 
-import com.laundry.booking.dto.BookingConfigDtos;
+import com.laundry.shared.error.ErrorCode;
+
+import com.laundry.shared.error.BusinessException;
+
 import com.laundry.booking.dto.BookingConfigDtos.BranchReadiness;
 import com.laundry.booking.dto.BookingConfigDtos.ResourceCounts;
 import com.laundry.booking.dto.BookingConfigDtos.ServiceReadiness;
@@ -13,18 +16,15 @@ import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.entity.MachineType;
 import com.laundry.machine.repository.MachineRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.time.DateTimeException;
 import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 import static com.laundry.booking.dto.BookingConfigDtos.*;
 
@@ -47,7 +47,7 @@ public class BranchBookingReadinessService {
     @Transactional(readOnly = true)
     public BranchReadiness evaluate(UUID branchId) {
         Branch branch = branchRepository.findById(branchId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Branch not found"));
+                .orElseThrow(() -> BusinessException.of(ErrorCode.NOT_FOUND, "Branch not found"));
         return evaluate(branch);
     }
 

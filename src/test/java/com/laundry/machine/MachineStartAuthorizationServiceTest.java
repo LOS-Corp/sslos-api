@@ -19,10 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.ActiveProfiles;
+import com.laundry.support.IntegrationTest;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
@@ -40,15 +37,14 @@ import static org.mockito.Mockito.verify;
  * End-to-end integration tests for the QR check-in + physical START
  * authorization flow.
  *
- * <p>Profile: {@code test} (in-process H2, MQTT broker is replaced by
+ * <p>Profile: {@code test} (real PostgreSQL via Testcontainers, MQTT broker is replaced by
  * a Mockito mock so we can assert how often authorize / revoke / approve
  * commands were published).
  *
  * <p>Each test builds its own fixture via the helpers at the bottom so
  * individual cases stay focused on the assertion.
  */
-@SpringBootTest
-@ActiveProfiles("test")
+@IntegrationTest
 @DisplayName("QR check-in + Physical START authorization")
 class MachineStartAuthorizationServiceTest {
 
@@ -67,6 +63,8 @@ class MachineStartAuthorizationServiceTest {
     @Autowired
     private com.laundry.transaction.scheduler.ReservationWindowCloseScheduler reservationWindowCloseScheduler;
 
+    @Autowired
+    private com.laundry.branch.repository.BranchRepository branchRepository;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -74,7 +72,7 @@ class MachineStartAuthorizationServiceTest {
      * Replaces the real Paho-backed publisher with a Mockito mock so the
      * flow doesn't need a live broker.
      */
-    @MockitoBean
+    @Autowired
     private com.laundry.mqtt.service.MqttPublisher mqttPublisher;
 
 
@@ -82,6 +80,7 @@ class MachineStartAuthorizationServiceTest {
 
     private Machine machine;
     private UUID customerId;
+    private UUID branchId;
 
     @BeforeEach
     void setUp() {
@@ -93,9 +92,12 @@ class MachineStartAuthorizationServiceTest {
         machineRepository.deleteAll();
 
         customerId = UUID.randomUUID();
+        branchId = branchRepository.save(com.laundry.branch.entity.Branch.builder()
+                .name("Test branch " + UUID.randomUUID())
+                .build()).getId();
         machine = Machine.builder()
                 .machineCode("WM001")
-                .branchId(UUID.randomUUID())
+                .branchId(branchId)
                 .type(MachineType.WASHER)
                 .status(MachineStatus.AVAILABLE)
                 .deploymentStatus(MachineDeploymentStatus.ACTIVE)
@@ -148,7 +150,7 @@ class MachineStartAuthorizationServiceTest {
         // Create a second machine + a CONFIRMED reservation targeting it.
         UUID otherMachineId = machineRepository.save(Machine.builder()
                 .machineCode("WM002")
-                .branchId(UUID.randomUUID())
+                .branchId(branchId)
                 .type(MachineType.WASHER)
                 .status(MachineStatus.AVAILABLE)
                 .deploymentStatus(MachineDeploymentStatus.ACTIVE)

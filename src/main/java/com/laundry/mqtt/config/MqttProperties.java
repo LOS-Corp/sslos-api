@@ -22,6 +22,9 @@ import java.util.UUID;
 @Setter
 public class MqttProperties {
 
+    /** false = never connect (tests, or local runs without devices); publishing then fails fast. */
+    private boolean enabled = true;
+
     @NotBlank
     private String brokerHost = "localhost";
 

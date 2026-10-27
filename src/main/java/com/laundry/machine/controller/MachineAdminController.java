@@ -4,7 +4,6 @@ import com.laundry.iot.service.DeviceProvisioningService;
 import com.laundry.machine.dto.CreateMachineRequest;
 import com.laundry.machine.dto.MachineDto;
 import com.laundry.machine.dto.MachineQrLabelDto;
-import com.laundry.machine.dto.MachineListFilter;
 import com.laundry.machine.dto.PageResponse;
 import com.laundry.machine.dto.UpdateMachineRequest;
 import com.laundry.machine.entity.Machine;
@@ -12,7 +11,7 @@ import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.entity.MachineType;
 import com.laundry.machine.repository.MachineRepository;
 import com.laundry.machine.dto.CheckInResponse;
-import com.laundry.machine.service.MachineService;
+import com.laundry.machine.service.MachineCatalogService;
 import com.laundry.machine.service.MachineStartAuthorizationService;
 import org.springframework.security.core.Authentication;
 import io.swagger.v3.oas.annotations.Operation;
@@ -51,7 +50,7 @@ import java.util.UUID;
 public class MachineAdminController {
 
     private final MachineRepository machineRepository;
-    private final MachineService machineService;
+    private final MachineCatalogService machineCatalogService;
     private final DeviceProvisioningService provisioningService;
     private final MachineStartAuthorizationService startAuthorizationService;
 
@@ -61,7 +60,7 @@ public class MachineAdminController {
     @PostMapping
     @Operation(summary = "Create a new machine")
     public ResponseEntity<MachineDto> createMachine(@Valid @RequestBody CreateMachineRequest request) {
-        MachineDto created = machineService.createMachine(request);
+        MachineDto created = machineCatalogService.createMachine(request);
         return ResponseEntity.status(201).body(created);
     }
 
@@ -85,11 +84,11 @@ public class MachineAdminController {
                 pageSize,
                 Sort.by(Sort.Direction.DESC, "createdAt"));
 
-        Page<Machine> result = machineService.searchMachines(
+        Page<Machine> result = machineCatalogService.searchMachines(
                 q, statusFilter, typeFilter, branchId, pageable);
 
         List<MachineDto> content = result.getContent().stream()
-                .map(machineService::toDto)
+                .map(machineCatalogService::toDto)
                 .toList();
 
         PageResponse<MachineDto> body = PageResponse.<MachineDto>builder()
@@ -125,7 +124,7 @@ public class MachineAdminController {
     @Operation(summary = "Get a single machine by code")
     public ResponseEntity<MachineDto> getMachine(@PathVariable String machineCode) {
         return machineRepository.findByMachineCode(machineCode)
-                .map(m -> ResponseEntity.ok(machineService.toDto(m)))
+                .map(m -> ResponseEntity.ok(machineCatalogService.toDto(m)))
                 .orElse(ResponseEntity.notFound().build());
     }
 
@@ -134,7 +133,7 @@ public class MachineAdminController {
     public ResponseEntity<MachineDto> updateMachine(
             @PathVariable String machineCode,
             @Valid @RequestBody UpdateMachineRequest request) {
-        return ResponseEntity.ok(machineService.updateMachine(machineCode, request));
+        return ResponseEntity.ok(machineCatalogService.updateMachine(machineCode, request));
     }
 
     @DeleteMapping("/{machineCode}")
@@ -142,7 +141,7 @@ public class MachineAdminController {
     public ResponseEntity<Void> deleteMachine(@PathVariable String machineCode) {
         // Revoke the bound ESP32's EMQX identity first so it cannot outlive the machine.
         provisioningService.unpair(machineCode);
-        machineService.deleteMachine(machineCode);
+        machineCatalogService.deleteMachine(machineCode);
         return ResponseEntity.noContent().build();
     }
 

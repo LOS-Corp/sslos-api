@@ -70,8 +70,4 @@ public class Transaction {
         reservation.setTransaction(this);
     }
 
-    public void removeMachineReservation(MachineReservation reservation) {
-        machineReservations.remove(reservation);
-        reservation.setTransaction(null);
     }
-}

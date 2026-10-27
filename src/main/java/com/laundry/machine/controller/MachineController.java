@@ -6,19 +6,20 @@ import com.laundry.machine.repository.DeviceCommandRepository;
 import com.laundry.machine.repository.DeviceEventRepository;
 import com.laundry.machine.repository.MachineRepository;
 import com.laundry.machine.service.DeviceCommandService;
-import com.laundry.machine.service.MachineService;
+import com.laundry.machine.service.MachineCatalogService;
 import com.laundry.machine.service.MachineStartAuthorizationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import com.laundry.shared.security.CurrentUser;
+import com.laundry.user.service.BranchScopeService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -41,8 +42,11 @@ public class MachineController {
     private final DeviceEventRepository deviceEventRepository;
     private final DeviceCommandRepository deviceCommandRepository;
     private final DeviceCommandService deviceCommandService;
-    private final MachineService machineService;
+    private final MachineCatalogService machineCatalogService;
     private final MachineStartAuthorizationService startAuthorizationService;
+    private final BranchScopeService branchScope;
+
+    private static final int MAX_PAGE_SIZE = 100;
 
     /**
      * Base URL for static machine QR codes.
@@ -66,7 +70,7 @@ public class MachineController {
     @GetMapping("/{machineCode}")
     @Operation(summary = "Get machine details by machine code (aggregates static config + latest runtime snapshot)")
     public ResponseEntity<MachineDto> getMachine(@PathVariable String machineCode) {
-        return machineService.toDetailDto(machineCode)
+        return machineCatalogService.toDetailDto(machineCode)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -110,7 +114,7 @@ public class MachineController {
     @GetMapping("/{machineCode}/status")
     @Operation(summary = "Get current machine status and latest runtime snapshot")
     public ResponseEntity<MachineDto> getMachineStatus(@PathVariable String machineCode) {
-        return machineService.toDetailDto(machineCode)
+        return machineCatalogService.toDetailDto(machineCode)
                 .map(ResponseEntity::ok)
                 .orElse(ResponseEntity.notFound().build());
     }
@@ -129,12 +133,8 @@ public class MachineController {
     @PostMapping("/check-in")
     @Operation(summary = "QR check-in: validate reservation + payment, create START authorization, publish AUTHORIZE_START over MQTT")
     public ResponseEntity<CheckInResponse> checkIn(@Valid @RequestBody CheckInRequest request,
-                                                  Authentication authentication) {
-        UUID userId = extractUserId(authentication);
-        if (userId == null) {
-            return ResponseEntity.status(401).build();
-        }
-        CheckInResponse response = startAuthorizationService.checkIn(request.machineCode(), userId);
+                                                  CurrentUser customer) {
+        CheckInResponse response = startAuthorizationService.checkIn(request.machineCode(), customer.id());
         return ResponseEntity.ok(response);
     }
 
@@ -148,12 +148,8 @@ public class MachineController {
     @GetMapping("/check-in/{authorizationId}")
     @Operation(summary = "Get current authorization status (customer polling)")
     public ResponseEntity<AuthorizationStatusResponse> getAuthorizationStatus(@PathVariable UUID authorizationId,
-                                                                             Authentication authentication) {
-        UUID userId = extractUserId(authentication);
-        if (userId == null) {
-            return ResponseEntity.status(401).build();
-        }
-        return startAuthorizationService.findOwnedByUser(authorizationId, userId)
+                                                                             CurrentUser customer) {
+        return startAuthorizationService.findOwnedByUser(authorizationId, customer.id())
                 .map(a -> ResponseEntity.ok(AuthorizationStatusResponse.builder()
                         .authorizationId(a.getId())
                         .reservationId(a.getReservationId())
@@ -177,13 +173,16 @@ public class MachineController {
     public ResponseEntity<Page<DeviceEventDto>> getEvents(
             @PathVariable String machineCode,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            CurrentUser viewer) {
 
+        int pageSize = Math.clamp(size, 1, MAX_PAGE_SIZE);
         return machineRepository.findByMachineCode(machineCode)
                 .map(machine -> {
+                    branchScope.require(viewer, machine.getBranchId());
                     Page<DeviceEvent> events = deviceEventRepository
                             .findByMachineIdOrderByCreatedAtDesc(machine.getId(),
-                                    PageRequest.of(page, size, Sort.by("createdAt").descending()));
+                                    PageRequest.of(Math.max(page, 0), pageSize, Sort.by("createdAt").descending()));
                     return ResponseEntity.ok(events.map(this::toEventDto));
                 })
                 .orElse(ResponseEntity.notFound().build());
@@ -196,58 +195,38 @@ public class MachineController {
     public ResponseEntity<Page<DeviceCommandDto>> getCommands(
             @PathVariable String machineCode,
             @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @RequestParam(defaultValue = "20") int size,
+            CurrentUser viewer) {
 
+        int pageSize = Math.clamp(size, 1, MAX_PAGE_SIZE);
         return machineRepository.findByMachineCode(machineCode)
                 .map(machine -> {
+                    branchScope.require(viewer, machine.getBranchId());
                     Page<DeviceCommand> commands = deviceCommandRepository
                             .findByMachineIdOrderByCreatedAtDesc(machine.getId(),
-                                    PageRequest.of(page, size));
+                                    PageRequest.of(Math.max(page, 0), pageSize));
                     return ResponseEntity.ok(commands.map(this::toCmdDto));
                 })
                 .orElse(ResponseEntity.notFound().build());
     }
 
     /**
-     * Issue a command to a machine.
-     *
-     * <p>Security:
-     * <ul>
-     *   <li>User must be authenticated (JWT).
-     *   <li>RESET: STAFF, MANAGER, ADMIN only (enforced in Phase 9).
-     *   <li>START: authenticated customer with valid booking, or STAFF+.
-     * </ul>
-     *
-     * <p>The command is validated, persisted, then published to EMQX.
-     * The response includes the commandId for tracking ACK status.
+     * Issue a command to a machine. Who may send which command is decided by
+     * {@code RemoteCommandAuthorizer} (FR-ACT-06, BR-25); the device ACK arrives asynchronously,
+     * so the response is 202 with the PENDING command to poll.
      */
     @PostMapping("/{machineCode}/commands")
-    @Operation(summary = "Issue a command to a machine (START, STOP, RESET, STATUS, TARE)")
-    public ResponseEntity<DeviceCommandDto> issueCommand(
-            @PathVariable String machineCode,
-            @Valid @RequestBody DeviceCommandRequest request,
-            Authentication authentication) {
-
-        // Extract user ID from JWT principal (email → user lookup deferred to Phase 9)
-        // For now, use a placeholder UUID — Phase 9 wires the real user lookup
-        UUID userId = extractUserId(authentication);
-
-        log.info("Command request: machineCode={}, command={}, user={}", machineCode, request.getCommand(), userId);
-
-        DeviceCommandDto result = deviceCommandService.issueCommand(machineCode, request, userId);
-        return ResponseEntity.ok(result);
+    @Operation(summary = "Issue a command to a machine (START, STOP, PAUSE, RESUME, RESET, STATUS, TARE)")
+    public ResponseEntity<DeviceCommandDto> issueCommand(@PathVariable String machineCode,
+                                                         @Valid @RequestBody DeviceCommandRequest request,
+                                                         CurrentUser actor) {
+        return ResponseEntity.accepted().body(deviceCommandService.issueCommand(machineCode, request, actor));
     }
-
-    // ── Admin CRUD (Slice 1) ─────────────────────────────────────────────────
-    //
-    // Admin endpoints live in {@code MachineAdminController} with its own
-    // @RequestMapping("/api/admin/machines"). Keep them out of this class to
-    // avoid the class-level "/api/machines" prefix getting prepended.
 
     // ── Mapper helpers ────────────────────────────────────────────────────────
 
     private MachineDto toDto(Machine m) {
-        MachineDto dto = machineService.toDto(m);
+        MachineDto dto = machineCatalogService.toDto(m);
         dto.flattenRuntime();
         return dto;
     }
@@ -280,22 +259,5 @@ public class MachineController {
                 .timeoutAt(c.getTimeoutAt())
                 .createdAt(c.getCreatedAt())
                 .build();
-    }
-
-    /**
-     * Extract authenticated user ID from the JWT principal.
-     * The {@link com.laundry.auth.security.JwtAuthenticationFilter} puts
-     * the JWT subject (which is the user UUID) into {@code Authentication.getName()}.
-     */
-    private UUID extractUserId(Authentication authentication) {
-        if (authentication == null) return null;
-        String principal = authentication.getName();
-        if (principal == null || principal.isBlank()) return null;
-        try {
-            return UUID.fromString(principal.trim());
-        } catch (IllegalArgumentException e) {
-            log.warn("Authenticated principal is not a UUID: {}", principal);
-            return null;
-        }
     }
 }

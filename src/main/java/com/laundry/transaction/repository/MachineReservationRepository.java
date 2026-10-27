@@ -11,7 +11,6 @@ import org.springframework.stereotype.Repository;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -28,7 +27,7 @@ public interface MachineReservationRepository extends JpaRepository<MachineReser
           AND a.occupied_from < :endTime
           AND a.occupied_until > :startTime
           AND (b.status <> 'HELD' OR b.hold_expires_at > NOW())
-          AND b.status NOT IN ('CANCELLED', 'EXPIRED', 'COMPLETED', 'PAYMENT_REVIEW_REQUIRED')
+          AND booking_holds_resources(b.status)
         """, nativeQuery = true)
     long countScheduledConflicts(@Param("machineId") UUID machineId,
                                  @Param("startTime") OffsetDateTime startTime,

@@ -1,5 +1,9 @@
 package com.laundry.booking.service;
 
+import com.laundry.shared.error.ErrorCode;
+
+import com.laundry.shared.error.BusinessException;
+
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.laundry.booking.dto.MachineProgramDtos;
@@ -8,11 +12,9 @@ import com.laundry.booking.dto.MachineProgramDtos.MachineProgramRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
@@ -59,10 +61,10 @@ public class MachineProgramService {
     @Transactional
     public MachineProgramDto create(MachineProgramRequest request) {
         if (request.code() == null || request.machineType() == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mã và loại máy là bắt buộc");
+            throw BusinessException.of(ErrorCode.VALIDATION_FAILED, "Mã và loại máy là bắt buộc");
         }
         if (find(request.code()).isPresent()) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT, "Mã chương trình đã tồn tại");
+            throw BusinessException.of(ErrorCode.CONFLICT, "Mã chương trình đã tồn tại");
         }
         validate(request.machineType(), request);
         lockType(request.machineType());
@@ -85,16 +87,15 @@ public class MachineProgramService {
     @Transactional
     public MachineProgramDto update(String code, MachineProgramRequest request) {
         MachineProgramDto existing = find(code)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy chương trình"));
+                .orElseThrow(() -> BusinessException.of(ErrorCode.NOT_FOUND, "Không tìm thấy chương trình"));
         String type = existing.machineType();
         validate(type, request);
         lockType(type);
         if (existing.defaultProgram() && (!request.defaultProgram() || !request.active())) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Chọn chương trình mặc định khác trước khi bỏ mặc định hoặc tắt chương trình này");
+            throw BusinessException.of(ErrorCode.CONFLICT, "Chọn chương trình mặc định khác trước khi bỏ mặc định hoặc tắt chương trình này");
         }
         if (request.defaultProgram() && !request.active()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Chương trình mặc định phải đang bật");
+            throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Chương trình mặc định phải đang bật");
         }
         if (request.defaultProgram()) clearDefault(type);
         boolean washer = "WASHER".equals(type);
@@ -132,8 +133,7 @@ public class MachineProgramService {
             MachineProgramDto program = find(requested.trim().toUpperCase())
                     .filter(MachineProgramDto::active)
                     .filter(candidate -> candidate.machineType().equals(type))
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                            "Chương trình không hợp lệ cho " + ("WASHER".equals(type) ? "máy giặt" : "máy sấy")));
+                    .orElseThrow(() -> BusinessException.of(ErrorCode.INVALID_REQUEST, "Chương trình không hợp lệ cho " + ("WASHER".equals(type) ? "máy giặt" : "máy sấy")));
             programs.add(program);
         }
         return programs;
@@ -246,19 +246,17 @@ public class MachineProgramService {
     private static void validate(String machineType, MachineProgramRequest request) {
         if ("WASHER".equals(machineType)) {
             if (request.drumRunSeconds() == null || request.drumPauseSeconds() == null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Máy giặt cần thời gian quay và nghỉ của lồng");
+                throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Máy giặt cần thời gian quay và nghỉ của lồng");
             }
         } else if ("DRYER".equals(machineType)) {
             if (request.heatPercent() == null || request.uvEnabled() == null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Máy sấy cần mức nhiệt và chế độ UV");
+                throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Máy sấy cần mức nhiệt và chế độ UV");
             }
             if (request.finishMinutes() < 1) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Máy sấy cần ít nhất 1 phút làm nguội");
+                throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Máy sấy cần ít nhất 1 phút làm nguội");
             }
         } else {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Loại máy không hợp lệ");
+            throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Loại máy không hợp lệ");
         }
     }
 

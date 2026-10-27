@@ -1,5 +1,6 @@
 package com.laundry.booking.service;
 
+import com.laundry.booking.domain.SlotPlanner;
 import com.laundry.booking.dto.BookingDtos;
 import org.junit.jupiter.api.Test;
 
@@ -61,10 +62,10 @@ class BookingResourceAvailabilityTest {
     void washerMustRemainAvailableThroughTransferButDryerCanBeBookedAtTransferEnd() {
         UUID washer = UUID.randomUUID();
         UUID dryer = UUID.randomUUID();
-        List<ScheduledBookingService.AllocationPlan> combo = List.of(
+        List<SlotPlanner.AllocationPlan> combo = List.of(
                 allocation("WASHER", START, TRANSFER_END),
                 allocation("DRYER", TRANSFER_END, DRY_END));
-        Map<String, List<ScheduledBookingService.Resource>> resources = Map.of(
+        Map<String, List<SlotPlanner.Resource>> resources = Map.of(
                 "WASHER", List.of(resource("WASHER", washer)),
                 "DRYER", List.of(resource("DRYER", dryer)));
 
@@ -76,12 +77,12 @@ class BookingResourceAvailabilityTest {
 
     @Test
     void washDryPlanStartsDryerOnlyAfterTransferAndReservesBothResourcesSeparately() {
-        ScheduledBookingService.ServiceConfig config = new ScheduledBookingService.ServiceConfig(
+        SlotPlanner.ServiceConfig config = new SlotPlanner.ServiceConfig(
                 "WASH_DRY", "Wash and dry", "SELF_SERVICE", "", 35, 45,
                 5, 5, 10, 0, BigDecimal.ONE, UUID.randomUUID(), "UTC",
                 LocalTime.MIN, LocalTime.MAX, List.of("WASHER", "DRYER"), 0);
 
-        ScheduledBookingService.SlotPlan plan = ScheduledBookingService.buildPlan(config, START);
+        SlotPlanner.SlotPlan plan = SlotPlanner.buildPlan(config, START);
 
         assertEquals(2, plan.allocationPlans().size());
         assertEquals(START, plan.allocationPlans().get(0).from());
@@ -92,12 +93,12 @@ class BookingResourceAvailabilityTest {
 
     @Test
     void washOnlyPlanKeepsBackendConfiguredDurationAtMinutePrecision() {
-        ScheduledBookingService.ServiceConfig config = new ScheduledBookingService.ServiceConfig(
+        SlotPlanner.ServiceConfig config = new SlotPlanner.ServiceConfig(
                 "WASH_ONLY", "Wash", "SELF_SERVICE", "", 35, 0,
                 5, 5, 0, 0, BigDecimal.ONE, UUID.randomUUID(), "UTC",
                 LocalTime.MIN, LocalTime.MAX, List.of("WASHER"), 0);
 
-        ScheduledBookingService.SlotPlan plan = ScheduledBookingService.buildPlan(config, START);
+        SlotPlanner.SlotPlan plan = SlotPlanner.buildPlan(config, START);
 
         assertEquals(CHECK_IN_END, plan.checkInEnd());
         assertEquals(WASH_END, plan.primaryEnd());
@@ -106,22 +107,22 @@ class BookingResourceAvailabilityTest {
 
     @Test
     void treatsAdjacentReservationsAsNonOverlapping() {
-        assertFalse(ScheduledBookingService.intervalsOverlap(
+        assertFalse(SlotPlanner.intervalsOverlap(
                 START, WASH_END, WASH_END, TRANSFER_END));
-        assertTrue(ScheduledBookingService.intervalsOverlap(
+        assertTrue(SlotPlanner.intervalsOverlap(
                 START, TRANSFER_END, WASH_END, DRY_END));
     }
 
     @Test
     void validatesOneMinutePrecisionWithoutRounding() {
-        assertTrue(ScheduledBookingService.isMinuteAligned(START));
-        assertFalse(ScheduledBookingService.isMinuteAligned(START.plusSeconds(1)));
-        assertFalse(ScheduledBookingService.isMinuteAligned(START.plusNanos(1)));
+        assertTrue(SlotPlanner.isMinuteAligned(START));
+        assertFalse(SlotPlanner.isMinuteAligned(START.plusSeconds(1)));
+        assertFalse(SlotPlanner.isMinuteAligned(START.plusNanos(1)));
     }
 
     @Test
     void returnsContinuousMinuteRangesInsteadOfPredefinedSlotLists() {
-        List<BookingDtos.AvailableStartRange> ranges = ScheduledBookingService.toStartRanges(List.of(
+        List<BookingDtos.AvailableStartRange> ranges = SlotPlanner.toStartRanges(List.of(
                 Instant.parse("2026-10-09T09:12:00Z"),
                 Instant.parse("2026-10-09T09:13:00Z"),
                 Instant.parse("2026-10-09T09:15:00Z")));
@@ -146,22 +147,22 @@ class BookingResourceAvailabilityTest {
     }
 
     private static boolean available(
-            List<ScheduledBookingService.AllocationPlan> allocations,
-            Map<String, List<ScheduledBookingService.Resource>> resources,
-            Map<UUID, List<ScheduledBookingService.OccupiedInterval>> occupied) {
-        return ScheduledBookingService.hasAvailableResourceCombination(allocations, resources, occupied);
+            List<SlotPlanner.AllocationPlan> allocations,
+            Map<String, List<SlotPlanner.Resource>> resources,
+            Map<UUID, List<SlotPlanner.OccupiedInterval>> occupied) {
+        return SlotPlanner.hasAvailableResourceCombination(allocations, resources, occupied);
     }
 
-    private static ScheduledBookingService.AllocationPlan allocation(
+    private static SlotPlanner.AllocationPlan allocation(
             String type, Instant from, Instant until) {
-        return new ScheduledBookingService.AllocationPlan(type, type, from, until);
+        return new SlotPlanner.AllocationPlan(type, type, from, until);
     }
 
-    private static ScheduledBookingService.Resource resource(String type, UUID id) {
-        return new ScheduledBookingService.Resource(type, id);
+    private static SlotPlanner.Resource resource(String type, UUID id) {
+        return new SlotPlanner.Resource(type, id);
     }
 
-    private static ScheduledBookingService.OccupiedInterval occupied(Instant from, Instant until) {
-        return new ScheduledBookingService.OccupiedInterval(from, until);
+    private static SlotPlanner.OccupiedInterval occupied(Instant from, Instant until) {
+        return new SlotPlanner.OccupiedInterval(from, until);
     }
 }

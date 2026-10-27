@@ -1,15 +1,15 @@
 package com.laundry.refund.entity;
 
 /**
- * Refund request status
- * SRS: FR-PAY-08 - Status tracking
+ * Refund lifecycle. APPROVED is not COMPLETED: money has moved only when the refund is COMPLETED
+ * (BR-14). CREATED is kept only for rows written before V41; new requests start in PENDING_APPROVAL.
  */
 public enum RefundStatus {
-    CREATED,           // Staff tạo request
-    PENDING_APPROVAL,  // Chờ Manager duyệt
-    APPROVED,          // Manager đã duyệt
-    REJECTED,          // Manager từ chối
-    PROCESSING,        // Đang xử lý refund
-    COMPLETED,         // Hoàn thành
-    FAILED             // Thất bại
+    CREATED,
+    PENDING_APPROVAL,
+    APPROVED,
+    REJECTED,
+    PROCESSING,
+    COMPLETED,
+    FAILED
 }

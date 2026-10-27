@@ -1,9 +1,9 @@
 package com.laundry.payment.service;
 
 import com.laundry.payment.dto.request.CreatePaymentRequest;
-import com.laundry.payment.dto.request.PaymentCallbackRequest;
 import com.laundry.payment.dto.response.PaymentResponse;
 import com.laundry.payment.entity.Payment;
+import com.laundry.shared.money.Money;
 import com.laundry.payment.entity.PaymentMethod;
 import com.laundry.payment.entity.PaymentStatus;
 import com.laundry.payment.exception.PaymentException;
@@ -21,7 +21,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
@@ -35,6 +35,7 @@ public class PaymentService {
     private final PaymentRepository paymentRepository;
     private final PaymentGateway paymentGateway;
     private final PurchaseService purchaseService;
+    private final WalletPaymentService walletPayments;
     private final ScheduledBookingService scheduledBookingService;
 
     @Value("${app.payment.callback-base-url:http://localhost:8080}")
@@ -72,8 +73,11 @@ public class PaymentService {
         if (transaction.getStatus() != TransactionStatus.PENDING_PAYMENT) {
             throw new PaymentException("Transaction is not in PENDING_PAYMENT status");
         }
-        if (request.getAmount().compareTo(transaction.getTotalAmount()) != 0) {
-            throw new PaymentException("Payment amount does not match transaction total");
+        // FR-PAY-04: the wallet part (if any) is already paid; payOS collects only the remainder.
+        BigDecimal remainder = transaction.getTotalAmount()
+                .subtract(BigDecimal.valueOf(walletPayments.activeWalletPart(request.getTransactionId()).vnd()));
+        if (request.getAmount().compareTo(remainder) != 0) {
+            throw new PaymentException("Payment amount does not match the amount still due");
         }
         try {
             request.getAmount().longValueExact();
@@ -94,7 +98,7 @@ public class PaymentService {
 
         // Payments are online-only: always create the gateway request
         String returnUrl = payosReturnUrl == null || payosReturnUrl.isBlank()
-                ? callbackBaseUrl + "/api/payments/callback/" + payment.getId()
+                ? callbackBaseUrl + "/?paymentId=" + payment.getId()
                 : payosReturnUrl + (payosReturnUrl.contains("?") ? "&" : "?")
                 + "paymentId=" + payment.getId();
         PaymentResult result = paymentGateway.createPayment(payment.getId(), request.getAmount(), returnUrl);
@@ -127,61 +131,37 @@ public class PaymentService {
     public PaymentResponse createBookingPayment(UUID bookingId,
                                                 UUID expectedTransactionId,
                                                 String idempotencyKey,
-                                                UUID customerId) {
+                                                UUID customerId,
+                                                boolean useWallet) {
+        // A repeated checkout returns the payment it already created, even once the booking is confirmed.
+        var previous = paymentRepository.findByIdempotencyKey(idempotencyKey)
+                .or(() -> paymentRepository.findByIdempotencyKey(idempotencyKey + ":wallet"));
+        if (previous.isPresent() && previous.get().getTransactionId().equals(expectedTransactionId)) {
+            ensureCustomerOwnsTransaction(expectedTransactionId, customerId);
+            return toResponse(previous.get());
+        }
         UUID transactionId = scheduledBookingService.prepareCheckout(customerId, bookingId);
         if (!transactionId.equals(expectedTransactionId)) {
             throw new PaymentException("Transaction does not match booking");
         }
         TransactionResponse transaction = purchaseService.getTransaction(transactionId);
+        Money total = Money.of(transaction.getTotalAmount());
+        // FR-PAY-04: wallet credit first; UC-02 5b: a wallet that covers everything confirms without payOS.
+        Money walletPart = useWallet
+                ? walletPayments.payFromWallet(customerId, transactionId, total, idempotencyKey)
+                : walletPayments.activeWalletPart(transactionId);
+        if (walletPart.compareTo(total) >= 0) {
+            confirmTransactionPayment(transactionId);
+            return paymentRepository.findByIdempotencyKey(idempotencyKey + ":wallet")
+                    .map(this::toResponse)
+                    .orElseThrow(() -> new PaymentException("Wallet payment was not recorded"));
+        }
         return createPaymentForCustomer(CreatePaymentRequest.builder()
                 .transactionId(transactionId)
-                .amount(transaction.getTotalAmount())
+                .amount(BigDecimal.valueOf(total.minus(walletPart).vnd()))
                 .paymentMethod(PaymentMethod.ONLINE)
                 .idempotencyKey(idempotencyKey)
                 .build(), customerId);
-    }
-
-    /**
-     * Process payment callback from gateway
-     */
-    @Transactional
-    public PaymentResponse processCallback(UUID paymentId, PaymentCallbackRequest request) {
-        log.info("Processing payment callback: paymentId={}, status={}", paymentId, request.getStatus());
-
-        Payment payment = paymentRepository.findByIdForUpdate(paymentId)
-            .orElseThrow(() -> new PaymentException("Payment not found: " + paymentId));
-
-        // Idempotency check - if already paid, return existing
-        if (payment.getStatus() == PaymentStatus.PAID) {
-            log.info("Payment already processed: paymentId={}", paymentId);
-            return toResponse(payment);
-        }
-
-        // Verify callback
-        if (!paymentGateway.verifyCallback(request.getTransactionId(), request.getSignature())) {
-            throw new PaymentException("Invalid callback signature");
-        }
-
-        // Update payment status
-        if ("SUCCESS".equalsIgnoreCase(request.getStatus())) {
-            payment.markAsPaid(request.getGatewayTransactionId(), request.getMessage());
-            paymentRepository.save(payment);
-
-            // Confirm transaction
-            confirmTransactionPayment(payment.getTransactionId());
-
-            log.info("Payment confirmed: paymentId={}, transactionId={}", paymentId, payment.getTransactionId());
-        } else {
-            payment.markAsFailed(request.getMessage());
-            paymentRepository.save(payment);
-            
-            // Cancel transaction to release resources
-            cancelAssociatedTransaction(payment.getTransactionId());
-            
-            log.info("Payment failed: paymentId={}, reason={}", paymentId, request.getMessage());
-        }
-
-        return toResponse(payment);
     }
 
     /**
@@ -313,6 +293,8 @@ public class PaymentService {
     }
 
     private void cancelAssociatedTransaction(UUID transactionId) {
+        // SC-31: the rest of the payment failed, so the wallet part goes back to the customer.
+        walletPayments.reverse(java.util.List.of(transactionId), "Hoàn phần ví do thanh toán payOS không thành công");
         if (scheduledBookingService.hasScheduledBooking(transactionId)) {
             scheduledBookingService.cancelForPaymentFailure(transactionId);
         } else {

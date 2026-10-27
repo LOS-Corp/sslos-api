@@ -1,6 +1,7 @@
 package com.laundry.machine.service;
 
 import com.laundry.machine.dto.CheckInResponse;
+import com.laundry.machine.domain.CheckInWindowPolicy;
 import com.laundry.machine.entity.*;
 import com.laundry.machine.exception.CheckInRejectedException;
 import com.laundry.machine.exception.MachineNotFoundException;
@@ -10,14 +11,12 @@ import com.laundry.machine.repository.MachineStartAuthorizationRepository;
 import com.laundry.payment.entity.Payment;
 import com.laundry.payment.entity.PaymentStatus;
 import com.laundry.payment.repository.PaymentRepository;
-import com.laundry.mqtt.service.MqttPublisher;
 import com.laundry.transaction.entity.MachineReservation;
 import com.laundry.transaction.entity.ReservationStatus;
 import com.laundry.transaction.entity.Transaction;
 import com.laundry.transaction.repository.MachineReservationRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -27,12 +26,12 @@ import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
+import java.time.ZoneId;
 import java.util.UUID;
 
 /**
@@ -69,33 +68,28 @@ public class MachineStartAuthorizationService {
     private final MachineReservationRepository reservationRepository;
     private final PaymentRepository paymentRepository;
     private final MachineStartAuthorizationRepository authorizationRepository;
-    private final MqttPublisher mqttPublisher;
     private final PlatformTransactionManager transactionManager;
     private final com.laundry.booking.service.BookingLifecycleService bookingLifecycleService;
-    private final com.laundry.booking.service.MachineProgramService programService;
+    private final CheckInWindowPolicy checkInWindowPolicy;
+    private final StartAuthorizationPublisher publisher;
 
-    /**
-     * Explicit constructor with {@code @Lazy} on {@link MqttPublisher} to break
-     * the circular dependency: mqttPublisher → mqttConnectionManager →
-     * mqttMessageRouter → authChannelHandler → this service → mqttPublisher.
-     */
     public MachineStartAuthorizationService(
             MachineRepository machineRepository,
             MachineReservationRepository reservationRepository,
             PaymentRepository paymentRepository,
             MachineStartAuthorizationRepository authorizationRepository,
-            @Lazy MqttPublisher mqttPublisher,
             PlatformTransactionManager transactionManager,
             com.laundry.booking.service.BookingLifecycleService bookingLifecycleService,
-            com.laundry.booking.service.MachineProgramService programService) {
+            CheckInWindowPolicy checkInWindowPolicy,
+            StartAuthorizationPublisher publisher) {
         this.machineRepository = machineRepository;
         this.reservationRepository = reservationRepository;
         this.paymentRepository = paymentRepository;
         this.authorizationRepository = authorizationRepository;
-        this.mqttPublisher = mqttPublisher;
         this.transactionManager = transactionManager;
         this.bookingLifecycleService = bookingLifecycleService;
-        this.programService = programService;
+        this.checkInWindowPolicy = checkInWindowPolicy;
+        this.publisher = publisher;
     }
 
     @Value("${app.machine.start-authorization.ttl-seconds:120}")
@@ -200,31 +194,28 @@ public class MachineStartAuthorizationService {
 
         // 6. Payment must be PAID.
         Transaction tx = reservation.getTransaction();
-        UUID transactionId = tx != null ? tx.getId() : null;
-        if (transactionId != null) {
-            List<Payment> payments =
-                    paymentRepository.findByTransactionIdOrderByCreatedAtDesc(transactionId);
-            boolean paid = payments.stream()
-                    .anyMatch(p -> p.getStatus() == PaymentStatus.PAID);
-            if (!paid) {
-                throw new CheckInRejectedException(
-                        "Payment for this reservation is not confirmed");
-            }
-        } else {
+        if (tx == null || tx.getId() == null) {
             throw new CheckInRejectedException("Reservation has no transaction");
         }
-
-        // 7. Slot window: startTime must be in the past-ish (≤ now+grace) and
-        //    endTime not yet past. Avoids check-in weeks ahead or after the
-        //    reservation has already expired.
-        LocalDateTime now = LocalDateTime.now();
-        if (reservation.getStartTime() != null
-                && reservation.getStartTime().isAfter(now.plusMinutes(15))) {
-            throw new CheckInRejectedException(
-                    "Reservation window has not opened yet");
+        Optional<Payment> paidPayment = paymentRepository.findByTransactionIdOrderByCreatedAtDesc(tx.getId())
+                .stream()
+                .filter(p -> p.getStatus() == PaymentStatus.PAID)
+                .findFirst();
+        if (paidPayment.isEmpty()) {
+            throw new CheckInRejectedException("Payment for this reservation is not confirmed");
         }
-        if (reservation.getEndTime() != null && reservation.getEndTime().isBefore(now)) {
-            throw new CheckInRejectedException("Reservation window has already closed");
+
+        // 7. Check-in window (BR-06, BR-07): T−15 … max(T, PAID) + 10 minutes.
+        //    Reservation and payment times are local wall-clock values of this JVM's zone.
+        ZoneId zone = ZoneId.systemDefault();
+        Instant bookedStart = reservation.getStartTime().atZone(zone).toInstant();
+        Instant paidAt = paidPayment.get().getPaidAt() == null ? null
+                : paidPayment.get().getPaidAt().atZone(zone).toInstant();
+        CheckInWindowPolicy.Window window = checkInWindowPolicy.windowFor(bookedStart, paidAt);
+        switch (window.positionOf(Instant.now())) {
+            case NOT_YET_OPEN -> throw new CheckInRejectedException("Reservation window has not opened yet");
+            case CLOSED -> throw new CheckInRejectedException("Reservation window has already closed");
+            case OPEN -> { }
         }
 
         // 8. Persist the authorization row + publish the MQTT command.
@@ -232,7 +223,7 @@ public class MachineStartAuthorizationService {
         OffsetDateTime expires = created.plusSeconds(authorizationTtlSeconds);
         MachineStartAuthorization auth = MachineStartAuthorization.builder()
                 .reservationId(reservation.getId())
-                .transactionId(transactionId)
+                .transactionId(tx.getId())
                 .userId(userId)
                 .machineId(machine.getId())
                 .machineCode(machineCode)
@@ -249,7 +240,7 @@ public class MachineStartAuthorizationService {
         // and an ACK that beats the commit finds no row, so the authorization
         // stays PENDING and the later START_REQUEST is rejected (BAD_STATUS_PENDING).
         MachineStartAuthorization committed = auth;
-        runAfterCommit(() -> publishAuthorizeStart(machine, committed));
+        runAfterCommit(() -> publisher.authorizeStart(machine, committed));
         return toCheckInResponse(auth);
     }
 
@@ -302,7 +293,7 @@ public class MachineStartAuthorizationService {
         log.info("[{}] Admin test authorization created: id={} admin={}", machineCode, auth.getId(), adminId);
 
         MachineStartAuthorization committed = auth;
-        runAfterCommit(() -> publishAuthorizeStart(machine, committed));
+        runAfterCommit(() -> publisher.authorizeStart(machine, committed));
         return toCheckInResponse(auth);
     }
 
@@ -334,16 +325,7 @@ public class MachineStartAuthorizationService {
                 .orElseThrow(() -> new CheckInRejectedException(
                         "No granted test-run authorization on this machine; unlock START first"));
 
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("type", "PRESS_START");
-        payload.put("commandId", "PRESS-" + auth.getId());
-        payload.put("authorizationId", auth.getId().toString());
-        payload.put("machineId", machine.getMachineCode());
-        String topic = mqttPublisher.buildWasherCommandTopic(machine.getBranchId(), machine.getMachineCode());
-        try {
-            mqttPublisher.publish(topic, new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(payload));
-        } catch (Exception e) {
-            log.error("[{}] Failed to publish PRESS_START for auth={}: {}", machineCode, auth.getId(), e.getMessage(), e);
+        if (!publisher.pressStart(machine, auth)) {
             throw new CheckInRejectedException("Could not send the START press to the machine");
         }
         log.info("[{}] Simulated START press sent for test auth={}", machineCode, auth.getId());
@@ -400,7 +382,7 @@ public class MachineStartAuthorizationService {
             // PENDING/GRANTED/START_PENDING only — terminal rows: re-arm the device with REVOKE.
             log.info("[{}] AUTH_ACK for terminal authorization {} (status={}) — sending REVOKE",
                     machine.getMachineCode(), auth.getId(), auth.getStatus());
-            publishRevokeStart(machine, auth, "TERMINAL_AUTH_ACK");
+            publisher.revokeStart(machine, auth, "TERMINAL_AUTH_ACK");
             return;
         }
 
@@ -441,7 +423,7 @@ public class MachineStartAuthorizationService {
         }
 
         if (auth.getStatus() != MachineStartAuthorizationStatus.GRANTED) {
-            publishStartApproval(machine, auth, startRequestId, null,
+            publisher.startApproval(machine, auth, startRequestId, null,
                     "BAD_STATUS_" + auth.getStatus(), bootId);
             // A START_REQUEST for a non-GRANTED row must terminate the
             // authorization — otherwise the firmware sees a non-APPROVED
@@ -458,7 +440,7 @@ public class MachineStartAuthorizationService {
         }
         if (bootId != null && auth.getDeviceBootId() != null
                 && !bootId.equals(auth.getDeviceBootId())) {
-            publishStartApproval(machine, auth, startRequestId, null,
+            publisher.startApproval(machine, auth, startRequestId, null,
                     "BOOT_ID_MISMATCH", bootId);
             // ESP32 reboot → invalidate the row so the next scan creates a fresh auth.
             revokeAndCommitInNewTx(auth.getId(), "BOOT_ID_MISMATCH",
@@ -470,13 +452,13 @@ public class MachineStartAuthorizationService {
             // Compensate: revoke locally so the next check-in is clean.
             revokeAndCommitInNewTx(auth.getId(), "EXPIRED_AT_START",
                     "Authorization expired before START");
-            publishStartApproval(machine, auth, startRequestId, null,
+            publisher.startApproval(machine, auth, startRequestId, null,
                     "EXPIRED", bootId);
             throw new StaleAuthorizationException(authorizationId,
                     "Authorization expired before START was processed");
         }
         if (machine.getStatus() == MachineStatus.RUNNING) {
-            publishStartApproval(machine, auth, startRequestId, null,
+            publisher.startApproval(machine, auth, startRequestId, null,
                     "MACHINE_ALREADY_RUNNING", bootId);
             throw new StaleAuthorizationException(authorizationId,
                     "Machine already running");
@@ -495,7 +477,7 @@ public class MachineStartAuthorizationService {
         // Publish approval after commit so the device's STARTED reply sees
         // START_PENDING (otherwise handleStarted ignores it and the row never
         // reaches CONSUMED).
-        runAfterCommit(() -> publishStartApproval(machine, auth, startRequestId, runId, "APPROVED", bootId));
+        runAfterCommit(() -> publisher.startApproval(machine, auth, startRequestId, runId, "APPROVED", bootId));
         return runId;
     }
 
@@ -614,7 +596,7 @@ public class MachineStartAuthorizationService {
         // even if its local timer lags.
         for (MachineStartAuthorization a : stale) {
             machineRepository.findById(a.getMachineId()).ifPresent(m ->
-                    publishRevokeStart(m, a, "AUTO_EXPIRED"));
+                    publisher.revokeStart(m, a, "AUTO_EXPIRED"));
         }
         log.info("Sweep expired: {} row(s) flipped to EXPIRED", n);
         return n;
@@ -684,7 +666,7 @@ public class MachineStartAuthorizationService {
         authorizationRepository.save(auth);
         if (publishDeviceRevoke) {
             machineRepository.findById(auth.getMachineId()).ifPresent(m ->
-                    publishRevokeStart(m, auth, reason));
+                    publisher.revokeStart(m, auth, reason));
         }
         log.info("Authorization {} → REVOKED (reason={})", auth.getId(), auth.getRevokeReason());
     }
@@ -716,7 +698,7 @@ public class MachineStartAuthorizationService {
                     a.setRevokeReason(reason + (detail != null ? ": " + detail : ""));
                     authorizationRepository.save(a);
                     machineRepository.findById(a.getMachineId())
-                            .ifPresent(m -> publishRevokeStart(m, a, reason));
+                            .ifPresent(m -> publisher.revokeStart(m, a, reason));
                     log.info("Authorization {} → REVOKED in new tx (reason={})", a.getId(), a.getRevokeReason());
                 }
             });
@@ -736,74 +718,9 @@ public class MachineStartAuthorizationService {
         }
     }
 
-    private void publishAuthorizeStart(Machine machine, MachineStartAuthorization auth) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("type", "AUTHORIZE_START");
-        String commandId = "AUTH-" + auth.getId();
-        payload.put("commandId", commandId);
-        payload.put("authorizationId", auth.getId().toString());
-        if (auth.getReservationId() != null) payload.put("reservationId", auth.getReservationId().toString());
-        if (auth.isTestRun()) payload.put("testRun", true);
-        payload.put("machineId", machine.getMachineCode());
-        payload.put("expiresInSeconds", authorizationTtlSeconds);
-        payload.put("issuedAt", OffsetDateTime.now().toString());
-        // The program the booking paid for (test runs: the default). Without
-        // one the firmware runs its built-in default program.
-        if (machine.getType() != null) {
-            programService.devicePayload(auth.getTransactionId(), machine.getType().name())
-                    .ifPresent(program -> payload.put("program", program));
-        }
-        String topic = mqttPublisher.buildWasherCommandTopic(machine.getBranchId(), machine.getMachineCode());
-        try {
-            mqttPublisher.publish(topic, new com.fasterxml.jackson.databind.ObjectMapper()
-                    .writeValueAsString(payload));
-        } catch (Exception e) {
-            log.error("[{}] Failed to publish AUTHORIZE_START for auth={}: {}",
-                    machine.getMachineCode(), auth.getId(), e.getMessage(), e);
-        }
-    }
-
-    private void publishStartApproval(Machine machine,
-                                      MachineStartAuthorization auth,
-                                      String startRequestId,
-                                      UUID runId,
-                                      String result,
-                                      String bootId) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("type", "START_APPROVAL");
-        payload.put("commandId", "STARTAPP-" + auth.getId());
-        payload.put("authorizationId", auth.getId().toString());
-        payload.put("startRequestId", startRequestId);
-        if (runId != null) payload.put("runId", runId.toString());
-        payload.put("result", result);
-        payload.put("bootId", bootId);
-        payload.put("validForMs", 5000);
-        String topic = mqttPublisher.buildWasherCommandTopic(machine.getBranchId(), machine.getMachineCode());
-        try {
-            mqttPublisher.publish(topic, new com.fasterxml.jackson.databind.ObjectMapper()
-                    .writeValueAsString(payload));
-        } catch (Exception e) {
-            log.error("[{}] Failed to publish START_APPROVAL for auth={}: {}",
-                    machine.getMachineCode(), auth.getId(), e.getMessage(), e);
-        }
-    }
-
-    private void publishRevokeStart(Machine machine, MachineStartAuthorization auth, String reason) {
-        Map<String, Object> payload = new LinkedHashMap<>();
-        payload.put("type", "REVOKE_START");
-        payload.put("commandId", "REVOKE-" + auth.getId());
-        payload.put("authorizationId", auth.getId().toString());
-        payload.put("reason", reason);
-        String topic = mqttPublisher.buildWasherCommandTopic(machine.getBranchId(), machine.getMachineCode());
-        try {
-            mqttPublisher.publish(topic, new com.fasterxml.jackson.databind.ObjectMapper()
-                    .writeValueAsString(payload));
-        } catch (Exception e) {
-            log.error("[{}] Failed to publish REVOKE_START for auth={}: {}",
-                    machine.getMachineCode(), auth.getId(), e.getMessage(), e);
-        }
-    }
-
+    
+    
+    
     private CheckInResponse toCheckInResponse(MachineStartAuthorization a) {
         long remaining = Math.max(0,
                 java.time.Duration.between(OffsetDateTime.now(), a.getExpiresAt()).getSeconds());

@@ -1,6 +1,6 @@
 package com.laundry.transaction.service;
 
-import com.laundry.transaction.dto.request.CreatePurchaseRequest;
+import com.laundry.shared.scheduling.JobLock;
 import com.laundry.transaction.dto.response.TransactionResponse;
 import com.laundry.transaction.entity.*;
 import com.laundry.transaction.exception.TransactionException;
@@ -12,18 +12,14 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * Core Purchase Service - orchestrates all purchase flows
- * 
- * This service is used by:
- * - Mobile Purchase (MF-01)
- * - Kiosk Purchase (MF-02)
- * - Staff Counter Purchase (MF-03)
+ * Transaction (order envelope) lifecycle used by the payment flow: read, confirm after payment,
+ * cancel, and expire unpaid transactions. Purchases are created only through bookings
+ * ({@code /api/bookings/holds}); the old Mobile/Kiosk/Staff purchase endpoints were removed (SC-27).
  */
 @Service
 @RequiredArgsConstructor
@@ -31,6 +27,7 @@ import java.util.UUID;
 public class PurchaseService {
 
     private final TransactionRepository transactionRepository;
+    private final JobLock jobLock;
     private final MachineReservationService machineReservationService;
     private final LaundryOrderService laundryOrderService;
 
@@ -39,110 +36,6 @@ public class PurchaseService {
 
     @Value("${app.transaction.expiration-batch:100}")
     private int transactionExpirationBatch;
-
-    /**
-     * Create a new purchase transaction
-     * 
-     * For SELF_SERVICE: Creates transaction + machine reservation
-     * For LAUNDRY_SERVICE: Creates transaction + laundry order + drop-off locker reservation
-     */
-    @Transactional
-    public TransactionResponse createPurchase(CreatePurchaseRequest request) {
-        log.info("Creating purchase: customerId={}, serviceType={}", 
-                 request.getCustomerId(), request.getServiceType());
-
-        // Validate service type specific requirements
-        if (request.getServiceType() == ServiceType.SELF_SERVICE) {
-            if (request.getMachineId() == null) {
-                throw new TransactionException("Machine ID is required for SELF_SERVICE");
-            }
-        }
-
-        if (request.getServiceType() == ServiceType.LAUNDRY_SERVICE) {
-            if (request.getCustomerName() == null || request.getCustomerName().isBlank()) {
-                throw new TransactionException("Customer name is required for LAUNDRY_SERVICE");
-            }
-        }
-
-        // Calculate expiration time
-        LocalDateTime expiresAt = LocalDateTime.now().plusMinutes(transactionExpirationMinutes);
-
-        // Calculate total amount
-        BigDecimal totalAmount = calculateAmount(request);
-
-        // Create transaction
-        Transaction transaction = Transaction.builder()
-            .customerId(request.getCustomerId())
-            .serviceType(request.getServiceType())
-            .totalAmount(totalAmount)
-            .status(TransactionStatus.PENDING_PAYMENT)
-            .expiresAt(expiresAt)
-            .build();
-
-        transaction = transactionRepository.save(transaction);
-        log.info("Transaction created: id={}, amount={}, expiresAt={}", 
-                 transaction.getId(), totalAmount, expiresAt);
-
-        // Handle based on service type
-        switch (request.getServiceType()) {
-            case SELF_SERVICE -> handleSelfService(transaction, request);
-            case LAUNDRY_SERVICE -> handleLaundryService(transaction, request);
-        }
-
-        return toResponse(transaction);
-    }
-
-    /**
-     * Handle SELF_SERVICE purchase - creates machine reservation
-     */
-    private void handleSelfService(Transaction transaction, CreatePurchaseRequest request) {
-        // Check machine availability
-        LocalDateTime startTime = LocalDateTime.now();
-        machineReservationService.checkMachineAvailability(
-            request.getMachineId(), startTime, null
-        );
-
-        // Create temporary reservation
-        MachineReservation reservation = machineReservationService.createTemporaryReservation(
-            transaction,
-            request.getMachineId(),
-            startTime,
-            transaction.getExpiresAt()
-        );
-
-        transaction.addMachineReservation(reservation);
-        log.info("Machine reservation created: transactionId={}, machineId={}, reservationId={}",
-                 transaction.getId(), request.getMachineId(), reservation.getId());
-    }
-
-    /**
-     * Handle LAUNDRY_SERVICE purchase - creates laundry order + locker reservation
-     */
-    private void handleLaundryService(Transaction transaction, CreatePurchaseRequest request) {
-        // Create laundry order with drop-off locker reservation
-        LaundryServiceOrder order = laundryOrderService.createOrder(
-            transaction,
-            request.getCustomerName(),
-            request.getCustomerPhone(),
-            request.getServiceNotes(),
-            request.getEstimatedWeight(),
-            null // Locker ID - can be added later when locker management is ready
-        );
-
-        transaction.setLaundryServiceOrder(order);
-        log.info("Laundry order created: transactionId={}, orderId={}",
-                 transaction.getId(), order.getId());
-    }
-
-    /**
-     * Calculate total amount based on service type
-     */
-    private BigDecimal calculateAmount(CreatePurchaseRequest request) {
-        return switch (request.getServiceType()) {
-            case SELF_SERVICE -> new BigDecimal("20.00"); // Fixed price for now
-            case LAUNDRY_SERVICE -> laundryOrderService.calculatePrice(request.getEstimatedWeight());
-        };
-    }
 
     /**
      * Get transaction by ID
@@ -260,6 +153,9 @@ public class PurchaseService {
     @Scheduled(fixedDelayString = "${app.transaction.expiration-interval-ms:60000}")
     @Transactional
     public void expireOldTransactions() {
+        if (!jobLock.tryLockForTransaction("transaction-expiry")) {
+            return;
+        }
         long startNs = System.nanoTime();
         LocalDateTime now = LocalDateTime.now();
 

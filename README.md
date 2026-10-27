@@ -23,6 +23,19 @@ Web App / Mobile / Kiosk / Staff Dashboard
 
 ---
 
+## Architecture decisions and quality gates
+
+- Decisions: [docs/adr](docs/adr/README.md) (modular monolith, allocation constraint, identity and scope,
+  wallet ledger, pure policies, error model, after-commit MQTT, cluster-safe jobs, real-PostgreSQL tests).
+- `./mvnw verify` runs unit tests (Surefire), integration tests `*IT` on PostgreSQL 16 via Testcontainers
+  (Failsafe, needs Docker), 5 ArchUnit rules and a JaCoCo gate (≥ 80 % lines on the money and time rules).
+- Every error is `ApiError {timestamp, status, message, fields, code, messageCode, traceId}`; send or read
+  `X-Trace-Id` to match a request with its log lines.
+- Schema changes only through Flyway (`ddl-auto=validate`). `scripts/generate-database-sql.sh` rebuilds the
+  `database.sql` snapshot at the repo root.
+
+---
+
 ## Prerequisites
 
 - Java 21
@@ -158,13 +171,16 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/machines/WM001/commands" `
   -ContentType "application/json" `
   -Body '{"command":"START","bookingId":"your-booking-uuid"}'
 
-# Issue ESTOP (emergency, no booking needed)
+# Operator override (Staff of the branch, Owner or Admin): a reason is mandatory (BR-25)
 Invoke-RestMethod -Uri "http://localhost:8080/api/machines/WM001/commands" `
   -Method POST `
   -Headers @{Authorization="Bearer $token"} `
   -ContentType "application/json" `
-  -Body '{"command":"ESTOP"}'
+  -Body '{"command":"STOP","reason":"Customer reported a noise"}'
 ```
+
+Commands are accepted (`202`) as `PENDING` and published to MQTT after the transaction commits;
+known commands are START, STOP, CANCEL, PAUSE, RESUME, RESET, STATUS, TARE.
 
 ---
 
@@ -354,8 +370,14 @@ When ready to add reliable command delivery:
 
 ## Security Notes
 
-- JWT tokens expire in 15 minutes (refresh tokens: 7 days).
-- MQTT credentials are **never** exposed to frontend clients.
-- Machine GET endpoints are public (kiosk display use case).
-- Machine POST/command endpoints require JWT authentication.
-- `ESTOP` and `RESET` should be restricted to `ROLE_STAFF+` in Phase 9.
+- Four roles: ADMIN, OWNER, STAFF, CUSTOMER (no MANAGER). The Owner manages every branch; Staff only
+  the branches in `branch_assignments`. Matrix: `task/09_PHAN_QUYEN_4_VAI_TRO.md` (repo root).
+- `SecurityConfig` denies every endpoint that is not listed (`anyRequest().denyAll()`).
+- Identity always comes from the JWT; no request body carries a user or approver id.
+- JWT tokens expire in 15 minutes (refresh tokens: 7 days, rotated). Five wrong passwords in 15 minutes lock
+  the login for 15 minutes (429).
+- Machine status reads are public (kiosk display). Event and command history need Staff (own branch), Owner or Admin.
+- Customers may only STOP/PAUSE/RESUME their own running session; operator overrides need a reason and are audited.
+- STOMP `/ws`: anonymous viewers may watch `/topic/machines/**`; branch topics need a JWT in scope.
+- MQTT credentials are **never** exposed to frontend clients; each ESP32 has its own EMQX account.
+- `prod` profile refuses development secrets, the mock payment gateway and disables Swagger.

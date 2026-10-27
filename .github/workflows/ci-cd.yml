@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, dev]
   workflow_dispatch:
 
 env:
@@ -15,26 +15,8 @@ env:
 
 jobs:
   test:
-    name: Test
+    name: Test (PostgreSQL via Testcontainers)
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_DB: laundry
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd="pg_isready -U postgres -d laundry"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-    env:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://localhost:5432/laundry
-      SPRING_DATASOURCE_USERNAME: postgres
-      SPRING_DATASOURCE_PASSWORD: postgres
     steps:
       - uses: actions/checkout@v4
       - name: Make Maven Wrapper executable
@@ -45,8 +27,17 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      - name: Run tests
-        run: ./mvnw -B test
+      # verify = unit + integration tests (Testcontainers) + ArchUnit + JaCoCo coverage gate
+      - name: Build and test
+        run: ./mvnw -B verify
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            target/surefire-reports
+            target/site/jacoco
 
   image:
     name: Build and publish image
