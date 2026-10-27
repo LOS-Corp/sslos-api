@@ -160,7 +160,7 @@ public class BookingAvailabilityService {
         }
 
         Map<UUID, List<OccupiedInterval>> occupiedByResource =
-                queries.occupiedIntervals(branchId, zone, dayStart, queryEnd, resourcesById, config.bufferMinutes());
+                queries.occupiedIntervals(branchId, dayStart, queryEnd, resourcesById, config.bufferMinutes());
         List<AvailabilityInterval> unavailableIntervals = unavailableIntervals(
                 branchId, config, dayStart, dayEnd, occupiedByResource, resourcesById);
         Map<UUID, BookingDtos.TimelineResource> timelineResources = new java.util.LinkedHashMap<>();
@@ -227,7 +227,7 @@ public class BookingAvailabilityService {
             for (int i = 0; i < config.requirements().size(); i++) {
                 AllocationPlan allocation = plan.allocationPlans().get(i);
                 candidates.add(queries.resourcesFor(config.branchId(), config.requirements().get(i)).stream()
-                        .filter(resource -> !queries.resourceBusy(resource, allocation, null, null,
+                        .filter(resource -> !queries.resourceBusy(resource, allocation, null,
                                 config.bufferMinutes()))
                         .toList());
             }
@@ -314,7 +314,7 @@ public class BookingAvailabilityService {
                 .max(Comparator.naturalOrder())
                 .orElse(lastStart);
         Map<UUID, List<OccupiedInterval>> occupied = queries.occupiedIntervals(
-                branchId, zone, firstStart, queryEnd, resourcesById, config.bufferMinutes());
+                branchId, firstStart, queryEnd, resourcesById, config.bufferMinutes());
 
         // Every whole minute in the window whose service fits the opening hours.
         boolean locker = "ASSISTED_LOCKER".equals(config.mode());

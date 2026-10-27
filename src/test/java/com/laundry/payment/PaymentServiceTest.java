@@ -14,7 +14,7 @@ import com.laundry.payment.service.WalletPaymentService;
 import com.laundry.shared.money.Money;
 import com.laundry.transaction.dto.response.TransactionResponse;
 import com.laundry.transaction.entity.TransactionStatus;
-import com.laundry.transaction.service.PurchaseService;
+import com.laundry.transaction.service.TransactionQueryService;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -34,12 +34,12 @@ class PaymentServiceTest {
     void rejectsPaymentAmountThatDoesNotMatchTransaction() {
         PaymentRepository paymentRepository = mock(PaymentRepository.class);
         PaymentGateway paymentGateway = mock(PaymentGateway.class);
-        PurchaseService purchaseService = mock(PurchaseService.class);
+        TransactionQueryService transactionQueries = mock(TransactionQueryService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, paymentGateway, purchaseService, noWallet(), bookingService);
+                paymentRepository, paymentGateway, transactionQueries, noWallet(), bookingService);
         UUID transactionId = UUID.randomUUID();
-        when(purchaseService.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
+        when(transactionQueries.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
                 .transactionId(transactionId)
                 .status(TransactionStatus.PENDING_PAYMENT)
                 .totalAmount(new BigDecimal("25000"))
@@ -59,10 +59,10 @@ class PaymentServiceTest {
     @Test
     void simulatesOnlinePaymentForOwningCustomerAndConfirmsTransaction() {
         PaymentRepository paymentRepository = mock(PaymentRepository.class);
-        PurchaseService purchaseService = mock(PurchaseService.class);
+        TransactionQueryService transactionQueries = mock(TransactionQueryService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, mock(PaymentGateway.class), purchaseService, noWallet(), bookingService);
+                paymentRepository, mock(PaymentGateway.class), transactionQueries, noWallet(), bookingService);
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         UUID customerId = UUID.randomUUID();
@@ -74,27 +74,25 @@ class PaymentServiceTest {
                 .status(PaymentStatus.PENDING)
                 .build();
         when(paymentRepository.findByIdForUpdate(paymentId)).thenReturn(Optional.of(payment));
-        when(purchaseService.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
+        when(transactionQueries.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
                 .transactionId(transactionId)
                 .customerId(customerId)
                 .build());
-        when(bookingService.hasScheduledBooking(transactionId)).thenReturn(false);
-
         var response = paymentService.simulatePaymentSuccessForCustomer(paymentId, customerId);
 
         assertThat(response.getStatus()).isEqualTo(PaymentStatus.PAID);
         assertThat(response.getGatewayTransactionId()).startsWith("LOCAL_SIM_");
         verify(paymentRepository).save(payment);
-        verify(purchaseService).confirmPayment(transactionId);
+        verify(bookingService).confirmPayment(transactionId);
     }
 
     @Test
     void rejectsSimulationByAnotherCustomer() {
         PaymentRepository paymentRepository = mock(PaymentRepository.class);
-        PurchaseService purchaseService = mock(PurchaseService.class);
+        TransactionQueryService transactionQueries = mock(TransactionQueryService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, mock(PaymentGateway.class), purchaseService, noWallet(), bookingService);
+                paymentRepository, mock(PaymentGateway.class), transactionQueries, noWallet(), bookingService);
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         Payment payment = Payment.builder()
@@ -104,7 +102,7 @@ class PaymentServiceTest {
                 .status(PaymentStatus.PENDING)
                 .build();
         when(paymentRepository.findByIdForUpdate(paymentId)).thenReturn(Optional.of(payment));
-        when(purchaseService.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
+        when(transactionQueries.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
                 .transactionId(transactionId)
                 .customerId(UUID.randomUUID())
                 .build());
@@ -113,17 +111,17 @@ class PaymentServiceTest {
                 .isInstanceOf(PaymentException.class)
                 .hasMessageContaining("does not belong");
         verify(paymentRepository, never()).save(any(Payment.class));
-        verify(purchaseService, never()).confirmPayment(transactionId);
+        verify(bookingService, never()).confirmPayment(transactionId);
     }
 
     @Test
     void reconcilesSuccessfulPayOSPaymentAndConfirmsScheduledBooking() {
         PaymentRepository paymentRepository = mock(PaymentRepository.class);
         PaymentGateway paymentGateway = mock(PaymentGateway.class);
-        PurchaseService purchaseService = mock(PurchaseService.class);
+        TransactionQueryService transactionQueries = mock(TransactionQueryService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, paymentGateway, purchaseService, noWallet(), bookingService);
+                paymentRepository, paymentGateway, transactionQueries, noWallet(), bookingService);
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         UUID customerId = UUID.randomUUID();
@@ -137,7 +135,7 @@ class PaymentServiceTest {
                 .build();
         when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(payment));
         when(paymentRepository.findByIdForUpdate(paymentId)).thenReturn(Optional.of(payment));
-        when(purchaseService.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
+        when(transactionQueries.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
                 .transactionId(transactionId)
                 .customerId(customerId)
                 .build());
@@ -156,9 +154,9 @@ class PaymentServiceTest {
     void rejectsPayOSStatusWithMismatchedAmount() {
         PaymentRepository paymentRepository = mock(PaymentRepository.class);
         PaymentGateway paymentGateway = mock(PaymentGateway.class);
-        PurchaseService purchaseService = mock(PurchaseService.class);
+        TransactionQueryService transactionQueries = mock(TransactionQueryService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, paymentGateway, purchaseService, noWallet(), mock(ScheduledBookingService.class));
+                paymentRepository, paymentGateway, transactionQueries, noWallet(), mock(ScheduledBookingService.class));
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         UUID customerId = UUID.randomUUID();
@@ -170,7 +168,7 @@ class PaymentServiceTest {
                 .gatewayTransactionId("123456789")
                 .build();
         when(paymentRepository.findById(paymentId)).thenReturn(Optional.of(payment));
-        when(purchaseService.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
+        when(transactionQueries.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
                 .transactionId(transactionId)
                 .customerId(customerId)
                 .build());

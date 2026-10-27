@@ -6,7 +6,7 @@ Status values: **Accepted** (in the code and enforced), **Transitional** (accept
 | ADR | Title | Status | Enforced by |
 |-----|-------|--------|-------------|
 | [001](001-modular-monolith.md) | Modular monolith, package by business module | Accepted | ArchUnit `ArchitectureTest` |
-| [002](002-allocation-single-source-of-truth.md) | Resource allocations are the source of truth; the DB refuses overlaps | Accepted / Transitional | `EXCLUDE` constraint (V44), `HoldConcurrencyIT` |
+| [002](002-allocation-single-source-of-truth.md) | Resource allocations are the source of truth; the DB refuses overlaps; mirror removed | Accepted | `EXCLUDE` constraint (V44), `cycle_state` (V51), `HoldConcurrencyIT`, `MachineStartAuthorizationServiceTest` |
 | [003](003-identity-and-branch-scope.md) | Identity from the token; four roles; Staff scoped by branch | Accepted | `SecurityConfig` deny-by-default, `SecurityMatrixIT` |
 | [004](004-wallet-append-only-ledger.md) | Money in an append-only wallet ledger; wallet first; withdrawals with proof | Accepted | Trigger + `UNIQUE (wallet, type, reference)` (V45), V48, V49, `WalletServiceIT`, `WalletCheckoutIT`, `WithdrawalIT` |
 | [005](005-business-rules-as-pure-policies.md) | Business rules as pure policies with an injected clock | Accepted | ArchUnit `domainIsPure`, JaCoCo gate |

@@ -7,12 +7,9 @@ import com.laundry.branch.entity.Branch;
 import com.laundry.branch.entity.BranchStatus;
 import com.laundry.branch.repository.BranchRepository;
 import com.laundry.machine.repository.MachineRepository;
-import com.laundry.transaction.entity.MachineReservation;
-import com.laundry.transaction.entity.ReservationStatus;
 import com.laundry.transaction.entity.ServiceType;
 import com.laundry.transaction.entity.Transaction;
 import com.laundry.transaction.entity.TransactionStatus;
-import com.laundry.transaction.repository.MachineReservationRepository;
 import com.laundry.transaction.repository.TransactionRepository;
 import com.laundry.config.BookingProperties;
 import com.laundry.payment.service.WalletPaymentService;
@@ -34,7 +31,6 @@ import com.laundry.machine.entity.Machine;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
-import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -59,7 +55,6 @@ public class ScheduledBookingService {
     private final ObjectMapper objectMapper;
     private final BranchRepository branchRepository;
     private final MachineRepository machineRepository;
-    private final MachineReservationRepository machineReservationRepository;
     private final TransactionRepository transactionRepository;
     private final MachineProgramService programService;
     private final BookingResourceQueries queries;
@@ -125,7 +120,7 @@ public class ScheduledBookingService {
         expireStaleHolds(resources);
         validateSelectedResources(request.branchId(), resources);
         for (int i = 0; i < resources.size(); i++) {
-            if (queries.resourceBusy(resources.get(i), plan.allocationPlans().get(i), null, null,
+            if (queries.resourceBusy(resources.get(i), plan.allocationPlans().get(i), null,
                     config.bufferMinutes())) {
                 throw BusinessException.of(ErrorCode.SLOT_TAKEN, "The selected time was just booked. Please choose another slot.");
             }
@@ -170,27 +165,17 @@ public class ScheduledBookingService {
         for (int i = 0; i < resources.size(); i++) {
             Resource resource = resources.get(i);
             AllocationPlan allocation = plan.allocationPlans().get(i);
+            // A washer/dryer allocation also tracks its machine's cycle (V51): PENDING until START.
+            boolean machine = "WASHER".equals(resource.type()) || "DRYER".equals(resource.type());
             jdbc.update("""
                     INSERT INTO booking_resource_allocations
-                      (booking_id, resource_id, resource_type, phase, occupied_from, occupied_until)
-                    VALUES (?, ?, ?, ?, ?, ?)
+                      (booking_id, resource_id, resource_type, phase, occupied_from, occupied_until, cycle_state)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, bookingId, resource.id(), resource.type(), allocation.phase(),
                     OffsetDateTime.ofInstant(allocation.from(), ZoneOffset.UTC),
-                    OffsetDateTime.ofInstant(allocation.until(), ZoneOffset.UTC));
-
-            if ("WASHER".equals(resource.type()) || "DRYER".equals(resource.type())) {
-                MachineReservation reservation = MachineReservation.builder()
-                        .transaction(transaction)
-                        .machineId(resource.id())
-                        .startTime(LocalDateTime.ofInstant(allocation.from(), ZoneId.systemDefault()))
-                        .endTime(LocalDateTime.ofInstant(allocation.until(), ZoneId.systemDefault()))
-                        .status(ReservationStatus.RESERVED)
-                        .build();
-                transaction.addMachineReservation(reservation);
-                machineReservationRepository.save(reservation);
-            }
+                    OffsetDateTime.ofInstant(allocation.until(), ZoneOffset.UTC),
+                    machine ? "PENDING" : null);
         }
-        transactionRepository.save(transaction);
         return getBooking(customerId, bookingId);
     }
 
@@ -307,10 +292,6 @@ public class ScheduledBookingService {
             transaction.setStatus(TransactionStatus.CANCELLED);
             transactionRepository.save(transaction);
         });
-        machineReservationRepository.findAllByTransactionId(booking.transactionId()).forEach(reservation -> {
-            reservation.setStatus(ReservationStatus.CANCELLED);
-            machineReservationRepository.save(reservation);
-        });
         walletPayments.reverse(List.of(booking.transactionId()), "Hoàn phần ví: khách huỷ giữ chỗ");
     }
 
@@ -399,10 +380,6 @@ public class ScheduledBookingService {
                 UPDATE scheduled_bookings SET status = 'CONFIRMED', updated_at = NOW()
                 WHERE id = ?
                 """, bookingId);
-        machineReservationRepository.findAllByTransactionId(transactionId).forEach(reservation -> {
-            reservation.setStatus(ReservationStatus.CONFIRMED);
-            machineReservationRepository.save(reservation);
-        });
     }
 
     @Transactional
@@ -418,13 +395,6 @@ public class ScheduledBookingService {
             transaction.setStatus(TransactionStatus.CANCELLED);
             transactionRepository.save(transaction);
         }
-        machineReservationRepository.findAllByTransactionId(transactionId).forEach(reservation -> {
-            if (reservation.getStatus() == ReservationStatus.RESERVED
-                    || reservation.getStatus() == ReservationStatus.EXPIRED) {
-                reservation.setStatus(ReservationStatus.CANCELLED);
-                machineReservationRepository.save(reservation);
-            }
-        });
     }
 
     /**
@@ -502,8 +472,6 @@ public class ScheduledBookingService {
             String placeholders = String.join(",", java.util.Collections.nCopies(ids.length, "?"));
             jdbc.update("UPDATE transactions SET status = 'EXPIRED', updated_at = NOW() WHERE id IN (%s) AND status = 'PENDING_PAYMENT'"
                     .formatted(placeholders), ids);
-            jdbc.update("UPDATE machine_reservations SET status = 'EXPIRED', updated_at = NOW() WHERE transaction_id IN (%s) AND status = 'RESERVED'"
-                    .formatted(placeholders), ids);
             walletPayments.reverse(transactions, "Hoàn phần ví: hết thời gian giữ chỗ");
         }
     }
@@ -523,10 +491,6 @@ public class ScheduledBookingService {
         jdbc.update("""
                 UPDATE transactions SET status = 'EXPIRED', updated_at = NOW()
                 WHERE id IN (%s) AND status = 'PENDING_PAYMENT'
-                """.formatted(placeholders), expiredIds);
-        jdbc.update("""
-                UPDATE machine_reservations SET status = 'EXPIRED', updated_at = NOW()
-                WHERE transaction_id IN (%s) AND status = 'RESERVED'
                 """.formatted(placeholders), expiredIds);
         walletPayments.reverse(expired, "Hoàn phần ví: hết thời gian giữ chỗ");
         log.info("Expired {} booking hold(s)", expired.size());

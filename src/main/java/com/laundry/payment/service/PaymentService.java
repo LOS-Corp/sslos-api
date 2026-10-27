@@ -14,7 +14,7 @@ import com.laundry.payment.repository.PaymentRepository;
 import com.laundry.booking.service.ScheduledBookingService;
 import com.laundry.transaction.dto.response.TransactionResponse;
 import com.laundry.transaction.entity.TransactionStatus;
-import com.laundry.transaction.service.PurchaseService;
+import com.laundry.transaction.service.TransactionQueryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -34,7 +34,7 @@ public class PaymentService {
 
     private final PaymentRepository paymentRepository;
     private final PaymentGateway paymentGateway;
-    private final PurchaseService purchaseService;
+    private final TransactionQueryService transactionQueries;
     private final WalletPaymentService walletPayments;
     private final ScheduledBookingService scheduledBookingService;
 
@@ -69,7 +69,7 @@ public class PaymentService {
         }
 
         // Check if transaction is in PENDING_PAYMENT status
-        var transaction = purchaseService.getTransaction(request.getTransactionId());
+        var transaction = transactionQueries.getTransaction(request.getTransactionId());
         if (transaction.getStatus() != TransactionStatus.PENDING_PAYMENT) {
             throw new PaymentException("Transaction is not in PENDING_PAYMENT status");
         }
@@ -120,7 +120,7 @@ public class PaymentService {
 
     @Transactional
     public PaymentResponse createPaymentForCustomer(CreatePaymentRequest request, UUID customerId) {
-        TransactionResponse transaction = purchaseService.getTransaction(request.getTransactionId());
+        TransactionResponse transaction = transactionQueries.getTransaction(request.getTransactionId());
         if (!customerId.equals(transaction.getCustomerId())) {
             throw new PaymentException("Transaction does not belong to the authenticated customer");
         }
@@ -144,7 +144,7 @@ public class PaymentService {
         if (!transactionId.equals(expectedTransactionId)) {
             throw new PaymentException("Transaction does not match booking");
         }
-        TransactionResponse transaction = purchaseService.getTransaction(transactionId);
+        TransactionResponse transaction = transactionQueries.getTransaction(transactionId);
         Money total = Money.of(transaction.getTotalAmount());
         // FR-PAY-04: wallet credit first; UC-02 5b: a wallet that covers everything confirms without payOS.
         Money walletPart = useWallet
@@ -259,7 +259,7 @@ public class PaymentService {
     }
 
     private void ensureCustomerOwnsTransaction(UUID transactionId, UUID customerId) {
-        if (!customerId.equals(purchaseService.getTransaction(transactionId).getCustomerId())) {
+        if (!customerId.equals(transactionQueries.getTransaction(transactionId).getCustomerId())) {
             throw new PaymentException("Payment does not belong to the authenticated customer");
         }
     }
@@ -295,20 +295,13 @@ public class PaymentService {
     private void cancelAssociatedTransaction(UUID transactionId) {
         // SC-31: the rest of the payment failed, so the wallet part goes back to the customer.
         walletPayments.reverse(java.util.List.of(transactionId), "Hoàn phần ví do thanh toán payOS không thành công");
-        if (scheduledBookingService.hasScheduledBooking(transactionId)) {
-            scheduledBookingService.cancelForPaymentFailure(transactionId);
-        } else {
-            purchaseService.cancelTransaction(transactionId);
-        }
+        scheduledBookingService.cancelForPaymentFailure(transactionId);
     }
 
+    /** Every transaction belongs to a scheduled booking (the only way one is created). */
     @Transactional
     public void confirmTransactionPayment(UUID transactionId) {
-        if (scheduledBookingService.hasScheduledBooking(transactionId)) {
-            scheduledBookingService.confirmPayment(transactionId);
-        } else {
-            purchaseService.confirmPayment(transactionId);
-        }
+        scheduledBookingService.confirmPayment(transactionId);
     }
 
     private PaymentResponse toResponse(Payment payment, String paymentUrl) {

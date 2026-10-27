@@ -1,9 +1,10 @@
 package com.laundry.booking.service;
 
 import com.laundry.audit.service.AuditAction;
-import com.laundry.config.BookingProperties;
 import com.laundry.audit.service.AuditService;
 import com.laundry.audit.service.AuditService.AuditEntry;
+import com.laundry.booking.event.BookingReleased;
+import com.laundry.config.BookingProperties;
 import com.laundry.refund.domain.RefundPolicy;
 import com.laundry.refund.domain.RefundPolicy.CancellationCause;
 import com.laundry.refund.domain.RefundPolicy.RefundDecision;
@@ -15,6 +16,7 @@ import com.laundry.shared.security.CurrentUser;
 import com.laundry.wallet.entity.WalletEntryType;
 import com.laundry.wallet.service.WalletService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,6 +45,7 @@ public class BookingCancellationService {
     private final AuditService audit;
     private final Clock clock;
     private final BookingProperties props;
+    private final ApplicationEventPublisher events;
 
 
     /** MSG17: what the customer would get back if they cancelled now. */
@@ -75,10 +78,8 @@ public class BookingCancellationService {
                     reconciliation_reason = 'Cancelled by customer'
                 WHERE id = ?
                 """, bookingId);
-        jdbc.update("""
-                UPDATE machine_reservations SET status = 'CANCELLED', updated_at = NOW()
-                WHERE transaction_id = ? AND status IN ('RESERVED', 'CONFIRMED')
-                """, booking.transactionId());
+        // Any START already unlocked for this booking is revoked once the cancellation commits.
+        events.publishEvent(new BookingReleased(bookingId, "BOOKING_CANCELLED"));
         if (decision.recordsViolation()) {
             violations.record(customer.id(), bookingId, decision.violation(), now);
         }

@@ -21,7 +21,7 @@ import java.util.UUID;
  * <p>An authorization is the contract between:
  * <ol>
  *   <li>The customer (identified by {@code userId}) who scanned a QR.</li>
- *   <li>The reservation (identified by {@code reservationId}) they paid for.</li>
+ *   <li>The machine allocation of the booking they paid for ({@code allocationId}, {@code bookingId}).</li>
  *   <li>The machine (identified by {@code machineId}) they want to use.</li>
  *   <li>The device boot session (identified by {@code deviceBootId}) so
  *       an ESP32 reboot invalidates the unused authorization.</li>
@@ -67,9 +67,13 @@ public class MachineStartAuthorization {
     @Column(nullable = false, updatable = false)
     private UUID id;
 
-    /** The reservation (booking) that paid for this machine slot; null for admin test runs. */
-    @Column(name = "reservation_id")
-    private UUID reservationId;
+    /** The machine allocation of the booking this START uses (one cycle per allocation); null for test runs. */
+    @Column(name = "allocation_id")
+    private UUID allocationId;
+
+    /** The paid booking that owns the allocation; null for admin test runs. */
+    @Column(name = "booking_id")
+    private UUID bookingId;
 
     /** True when an admin unlocked START from the console to test the machine (no booking, no QR). */
     @Column(name = "test_run", nullable = false)

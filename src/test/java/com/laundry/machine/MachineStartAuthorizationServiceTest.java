@@ -10,21 +10,23 @@ import com.laundry.payment.entity.Payment;
 import com.laundry.payment.entity.PaymentMethod;
 import com.laundry.payment.entity.PaymentStatus;
 import com.laundry.payment.repository.PaymentRepository;
-import com.laundry.transaction.entity.MachineReservation;
-import com.laundry.transaction.entity.ReservationStatus;
+import com.laundry.booking.service.BookingLifecycleService;
 import com.laundry.transaction.entity.Transaction;
-import com.laundry.transaction.repository.MachineReservationRepository;
 import com.laundry.transaction.repository.TransactionRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.jdbc.core.JdbcTemplate;
 import com.laundry.support.IntegrationTest;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -53,7 +55,7 @@ class MachineStartAuthorizationServiceTest {
     @Autowired
     private MachineRepository machineRepository;
     @Autowired
-    private MachineReservationRepository reservationRepository;
+    private JdbcTemplate jdbc;
     @Autowired
     private MachineStartAuthorizationRepository authorizationRepository;
     @Autowired
@@ -61,7 +63,7 @@ class MachineStartAuthorizationServiceTest {
     @Autowired
     private PaymentRepository paymentRepository;
     @Autowired
-    private com.laundry.transaction.scheduler.ReservationWindowCloseScheduler reservationWindowCloseScheduler;
+    private BookingLifecycleService lifecycle;
 
     @Autowired
     private com.laundry.branch.repository.BranchRepository branchRepository;
@@ -87,7 +89,8 @@ class MachineStartAuthorizationServiceTest {
         reset(mqttPublisher);
         authorizationRepository.deleteAll();
         paymentRepository.deleteAll();
-        reservationRepository.deleteAll();
+        jdbc.update("DELETE FROM policy_violations");
+        jdbc.update("DELETE FROM scheduled_bookings");
         transactionRepository.deleteAll();
         machineRepository.deleteAll();
 
@@ -156,10 +159,7 @@ class MachineStartAuthorizationServiceTest {
                 .deploymentStatus(MachineDeploymentStatus.ACTIVE)
                 .online(true)
                 .build()).getId();
-        Transaction tx = newTransaction(customerId);
-        transactionRepository.save(tx);
-        reservationRepository.save(reservation(tx, otherMachineId, ReservationStatus.CONFIRMED));
-        paymentRepository.save(paidPayment(tx.getId()));
+        seedBooking(otherMachineId, customerId, "CONFIRMED", "PENDING", -5, 120, true);
 
         assertThatThrownBy(() -> service.checkIn("WM001", customerId))
                 .isInstanceOf(CheckInRejectedException.class);
@@ -181,15 +181,7 @@ class MachineStartAuthorizationServiceTest {
     @Test
     @DisplayName("Rejects when reservation window is already closed")
     void case6_expired() {
-        seedReservationWithOffset(-120, -60);
-        paymentRepository.save(paidPayment(
-                reservationRepository.findAll().get(0).getTransaction().getId()));
-        // First, set the persisted reservation to EXPIRED.
-        var rs = reservationRepository.findAll();
-        rs.forEach(r -> {
-            r.setStatus(ReservationStatus.EXPIRED);
-            reservationRepository.save(r);
-        });
+        seedBooking(machine.getId(), customerId, "EXPIRED", "PENDING", -120, -60, true);
 
         assertThatThrownBy(() -> service.checkIn("WM001", customerId))
                 .isInstanceOf(CheckInRejectedException.class);
@@ -198,10 +190,7 @@ class MachineStartAuthorizationServiceTest {
     @Test
     @DisplayName("Rejects when reservation is CANCELLED")
     void case7_cancelled() {
-        UUID reservationId = seedReservationAndPayment(true, false);
-        var r = reservationRepository.findById(reservationId).orElseThrow();
-        r.setStatus(ReservationStatus.CANCELLED);
-        reservationRepository.save(r);
+        seedBooking(machine.getId(), customerId, "CANCELLED", "PENDING", -5, 120, true);
 
         assertThatThrownBy(() -> service.checkIn("WM001", customerId))
                 .isInstanceOf(CheckInRejectedException.class);
@@ -260,7 +249,7 @@ class MachineStartAuthorizationServiceTest {
 
         var auth = authorizationRepository.findById(response.authorizationId()).orElseThrow();
         assertThat(auth.isTestRun()).isTrue();
-        assertThat(auth.getReservationId()).isNull();
+        assertThat(auth.getAllocationId()).isNull();
         assertThat(auth.getStatus()).isEqualTo(MachineStartAuthorizationStatus.PENDING);
 
         service.handleAuthAck(machine, response.authorizationId(), "cmd", true, "ACCEPTED", null, "boot-A");
@@ -559,18 +548,19 @@ class MachineStartAuthorizationServiceTest {
         verifyPublished(mqttPublisher, 2);
     }
 
-    // ── Reservation cancel → revoke cascade ────────────────────────────────
+    // ── Booking cancel → revoke cascade ────────────────────────────────────
 
     @Test
-    @DisplayName("Reservation cancel revokes any active authorization")
-    void case23_reservationCancel() {
-        UUID reservationId = seedReservationAndPayment(true, false);
+    @DisplayName("Booking cancel revokes any active authorization and locks START on the device")
+    void case23_bookingCancel() {
+        UUID allocationId = seedReservationAndPayment(true, false);
         var response = service.checkIn("WM001", customerId);
         var auth = authorizationRepository.findById(response.authorizationId()).orElseThrow();
-        // Simulate the cancel path by calling the same function the
-        // MachineReservationService.cancelReservation() invokes.
-        int n = service.revokeByReservation(reservationId, "RESERVATION_CANCELLED");
+        assertThat(auth.getAllocationId()).isEqualTo(allocationId);
+        // BookingCancellationService publishes BookingReleased; its listener calls this after commit.
+        int n = service.revokeByBooking(bookingOf(allocationId), "BOOKING_CANCELLED");
         assertThat(n).isEqualTo(1);
+        verifyPublished(mqttPublisher, 2); // AUTHORIZE_START, then REVOKE_START
         reload(auth.getId());
         var after = authorizationRepository.findById(auth.getId()).orElseThrow();
         assertThat(after.getStatus()).isEqualTo(MachineStartAuthorizationStatus.REVOKED);
@@ -611,48 +601,39 @@ class MachineStartAuthorizationServiceTest {
     }
 
     @Test
-    @DisplayName("Window sweep: used → COMPLETED, no-show → EXPIRED, open window untouched")
-    void case27_reservationWindowSweep() {
-        UUID usedId = seedReservationAndPayment(true, false);
+    @DisplayName("Lost COMPLETED message: the sweep closes a running cycle on an idle machine and completes the booking")
+    void case27_sweepClosesFinishedCycle() {
+        UUID allocationId = seedReservationAndPayment(true, false);
         var response = service.checkIn("WM001", customerId);
         service.handleAuthAck(machine, response.authorizationId(), "cmd", true, "ACCEPTED", null, "boot-A");
         UUID runId = service.handleStartRequest(machine, response.authorizationId(), "req-1", "boot-A");
         service.handleStarted(machine, response.authorizationId(), "req-1", runId, "boot-A");
-        MachineReservation used = reservationRepository.findById(usedId).orElseThrow();
-        used.setEndTime(LocalDateTime.now().minusHours(2));
-        reservationRepository.save(used);
+        assertThat(bookingStatus(allocationId)).isEqualTo("IN_PROGRESS");
 
-        Transaction staleTx = transactionRepository.save(newTransaction(customerId));
-        MachineReservation stale = reservation(staleTx, machine.getId(), ReservationStatus.CONFIRMED);
-        stale.setStartTime(LocalDateTime.now().minusHours(4));
-        stale.setEndTime(LocalDateTime.now().minusHours(2));
-        UUID staleId = reservationRepository.save(stale).getId();
+        jdbc.update("""
+                UPDATE booking_resource_allocations
+                SET occupied_from = NOW() - interval '3 hours', occupied_until = NOW() - interval '2 hours'
+                WHERE id = ?
+                """, allocationId);
+        jdbc.update("UPDATE machines SET status = 'AVAILABLE' WHERE id = ?", machine.getId());
 
-        UUID openId = seedReservationAndPayment(true, false);
+        lifecycle.sweepFinishedReservations();
 
-        reservationWindowCloseScheduler.sweep();
-        entityManager.clear();
-
-        assertThat(reservationRepository.findById(usedId).orElseThrow().getStatus())
-                .isEqualTo(ReservationStatus.COMPLETED);
-        assertThat(reservationRepository.findById(staleId).orElseThrow().getStatus())
-                .isEqualTo(ReservationStatus.EXPIRED);
-        assertThat(reservationRepository.findById(openId).orElseThrow().getStatus())
-                .isEqualTo(ReservationStatus.CONFIRMED);
+        assertThat(cycleState(allocationId)).isEqualTo("DONE");
+        assertThat(bookingStatus(allocationId)).isEqualTo("COMPLETED");
     }
 
     @Test
     @DisplayName("A reservation that already ran a wash cannot be checked in again")
     void case28_reservationUsedOnlyOnce() {
-        UUID reservationId = seedReservationAndPayment(true, false);
+        UUID allocationId = seedReservationAndPayment(true, false);
         var response = service.checkIn("WM001", customerId);
         service.handleAuthAck(machine, response.authorizationId(), "cmd", true, "ACCEPTED", null, "boot-A");
         UUID runId = service.handleStartRequest(machine, response.authorizationId(), "req-1", "boot-A");
         service.handleStarted(machine, response.authorizationId(), "req-1", runId, "boot-A");
 
-        entityManager.clear();
-        assertThat(reservationRepository.findById(reservationId).orElseThrow().getStatus())
-                .isEqualTo(ReservationStatus.ACTIVE);
+        assertThat(cycleState(allocationId)).isEqualTo("RUNNING");
+        assertThat(bookingStatus(allocationId)).isEqualTo("IN_PROGRESS");
         assertThatThrownBy(() -> service.checkIn("WM001", customerId))
                 .isInstanceOf(CheckInRejectedException.class)
                 .hasMessageContaining("already been used");
@@ -661,49 +642,80 @@ class MachineStartAuthorizationServiceTest {
     @Test
     @DisplayName("A used reservation does not hide a second, unused booking on the same machine")
     void case29_secondBookingStillUsable() {
-        seedReservationAndPayment(true, false);
+        // Two bookings cannot overlap on one machine (V44), so the first ends just before the second starts.
+        seedBooking(machine.getId(), customerId, "CONFIRMED", "PENDING", -5, 1, true);
         var first = service.checkIn("WM001", customerId);
         service.handleAuthAck(machine, first.authorizationId(), "cmd", true, "ACCEPTED", null, "boot-A");
         UUID runId = service.handleStartRequest(machine, first.authorizationId(), "req-1", "boot-A");
         service.handleStarted(machine, first.authorizationId(), "req-1", runId, "boot-A");
+        jdbc.update("UPDATE machines SET status = 'AVAILABLE' WHERE id = ?", machine.getId());
 
-        UUID secondReservation = seedReservationAndPayment(true, false);
+        UUID secondAllocation = seedBooking(machine.getId(), customerId, "CONFIRMED", "PENDING", 2, 60, true);
         var second = service.checkIn("WM001", customerId);
         var auth = authorizationRepository.findById(second.authorizationId()).orElseThrow();
-        assertThat(auth.getReservationId()).isEqualTo(secondReservation);
+        assertThat(auth.getAllocationId()).isEqualTo(secondAllocation);
+        assertThat(auth.getBookingId()).isEqualTo(bookingOf(secondAllocation));
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
+    /** A paid (or unpaid), confirmed booking on WM001 whose window is open now; returns its allocation. */
     private UUID seedReservationAndPayment(boolean paid, boolean active) {
         return seedReservationAndPayment(paid, active, customerId);
     }
 
     private UUID seedReservationAndPayment(boolean paid, boolean active, UUID ownerId) {
-        Transaction tx = newTransaction(ownerId);
-        transactionRepository.save(tx);
-        ReservationStatus status = active ? ReservationStatus.ACTIVE : ReservationStatus.CONFIRMED;
-        MachineReservation r = reservation(tx, machine.getId(), status);
-        reservationRepository.save(r);
-        if (paid) {
-            paymentRepository.save(paidPayment(tx.getId()));
-        } else {
-            paymentRepository.save(pendingPayment(tx.getId()));
-        }
-        return r.getId();
+        return seedBooking(machine.getId(), ownerId, "CONFIRMED", active ? "RUNNING" : "PENDING", -5, 120, paid);
     }
 
-    private void seedReservationWithOffset(long startMinutesAgo, long endMinutesAgo) {
-        Transaction tx = newTransaction(customerId);
-        transactionRepository.save(tx);
-        MachineReservation r = MachineReservation.builder()
-                .transaction(tx)
-                .machineId(machine.getId())
-                .startTime(LocalDateTime.now().plusMinutes(startMinutesAgo))
-                .endTime(LocalDateTime.now().plusMinutes(endMinutesAgo))
-                .status(ReservationStatus.CONFIRMED)
-                .build();
-        reservationRepository.save(r);
+    private void seedReservationWithOffset(long startMinutes, long endMinutes) {
+        seedBooking(machine.getId(), customerId, "CONFIRMED", "PENDING", startMinutes, endMinutes, false);
+    }
+
+    /**
+     * A scheduled booking with one washer allocation on {@code machineId}, from now+{@code startMinutes}
+     * to now+{@code endMinutes}; returns the allocation id (what a START authorization points at).
+     */
+    private UUID seedBooking(UUID machineId, UUID ownerId, String bookingStatus, String cycleState,
+                             long startMinutes, long endMinutes, boolean paid) {
+        Transaction tx = transactionRepository.save(newTransaction(ownerId));
+        Instant start = Instant.now().plus(startMinutes, ChronoUnit.MINUTES);
+        Instant end = Instant.now().plus(endMinutes, ChronoUnit.MINUTES);
+        UUID bookingId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO scheduled_bookings (id, transaction_id, branch_id, service_code, status, start_time,
+                                                expected_end_time, hold_expires_at, timeline)
+                VALUES (?, ?, ?, 'WASH_ONLY', ?, ?, ?, ?, '[]'::jsonb)
+                """, bookingId, tx.getId(), branchId, bookingStatus, utc(start), utc(end), utc(start));
+        UUID allocationId = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO booking_resource_allocations
+                  (id, booking_id, resource_id, resource_type, phase, occupied_from, occupied_until, cycle_state)
+                VALUES (?, ?, ?, 'WASHER', 'WASHING', ?, ?, ?)
+                """, allocationId, bookingId, machineId, utc(start), utc(end), cycleState);
+        paymentRepository.save(paid ? paidPayment(tx.getId()) : pendingPayment(tx.getId()));
+        return allocationId;
+    }
+
+    private UUID bookingOf(UUID allocationId) {
+        return jdbc.queryForObject("SELECT booking_id FROM booking_resource_allocations WHERE id = ?",
+                UUID.class, allocationId);
+    }
+
+    private String cycleState(UUID allocationId) {
+        return jdbc.queryForObject("SELECT cycle_state FROM booking_resource_allocations WHERE id = ?",
+                String.class, allocationId);
+    }
+
+    private String bookingStatus(UUID allocationId) {
+        return jdbc.queryForObject("""
+                SELECT b.status FROM scheduled_bookings b JOIN booking_resource_allocations a ON a.booking_id = b.id
+                WHERE a.id = ?
+                """, String.class, allocationId);
+    }
+
+    private static OffsetDateTime utc(Instant instant) {
+        return OffsetDateTime.ofInstant(instant, ZoneOffset.UTC);
     }
 
     private Transaction newTransaction(UUID ownerId) {
@@ -714,16 +726,6 @@ class MachineStartAuthorizationServiceTest {
                 .totalAmount(new java.math.BigDecimal("25000.00"))
                 .expiresAt(LocalDateTime.now().plusHours(2))
                 .paidAt(LocalDateTime.now())
-                .build();
-    }
-
-    private MachineReservation reservation(Transaction tx, UUID machineId, ReservationStatus status) {
-        return MachineReservation.builder()
-                .transaction(tx)
-                .machineId(machineId)
-                .startTime(LocalDateTime.now().minusMinutes(5))
-                .endTime(LocalDateTime.now().plusHours(2))
-                .status(status)
                 .build();
     }
 

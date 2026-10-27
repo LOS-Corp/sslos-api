@@ -207,7 +207,7 @@ public class DeviceCommandService {
                             + ". Customer must scan the QR at the machine first.");
         }
         MachineStartAuthorization auth = active.get();
-        if (auth.getReservationId() == null || !auth.getReservationId().equals(bookingId)) {
+        if (auth.getBookingId() == null || !auth.getBookingId().equals(bookingId)) {
             throw new IllegalStateException(
                     "bookingId does not match the active authorization for this machine");
         }
@@ -217,7 +217,7 @@ public class DeviceCommandService {
                     "Active authorization is in status " + auth.getStatus()
                             + "; press START on the device after the device ACKs.");
         }
-        log.info("[{}] START authorization OK for reservation {} (auth {})",
+        log.info("[{}] START authorization OK for booking {} (auth {})",
                 machine.getMachineCode(), bookingId, auth.getId());
     }
 

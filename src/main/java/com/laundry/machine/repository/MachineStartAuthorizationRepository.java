@@ -99,22 +99,12 @@ public interface MachineStartAuthorizationRepository
     int markExpired(@Param("ids") List<UUID> ids,
                     @Param("now") OffsetDateTime now);
 
-    /**
-     * Revoke every active authorization for a reservation — fires when the
-     * reservation is cancelled or refunded.
-     */
-    @Modifying
-    @Query("UPDATE MachineStartAuthorization msa " +
-           "SET msa.status = com.laundry.machine.entity.MachineStartAuthorizationStatus.REVOKED, " +
-           "    msa.revokedAt = :now, " +
-           "    msa.revokeReason = :reason " +
-           "WHERE msa.reservationId = :reservationId " +
+    /** Active authorizations of a booking — revoked when the booking is cancelled. */
+    @Query("SELECT msa FROM MachineStartAuthorization msa WHERE msa.bookingId = :bookingId " +
            "AND msa.status IN (com.laundry.machine.entity.MachineStartAuthorizationStatus.PENDING, " +
            "                    com.laundry.machine.entity.MachineStartAuthorizationStatus.GRANTED, " +
            "                    com.laundry.machine.entity.MachineStartAuthorizationStatus.START_PENDING)")
-    int revokeByReservation(@Param("reservationId") UUID reservationId,
-                            @Param("reason") String reason,
-                            @Param("now") OffsetDateTime now);
+    List<MachineStartAuthorization> findActiveByBooking(@Param("bookingId") UUID bookingId);
 
     Optional<MachineStartAuthorization> findByIdAndUserId(UUID id, UUID userId);
 
@@ -124,6 +114,4 @@ public interface MachineStartAuthorizationRepository
     /** Latest session on a machine (any status); its owner is the customer currently using it. */
     Optional<MachineStartAuthorization> findFirstByMachineIdOrderByCreatedAtDesc(UUID machineId);
 
-    /** True once a reservation has been used for a wash (one cycle per booking). */
-    boolean existsByReservationIdAndStatus(UUID reservationId, MachineStartAuthorizationStatus status);
 }

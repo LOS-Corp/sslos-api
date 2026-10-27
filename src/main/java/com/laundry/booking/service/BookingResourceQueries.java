@@ -9,7 +9,6 @@ import com.laundry.machine.entity.Machine;
 import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.entity.MachineType;
 import com.laundry.machine.repository.MachineRepository;
-import com.laundry.transaction.repository.MachineReservationRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -17,7 +16,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.DayOfWeek;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
@@ -45,7 +43,6 @@ import static com.laundry.booking.domain.SlotPlanner.*;
 public class BookingResourceQueries {
     private final JdbcTemplate jdbc;
     private final MachineRepository machineRepository;
-    private final MachineReservationRepository machineReservationRepository;
     private final com.laundry.machine.runtime.MachineRuntimeStateService runtimeStateService;
     private final MachineProgramService programService;
     private final com.laundry.config.BookingProperties props;
@@ -153,7 +150,6 @@ public class BookingResourceQueries {
     }
 
     Map<UUID, List<OccupiedInterval>> occupiedIntervals(UUID branchId,
-                                                                 ZoneId branchZone,
                                                                  Instant from,
                                                                  Instant until,
                                                                  Map<UUID, Resource> resourcesById,
@@ -182,30 +178,6 @@ public class BookingResourceQueries {
             }
         }, branchId, OffsetDateTime.ofInstant(until, ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(from, ZoneOffset.UTC));
-
-        LocalDateTime legacyFrom = LocalDateTime.ofInstant(from, branchZone);
-        LocalDateTime legacyUntil = LocalDateTime.ofInstant(until, branchZone);
-        jdbc.query("""
-                SELECT mr.machine_id, mr.start_time, mr.end_time, mr.status
-                FROM machine_reservations mr
-                JOIN machines m ON m.id = mr.machine_id
-                WHERE m.branch_id = ?
-                  AND mr.status IN ('RESERVED', 'CONFIRMED', 'ACTIVE')
-                  AND mr.start_time < ?
-                  AND (mr.end_time IS NULL OR mr.end_time > ?)
-                """, rs -> {
-            UUID resourceId = rs.getObject("machine_id", UUID.class);
-            if (!resourcesById.containsKey(resourceId)) return;
-            LocalDateTime localStart = rs.getObject("start_time", LocalDateTime.class);
-            LocalDateTime localEnd = rs.getObject("end_time", LocalDateTime.class);
-            Instant occupiedStart = localStart.atZone(branchZone).toInstant();
-            Instant occupiedEnd = localEnd == null
-                    ? ("ACTIVE".equals(rs.getString("status"))
-                    ? until : localStart.plusHours(2).atZone(branchZone).toInstant())
-                    : localEnd.atZone(branchZone).toInstant();
-            result.computeIfAbsent(resourceId, ignored -> new ArrayList<>())
-                    .add(new OccupiedInterval(occupiedStart, occupiedEnd));
-        }, branchId, legacyUntil, legacyFrom);
         return result;
     }
 
@@ -263,13 +235,12 @@ public class BookingResourceQueries {
     }
 
     /**
-     * True when {@code plan} overlaps a live booking/hold allocation, a legacy
-     * machine reservation, or the machine's current session (running cycle).
+     * True when {@code plan} overlaps a live booking/hold allocation or the machine's
+     * current session (running cycle).
      */
     boolean resourceBusy(Resource resource,
                                  AllocationPlan plan,
                                  UUID excludeBookingId,
-                                 UUID excludeTransactionId,
                                  int bufferMinutes) {
         boolean sessionConflict = activeSession(resource, bufferMinutes, Instant.now())
                 .filter(session -> intervalsOverlap(plan.from(), plan.until(), session.start(), session.end()))
@@ -291,18 +262,7 @@ public class BookingResourceQueries {
                 OffsetDateTime.ofInstant(plan.until(), ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(plan.from(), ZoneOffset.UTC),
                 excludeBookingId, excludeBookingId);
-        if (scheduledCount != null && scheduledCount > 0) {
-            return true;
-        }
-        if (!"WASHER".equals(resource.type()) && !"DRYER".equals(resource.type())) {
-            return false;
-        }
-        LocalDateTime from = LocalDateTime.ofInstant(plan.from(), ZoneId.systemDefault());
-        LocalDateTime until = LocalDateTime.ofInstant(plan.until(), ZoneId.systemDefault());
-        return machineReservationRepository.findOverlappingReservations(resource.id(), from, until).stream()
-                .filter(reservation -> excludeTransactionId == null || reservation.getTransaction() == null
-                        || !excludeTransactionId.equals(reservation.getTransaction().getId()))
-                .findAny().isPresent();
+        return scheduledCount != null && scheduledCount > 0;
     }
 
     /**

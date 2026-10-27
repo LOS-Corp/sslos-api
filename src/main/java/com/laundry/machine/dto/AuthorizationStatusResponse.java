@@ -15,7 +15,7 @@ import java.util.UUID;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record AuthorizationStatusResponse(
         UUID authorizationId,
-        UUID reservationId,
+        UUID bookingId,
         UUID machineId,
         String machineCode,
         MachineStartAuthorizationStatus authorizationStatus,

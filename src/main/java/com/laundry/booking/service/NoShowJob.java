@@ -96,10 +96,6 @@ public class NoShowJob {
                 UPDATE scheduled_bookings SET status = 'NO_SHOW', updated_at = NOW(), reconciliation_reason = ?
                 WHERE id = ? AND status = 'CONFIRMED'
                 """, reason(booking, cause), booking.bookingId());
-        jdbc.update("""
-                UPDATE machine_reservations SET status = 'EXPIRED', updated_at = NOW()
-                WHERE transaction_id = ? AND status IN ('RESERVED', 'CONFIRMED')
-                """, booking.transactionId());
 
         if (decision != null) {
             if (decision.recordsViolation()) {
@@ -142,8 +138,7 @@ public class NoShowJob {
                     OR (d.service_mode = 'ASSISTED_LOCKER' AND sb.start_time < ?))
                   AND NOT EXISTS (
                       SELECT 1 FROM machine_start_authorizations msa
-                      JOIN machine_reservations mr ON mr.id = msa.reservation_id
-                      WHERE mr.transaction_id = t.id AND msa.status IN ('GRANTED', 'START_PENDING', 'CONSUMED'))
+                      WHERE msa.booking_id = sb.id AND msa.status IN ('GRANTED', 'START_PENDING', 'CONSUMED'))
                 ORDER BY sb.start_time
                 LIMIT ?
                 FOR UPDATE OF sb SKIP LOCKED

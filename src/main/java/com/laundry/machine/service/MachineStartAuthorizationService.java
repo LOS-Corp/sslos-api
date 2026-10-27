@@ -1,5 +1,8 @@
 package com.laundry.machine.service;
 
+import com.laundry.booking.event.BookingReleased;
+import com.laundry.booking.service.MachineSlotService;
+import com.laundry.booking.service.MachineSlotService.MachineSlot;
 import com.laundry.machine.dto.CheckInResponse;
 import com.laundry.machine.domain.CheckInWindowPolicy;
 import com.laundry.machine.entity.*;
@@ -11,10 +14,6 @@ import com.laundry.machine.repository.MachineStartAuthorizationRepository;
 import com.laundry.payment.entity.Payment;
 import com.laundry.payment.entity.PaymentStatus;
 import com.laundry.payment.repository.PaymentRepository;
-import com.laundry.transaction.entity.MachineReservation;
-import com.laundry.transaction.entity.ReservationStatus;
-import com.laundry.transaction.entity.Transaction;
-import com.laundry.transaction.repository.MachineReservationRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -25,9 +24,10 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.transaction.support.TransactionSynchronization;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
@@ -39,7 +39,7 @@ import java.util.UUID;
  *
  * <h2>Lifecycle</h2>
  * <ol>
- *   <li>{@link #checkIn(String, UUID)} validates the reservation, creates
+ *   <li>{@link #checkIn(String, UUID)} picks the customer's machine slot (a booking allocation), creates
  *       a {@link MachineStartAuthorization} (status PENDING) and publishes
  *       an {@code AUTHORIZE_START} MQTT command.</li>
  *   <li>The device ACKs via {@code AUTH_ACK} →
@@ -57,7 +57,7 @@ import java.util.UUID;
  * <ul>
  *   <li>Expiry: see {@link com.laundry.machine.scheduler.StartAuthorizationExpiryScheduler}.</li>
  *   <li>Device rejected the START: {@link #handleStartRejected}.</li>
- *   <li>Reservation cancelled: {@link #revokeByReservation(UUID, String)}.</li>
+ *   <li>Booking cancelled: {@link #onBookingReleased(BookingReleased)}.</li>
  * </ul>
  */
 @Service
@@ -65,7 +65,7 @@ import java.util.UUID;
 public class MachineStartAuthorizationService {
 
     private final MachineRepository machineRepository;
-    private final MachineReservationRepository reservationRepository;
+    private final MachineSlotService machineSlots;
     private final PaymentRepository paymentRepository;
     private final MachineStartAuthorizationRepository authorizationRepository;
     private final PlatformTransactionManager transactionManager;
@@ -75,7 +75,7 @@ public class MachineStartAuthorizationService {
 
     public MachineStartAuthorizationService(
             MachineRepository machineRepository,
-            MachineReservationRepository reservationRepository,
+            MachineSlotService machineSlots,
             PaymentRepository paymentRepository,
             MachineStartAuthorizationRepository authorizationRepository,
             PlatformTransactionManager transactionManager,
@@ -83,7 +83,7 @@ public class MachineStartAuthorizationService {
             CheckInWindowPolicy checkInWindowPolicy,
             StartAuthorizationPublisher publisher) {
         this.machineRepository = machineRepository;
-        this.reservationRepository = reservationRepository;
+        this.machineSlots = machineSlots;
         this.paymentRepository = paymentRepository;
         this.authorizationRepository = authorizationRepository;
         this.transactionManager = transactionManager;
@@ -173,31 +173,20 @@ public class MachineStartAuthorizationService {
             return toCheckInResponse(e);
         }
 
-        // 3. Find the eligible reservation for this user/machine.
-        MachineReservation reservation = findEligibleReservation(machine, userId)
+        // 3. The customer's slot on this machine (an allocation of a live, paid booking).
+        //    The messages below are matched by the customer apps; keep them stable.
+        MachineSlot slot = eligibleSlot(machine, userId)
                 .orElseThrow(() -> new CheckInRejectedException(
                         "No confirmed reservation found for this machine"));
 
-        // 4. One booking pays for one cycle: a reservation that already
-        //    started a wash cannot be checked in again.
-        if (isUsed(reservation)) {
+        // 4. One booking pays for one cycle per machine.
+        if (slot.used()) {
             throw new CheckInRejectedException(
                     "This reservation has already been used for a wash");
         }
 
-        // 5. Reservation must be CONFIRMED or ACTIVE.
-        if (reservation.getStatus() != ReservationStatus.CONFIRMED
-                && reservation.getStatus() != ReservationStatus.ACTIVE) {
-            throw new CheckInRejectedException(
-                    "Reservation is not eligible (status=" + reservation.getStatus() + ")");
-        }
-
-        // 6. Payment must be PAID.
-        Transaction tx = reservation.getTransaction();
-        if (tx == null || tx.getId() == null) {
-            throw new CheckInRejectedException("Reservation has no transaction");
-        }
-        Optional<Payment> paidPayment = paymentRepository.findByTransactionIdOrderByCreatedAtDesc(tx.getId())
+        // 5. Payment must be PAID.
+        Optional<Payment> paidPayment = paymentRepository.findByTransactionIdOrderByCreatedAtDesc(slot.transactionId())
                 .stream()
                 .filter(p -> p.getStatus() == PaymentStatus.PAID)
                 .findFirst();
@@ -205,25 +194,24 @@ public class MachineStartAuthorizationService {
             throw new CheckInRejectedException("Payment for this reservation is not confirmed");
         }
 
-        // 7. Check-in window (BR-06, BR-07): T−15 … max(T, PAID) + 10 minutes.
-        //    Reservation and payment times are local wall-clock values of this JVM's zone.
-        ZoneId zone = ZoneId.systemDefault();
-        Instant bookedStart = reservation.getStartTime().atZone(zone).toInstant();
+        // 6. Check-in window (BR-06, BR-07): T−15 … max(T, PAID) + 10 minutes.
+        //    Payment times are local wall-clock values of this JVM's zone.
         Instant paidAt = paidPayment.get().getPaidAt() == null ? null
-                : paidPayment.get().getPaidAt().atZone(zone).toInstant();
-        CheckInWindowPolicy.Window window = checkInWindowPolicy.windowFor(bookedStart, paidAt);
+                : paidPayment.get().getPaidAt().atZone(ZoneId.systemDefault()).toInstant();
+        CheckInWindowPolicy.Window window = checkInWindowPolicy.windowFor(slot.from(), paidAt);
         switch (window.positionOf(Instant.now())) {
             case NOT_YET_OPEN -> throw new CheckInRejectedException("Reservation window has not opened yet");
             case CLOSED -> throw new CheckInRejectedException("Reservation window has already closed");
             case OPEN -> { }
         }
 
-        // 8. Persist the authorization row + publish the MQTT command.
+        // 7. Persist the authorization row + publish the MQTT command.
         OffsetDateTime created = OffsetDateTime.now();
         OffsetDateTime expires = created.plusSeconds(authorizationTtlSeconds);
         MachineStartAuthorization auth = MachineStartAuthorization.builder()
-                .reservationId(reservation.getId())
-                .transactionId(tx.getId())
+                .allocationId(slot.allocationId())
+                .bookingId(slot.bookingId())
+                .transactionId(slot.transactionId())
                 .userId(userId)
                 .machineId(machine.getId())
                 .machineCode(machineCode)
@@ -233,8 +221,8 @@ public class MachineStartAuthorizationService {
                 .build();
 
         auth = authorizationRepository.save(auth);
-        log.info("[{}] Authorization created: id={} user={} reservation={} expiresAt={}",
-                machineCode, auth.getId(), userId, reservation.getId(), expires);
+        log.info("[{}] Authorization created: id={} user={} booking={} allocation={} expiresAt={}",
+                machineCode, auth.getId(), userId, slot.bookingId(), slot.allocationId(), expires);
 
         // Publish only after commit: the device answers AUTH_ACK within ~100 ms,
         // and an ACK that beats the commit finds no row, so the authorization
@@ -513,15 +501,11 @@ public class MachineStartAuthorizationService {
         authorizationRepository.save(auth);
         log.info("[{}] Authorization CONSUMED: {} runId={}", machine.getMachineCode(), auth.getId(), runId);
 
-        if (auth.getReservationId() == null) return;  // admin test run: no booking to advance
+        if (auth.getAllocationId() == null) return;  // admin test run: no booking to advance
         // The booking is now in use; the machine's COMPLETED (or the sweep) closes it out.
-        reservationRepository.findById(auth.getReservationId())
-                .filter(r -> r.getStatus() == ReservationStatus.CONFIRMED)
-                .ifPresent(r -> {
-                    r.setStatus(ReservationStatus.ACTIVE);
-                    reservationRepository.saveAndFlush(r);
-                    bookingLifecycleService.onCycleStarted(r.getId());
-                });
+        if (machineSlots.markRunning(auth.getAllocationId())) {
+            bookingLifecycleService.onCycleStarted(auth.getAllocationId());
+        }
     }
 
     /**
@@ -566,17 +550,21 @@ public class MachineStartAuthorizationService {
                 revokeInternal(a, "DEVICE_REPORTED_EXPIRED", "auth expired on device", true));
     }
 
-    /**
-     * Bulk-revoke every ACTIVE authorization tied to a reservation.
-     * Called by reservation lifecycle (cancel / refund).
-     */
+    /** A cancelled booking must not keep an unlocked START button (UC-08). Runs after the cancellation commits. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onBookingReleased(BookingReleased event) {
+        revokeInNewTxTemplate.executeWithoutResult(status -> revokeByBooking(event.bookingId(), event.reason()));
+    }
+
+    /** Revokes every active authorization of a booking and tells the device to lock START again. */
     @Transactional
-    public int revokeByReservation(UUID reservationId, String reason) {
-        int n = authorizationRepository.revokeByReservation(reservationId, reason, OffsetDateTime.now());
-        if (n > 0) {
-            log.info("Revoked {} active authorization(s) for reservation {} reason={}", n, reservationId, reason);
+    public int revokeByBooking(UUID bookingId, String reason) {
+        List<MachineStartAuthorization> active = authorizationRepository.findActiveByBooking(bookingId);
+        active.forEach(auth -> revokeInternal(auth, reason, null, true));
+        if (!active.isEmpty()) {
+            log.info("Revoked {} active authorization(s) for booking {} reason={}", active.size(), bookingId, reason);
         }
-        return n;
+        return active.size();
     }
 
     /**
@@ -611,34 +599,20 @@ public class MachineStartAuthorizationService {
 
     // ─── Internals ─────────────────────────────────────────────────────────
 
-    private Optional<MachineReservation> findEligibleReservation(Machine machine, UUID userId) {
-        // transaction.customerId is the owning user. Old CONFIRMED/ACTIVE rows
-        // that were never closed out must not shadow the booking just made, so
-        // prefer reservations whose window is still open, earliest start first.
-        LocalDateTime now = LocalDateTime.now();
-        List<MachineReservation> owned = java.util.stream.Stream.concat(
-                        reservationRepository.findByMachineIdAndStatus(machine.getId(), ReservationStatus.CONFIRMED).stream(),
-                        reservationRepository.findByMachineIdAndStatus(machine.getId(), ReservationStatus.ACTIVE).stream())
-                .filter(r -> {
-                    Transaction tx = r.getTransaction();
-                    return tx != null && userId.equals(tx.getCustomerId());
-                })
-                .toList();
-        // Skip bookings already used for a wash, so a second unused booking on
-        // the same machine is still reachable. Fall back to the full list only
-        // so checkIn can explain why nothing is eligible.
-        List<MachineReservation> unused = owned.stream().filter(r -> !isUsed(r)).toList();
+    /**
+     * The slot to start: old slots that were never closed out must not shadow the booking just made, so
+     * unused slots whose window has not ended come first (earliest start). The fallbacks only let
+     * {@link #checkIn} explain why nothing is eligible.
+     */
+    private Optional<MachineSlot> eligibleSlot(Machine machine, UUID userId) {
+        Instant now = Instant.now();
+        List<MachineSlot> owned = machineSlots.customerSlots(machine.getId(), userId);
+        List<MachineSlot> unused = owned.stream().filter(slot -> !slot.used()).toList();
         return unused.stream()
-                .filter(r -> r.getEndTime() == null || !r.getEndTime().isBefore(now))
-                .min(java.util.Comparator.comparing(MachineReservation::getStartTime,
-                        java.util.Comparator.nullsFirst(java.util.Comparator.naturalOrder())))
+                .filter(slot -> !slot.until().isBefore(now))
+                .min(java.util.Comparator.comparing(MachineSlot::from))
                 .or(() -> unused.stream().findFirst())
                 .or(() -> owned.stream().findFirst());
-    }
-
-    private boolean isUsed(MachineReservation reservation) {
-        return authorizationRepository.existsByReservationIdAndStatus(
-                reservation.getId(), MachineStartAuthorizationStatus.CONSUMED);
     }
 
     private MachineStartAuthorization lockOrThrow(UUID authorizationId, UUID machineId) {
@@ -726,7 +700,7 @@ public class MachineStartAuthorizationService {
                 java.time.Duration.between(OffsetDateTime.now(), a.getExpiresAt()).getSeconds());
         return CheckInResponse.builder()
                 .authorizationId(a.getId())
-                .reservationId(a.getReservationId())
+                .bookingId(a.getBookingId())
                 .machineId(a.getMachineId())
                 .machineCode(a.getMachineCode())
                 .authorizationStatus(a.getStatus())

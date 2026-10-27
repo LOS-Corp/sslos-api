@@ -4,6 +4,7 @@ import com.laundry.booking.dto.BookingDtos.CreateHoldRequest;
 import com.laundry.booking.service.BookingCancellationService;
 import com.laundry.booking.service.BookingCancellationService.CancellationPreview;
 import com.laundry.booking.service.ScheduledBookingService;
+import com.laundry.machine.service.MachineStartAuthorizationService;
 import com.laundry.refund.dto.request.CreateRefundRequest;
 import com.laundry.refund.dto.response.RefundCandidate;
 import com.laundry.refund.dto.response.RefundResponse;
@@ -44,6 +45,7 @@ class MoneyFlowIT {
     @Autowired private RefundService refunds;
     @Autowired private WalletService wallet;
     @Autowired private JdbcTemplate jdbc;
+    @Autowired private MachineStartAuthorizationService startAuthorizations;
 
     private UUID branchId;
     private UUID washerId;
@@ -161,6 +163,21 @@ class MoneyFlowIT {
         assertThat(rejected.rejectionReason()).isEqualTo("Không đủ bằng chứng");
         assertThat(wallet.balanceOf(customerId).vnd()).isZero();
         assertThat(refunds.pending(branchId, owner)).extracting(RefundResponse::id).doesNotContain(raised.id());
+    }
+
+    @Test
+    @DisplayName("UC-08: cancelling a booking whose START is already unlocked revokes it after commit")
+    void cancellationRevokesStart() {
+        UUID booking = paidBooking(soon(10));
+        String machineCode = jdbc.queryForObject("SELECT machine_code FROM machines WHERE id = ?", String.class, washerId);
+        var authorization = startAuthorizations.checkIn(machineCode, customerId);
+
+        cancellations.cancel(customer, booking);
+
+        assertThat(jdbc.queryForObject("SELECT status FROM machine_start_authorizations WHERE id = ?",
+                String.class, authorization.authorizationId())).isEqualTo("REVOKED");
+        assertThat(jdbc.queryForObject("SELECT booking_id FROM machine_start_authorizations WHERE id = ?",
+                UUID.class, authorization.authorizationId())).isEqualTo(booking);
     }
 
     @Test

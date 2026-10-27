@@ -48,7 +48,7 @@ public class StartAuthorizationPublisher {
         payload.put("type", "AUTHORIZE_START");
         payload.put("commandId", "AUTH-" + auth.getId());
         payload.put("authorizationId", auth.getId().toString());
-        if (auth.getReservationId() != null) payload.put("reservationId", auth.getReservationId().toString());
+        if (auth.getBookingId() != null) payload.put("bookingId", auth.getBookingId().toString());
         if (auth.isTestRun()) payload.put("testRun", true);
         payload.put("machineId", machine.getMachineCode());
         payload.put("expiresInSeconds", authorizationTtlSeconds);

@@ -152,7 +152,7 @@ public class MachineController {
         return startAuthorizationService.findOwnedByUser(authorizationId, customer.id())
                 .map(a -> ResponseEntity.ok(AuthorizationStatusResponse.builder()
                         .authorizationId(a.getId())
-                        .reservationId(a.getReservationId())
+                        .bookingId(a.getBookingId())
                         .machineId(a.getMachineId())
                         .machineCode(a.getMachineCode())
                         .authorizationStatus(a.getStatus())
