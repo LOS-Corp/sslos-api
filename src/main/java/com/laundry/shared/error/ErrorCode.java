@@ -54,6 +54,8 @@ public enum ErrorCode {
     REFUND_EXCEEDS_PAID(HttpStatus.CONFLICT, null),
     SELF_APPROVAL_FORBIDDEN(HttpStatus.CONFLICT, null),
     INSUFFICIENT_BALANCE(HttpStatus.CONFLICT, null),
+    FILE_REJECTED(HttpStatus.UNSUPPORTED_MEDIA_TYPE, null),
+    FILE_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, null),
 
     // ── Legacy transaction envelope ────────────────────────────────────────
     TRANSACTION_REJECTED(HttpStatus.BAD_REQUEST, null);

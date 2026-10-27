@@ -2,6 +2,7 @@ package com.laundry.refund.controller;
 
 import com.laundry.refund.dto.request.CreateRefundRequest;
 import com.laundry.refund.dto.request.RefundDecisionRequest;
+import com.laundry.refund.dto.response.RefundCandidate;
 import com.laundry.refund.dto.response.RefundResponse;
 import com.laundry.refund.service.RefundService;
 import com.laundry.shared.security.CurrentUser;
@@ -39,6 +40,13 @@ public class RefundController {
     @Operation(summary = "Raise an exception refund request (Staff of the branch or Owner)")
     public RefundResponse raise(@Valid @RequestBody CreateRefundRequest request, CurrentUser requester) {
         return refundService.raise(request, requester);
+    }
+
+    @GetMapping("/lookup")
+    @PreAuthorize(Roles.OPERATOR)
+    @Operation(summary = "Find an order by the short code on the customer's order card, with its refundable payments")
+    public List<RefundCandidate> lookup(@RequestParam String code, CurrentUser viewer) {
+        return refundService.lookup(code, viewer);
     }
 
     @GetMapping("/{id}")

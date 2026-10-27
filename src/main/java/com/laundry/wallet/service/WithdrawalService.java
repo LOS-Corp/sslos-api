@@ -1,5 +1,7 @@
 package com.laundry.wallet.service;
 
+import com.laundry.attachment.service.AttachmentService;
+import com.laundry.attachment.service.AttachmentService.Purpose;
 import com.laundry.audit.service.AuditAction;
 import com.laundry.audit.service.AuditService;
 import com.laundry.audit.service.AuditService.AuditEntry;
@@ -37,6 +39,7 @@ public class WithdrawalService {
     private final WalletService wallet;
     private final AuditService audit;
     private final Clock clock;
+    private final AttachmentService attachments;
 
     @Transactional
     public WithdrawalDto request(CurrentUser customer, WithdrawalRequest request) {
@@ -57,6 +60,7 @@ public class WithdrawalService {
 
     @Transactional
     public WithdrawalDto complete(UUID withdrawalId, String proof, CurrentUser owner) {
+        attachments.requireReferencesValid(proof, Purpose.WITHDRAWAL_PROOF);
         WalletWithdrawal withdrawal = locked(withdrawalId);
         withdrawal.complete(owner.id(), proof, OffsetDateTime.now(clock));
         audit.record(AuditEntry.of(AuditAction.WITHDRAWAL_COMPLETED, ENTITY, withdrawal.getId(), null, owner)

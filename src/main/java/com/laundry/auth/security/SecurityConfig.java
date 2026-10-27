@@ -137,6 +137,9 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST, "/api/refunds/*/approve", "/api/refunds/*/reject")
                                 .hasRole(OWNER)
                         .requestMatchers("/api/refunds", "/api/refunds/**").hasAnyRole(STAFF, OWNER)
+                        // Evidence files: upload by Staff/Owner; who may read which file is decided in AttachmentService.
+                        .requestMatchers(HttpMethod.POST, "/api/attachments").hasAnyRole(STAFF, OWNER)
+                        .requestMatchers(HttpMethod.GET, "/api/attachments/*").authenticated()
 
                         // Deny by default: a new endpoint must be added to the matrix on purpose.
                         .anyRequest().denyAll())

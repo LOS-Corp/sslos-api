@@ -37,3 +37,6 @@ build/
 
 ### Logs ###
 *.log
+
+# Uploaded evidence files (app.storage.local-dir)
+/data/

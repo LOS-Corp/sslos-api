@@ -5,6 +5,7 @@ import com.laundry.booking.service.BookingCancellationService;
 import com.laundry.booking.service.BookingCancellationService.CancellationPreview;
 import com.laundry.booking.service.ScheduledBookingService;
 import com.laundry.refund.dto.request.CreateRefundRequest;
+import com.laundry.refund.dto.response.RefundCandidate;
 import com.laundry.refund.dto.response.RefundResponse;
 import com.laundry.refund.entity.RefundStatus;
 import com.laundry.refund.service.RefundService;
@@ -160,6 +161,35 @@ class MoneyFlowIT {
         assertThat(rejected.rejectionReason()).isEqualTo("Không đủ bằng chứng");
         assertThat(wallet.balanceOf(customerId).vnd()).isZero();
         assertThat(refunds.pending(branchId, owner)).extracting(RefundResponse::id).doesNotContain(raised.id());
+    }
+
+    @Test
+    @DisplayName("UC-08 4a: Staff find the order by its short code; other branches never see it")
+    void lookupByShortCode() {
+        UUID booking = paidBooking(tomorrow);
+        String shortCode = booking.toString().substring(0, 8).toUpperCase();
+        CurrentUser staff = staffOf(branchId);
+
+        List<RefundCandidate> found = refunds.lookup(" " + shortCode + " ", staff);
+        assertThat(found).singleElement().satisfies(candidate -> {
+            assertThat(candidate.bookingId()).isEqualTo(booking);
+            assertThat(candidate.shortCode()).isEqualTo(shortCode);
+            assertThat(candidate.payments()).singleElement().satisfies(payment -> {
+                assertThat(payment.refundable()).isEqualByComparingTo(BigDecimal.valueOf(PRICE));
+                assertThat(payment.alreadyRefunded()).isEqualByComparingTo(BigDecimal.ZERO);
+            });
+        });
+
+        // Raising against the found payment lowers what is still refundable (BR-14 cap).
+        refunds.raise(new CreateRefundRequest(found.getFirst().payments().getFirst().paymentId(),
+                BigDecimal.valueOf(20_000), "Máy dừng giữa chu trình", null), staff);
+        assertThat(refunds.lookup(booking.toString(), staff).getFirst().payments().getFirst().refundable())
+                .isEqualByComparingTo(BigDecimal.valueOf(PRICE - 20_000));
+
+        assertThat(refunds.lookup(shortCode, staffOf(Fixtures.bookableBranch(jdbc, PRICE)))).isEmpty();
+        assertThatThrownBy(() -> refunds.lookup("abc", staff))
+                .isInstanceOf(BusinessException.class)
+                .satisfies(e -> assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.VALIDATION_FAILED));
     }
 
     @Test
