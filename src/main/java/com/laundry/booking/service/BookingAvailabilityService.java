@@ -151,13 +151,9 @@ public class BookingAvailabilityService {
         List<AvailabilityInterval> operatingIntervals =
                 operatingIntervals(weeklyHours, zone, dayStart, dayEnd);
         List<String> requirements = config.requirements();
-        Map<String, List<Resource>> resourcesByType = new java.util.LinkedHashMap<>();
-        Map<UUID, Resource> resourcesById = new java.util.HashMap<>();
-        for (String requirement : requirements) {
-            List<Resource> resources = queries.resourcesFor(branchId, requirement);
-            resourcesByType.put(requirement, resources);
-            resources.forEach(resource -> resourcesById.put(resource.id(), resource));
-        }
+        Map<String, List<Resource>> resourcesByType =
+                queries.resourcesByType(branchId, requirements, machineRepository.findByBranchId(branchId));
+        Map<UUID, Resource> resourcesById = byId(resourcesByType);
 
         Map<UUID, List<OccupiedInterval>> occupiedByResource =
                 queries.occupiedIntervals(branchId, dayStart, queryEnd, resourcesById, config.bufferMinutes());
@@ -224,12 +220,13 @@ public class BookingAvailabilityService {
         List<RecommendationDto> recommendations = new ArrayList<>();
         if (preferredEndSatisfied && queries.isWithinOpeningHours(config, desiredStartTime, plan)) {
             List<List<Resource>> candidates = new ArrayList<>();
+            Map<String, List<Resource>> resourcesByType = queries.resourcesByType(config.branchId(),
+                    config.requirements(), machineRepository.findByBranchId(config.branchId()));
             for (int i = 0; i < config.requirements().size(); i++) {
                 AllocationPlan allocation = plan.allocationPlans().get(i);
-                candidates.add(queries.resourcesFor(config.branchId(), config.requirements().get(i)).stream()
-                        .filter(resource -> !queries.resourceBusy(resource, allocation, null,
-                                config.bufferMinutes()))
-                        .toList());
+                List<Resource> ofType = resourcesByType.get(config.requirements().get(i));
+                Set<UUID> busy = queries.busyResources(ofType, allocation, config.bufferMinutes());
+                candidates.add(ofType.stream().filter(resource -> !busy.contains(resource.id())).toList());
             }
             collectRecommendations(config, plan, candidates, 0, new ArrayList<>(), recommendations);
         }
@@ -285,15 +282,12 @@ public class BookingAvailabilityService {
         }
 
         List<String> requirements = config.requirements();
-        Map<String, List<Resource>> resourcesByType = new java.util.LinkedHashMap<>();
-        Map<UUID, Resource> resourcesById = new java.util.HashMap<>();
-        for (String requirement : requirements) {
-            List<Resource> resources = queries.resourcesFor(branchId, requirement);
-            resourcesByType.put(requirement, resources);
-            resources.forEach(resource -> resourcesById.put(resource.id(), resource));
-        }
+        List<Machine> branchMachines = machineRepository.findByBranchId(branchId);
+        Map<String, List<Resource>> resourcesByType = new java.util.LinkedHashMap<>(
+                queries.resourcesByType(branchId, requirements, branchMachines));
+        Map<UUID, Resource> resourcesById = byId(resourcesByType);
         Map<UUID, Machine> machines = new java.util.HashMap<>();
-        machineRepository.findByBranchId(branchId).forEach(machine -> machines.put(machine.getId(), machine));
+        branchMachines.forEach(machine -> machines.put(machine.getId(), machine));
 
         // BR-26 / SC-42: machines smaller than the declared load are never offered.
         List<UnavailableMachineDto> tooSmall = new ArrayList<>();
@@ -378,6 +372,12 @@ public class BookingAvailabilityService {
         int durationMinutes = offsetMinutes(buildPlan(config, Instant.EPOCH).expectedEnd());
         return new MachineSearchResponse(branchId, config.code(), zone.getId(), from, to, firstStart,
                 durationMinutes, config.bufferMinutes(), options, unavailable);
+    }
+
+    private static Map<UUID, Resource> byId(Map<String, List<Resource>> resourcesByType) {
+        Map<UUID, Resource> result = new java.util.HashMap<>();
+        resourcesByType.values().forEach(list -> list.forEach(resource -> result.put(resource.id(), resource)));
+        return result;
     }
 
     private MachineSearchOptionDto searchOption(ServiceConfig config,

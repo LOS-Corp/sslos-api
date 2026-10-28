@@ -14,3 +14,4 @@ Status values: **Accepted** (in the code and enforced), **Transitional** (accept
 | [007](007-side-effects-after-commit.md) | Device commands are published after commit | Accepted | `DeviceCommandDispatcher` |
 | [008](008-cluster-safe-jobs.md) | Scheduled jobs are cluster-safe through PostgreSQL advisory locks | Accepted | `JobLock` |
 | [009](009-tests-on-real-postgresql.md) | Integration tests run on real PostgreSQL | Accepted | Testcontainers, Failsafe in CI |
+| [010](010-performance-budgets.md) | Booking read paths have measured performance budgets | Accepted | `BookingPerformanceIT` (statement budgets, no seq scan on allocations) |

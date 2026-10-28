@@ -46,12 +46,16 @@ public final class Fixtures {
         return branchId;
     }
 
-    /** An online, commissioned, available washer in the branch. */
+    /**
+     * An online, commissioned, available washer in the branch. Its heartbeat is set a day ahead: these machines
+     * are simulated, and the offline detector would otherwise mark them OFFLINE 30 s into a test.
+     */
     public static UUID washer(JdbcTemplate jdbc, UUID branchId) {
         UUID id = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO machines (id, machine_code, branch_id, type, status, deployment_status, online, created_at, updated_at)
-                VALUES (?, ?, ?, 'WASHER', 'AVAILABLE', 'ACTIVE', TRUE, NOW(), NOW())
+                INSERT INTO machines (id, machine_code, branch_id, type, status, deployment_status, online,
+                                      last_heartbeat_at, created_at, updated_at)
+                VALUES (?, ?, ?, 'WASHER', 'AVAILABLE', 'ACTIVE', TRUE, NOW() + interval '1 day', NOW(), NOW())
                 """, id, "W" + id.toString().substring(0, 8).toUpperCase(), branchId);
         return id;
     }
@@ -63,8 +67,9 @@ public final class Fixtures {
     public static Locker lockerCompartment(JdbcTemplate jdbc, UUID branchId, long price) {
         UUID cabinet = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO machines (id, machine_code, branch_id, type, status, deployment_status, online, created_at, updated_at)
-                VALUES (?, ?, ?, 'LOCKER', 'AVAILABLE', 'ACTIVE', TRUE, NOW(), NOW())
+                INSERT INTO machines (id, machine_code, branch_id, type, status, deployment_status, online,
+                                      last_heartbeat_at, created_at, updated_at)
+                VALUES (?, ?, ?, 'LOCKER', 'AVAILABLE', 'ACTIVE', TRUE, NOW() + interval '1 day', NOW(), NOW())
                 """, cabinet, "L" + cabinet.toString().substring(0, 8).toUpperCase(), branchId);
         UUID compartment = UUID.randomUUID();
         jdbc.update("""

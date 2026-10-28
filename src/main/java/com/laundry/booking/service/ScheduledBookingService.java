@@ -120,8 +120,7 @@ public class ScheduledBookingService {
         expireStaleHolds(resources);
         validateSelectedResources(request.branchId(), resources);
         for (int i = 0; i < resources.size(); i++) {
-            if (queries.resourceBusy(resources.get(i), plan.allocationPlans().get(i), null,
-                    config.bufferMinutes())) {
+            if (queries.resourceBusy(resources.get(i), plan.allocationPlans().get(i), config.bufferMinutes())) {
                 throw BusinessException.of(ErrorCode.SLOT_TAKEN, "The selected time was just booked. Please choose another slot.");
             }
         }

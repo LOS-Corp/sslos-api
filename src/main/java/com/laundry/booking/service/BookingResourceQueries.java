@@ -20,7 +20,9 @@ import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -149,6 +151,23 @@ public class BookingResourceQueries {
                 rs.getTime("closes_at").toLocalTime()), branchId);
     }
 
+    /**
+     * Live allocations of the given resources overlapping {@code [from, until)}. The predicate is written to
+     * match the V44 no-overlap index ({@code gist (resource_id, tstzrange(occupied_from, occupied_until, '[)'))
+     * WHERE active}), so finished history is never read: the cost follows the live bookings, not the table size.
+     * {@code active} is kept equal to {@code booking_holds_resources(status)} by the V44 trigger; holds whose
+     * time ran out but that the expiry job has not swept yet are skipped through the booking.
+     */
+    private static final String LIVE_ALLOCATIONS_SQL = """
+            SELECT %s
+            FROM booking_resource_allocations a
+            JOIN scheduled_bookings b ON b.id = a.booking_id
+            WHERE a.active
+              AND a.resource_id = ANY (?)
+              AND tstzrange(a.occupied_from, a.occupied_until, '[)') && tstzrange(?, ?, '[)')
+              AND (b.status <> 'HELD' OR b.hold_expires_at > NOW())
+            """;
+
     Map<UUID, List<OccupiedInterval>> occupiedIntervals(UUID branchId,
                                                                  Instant from,
                                                                  Instant until,
@@ -160,24 +179,13 @@ public class BookingResourceQueries {
         resourcesById.values().forEach(resource -> activeSession(resource, bufferMinutes, now)
                 .ifPresent(session -> result.computeIfAbsent(resource.id(), ignored -> new ArrayList<>())
                         .add(session)));
-        jdbc.query("""
-                SELECT a.resource_id, a.occupied_from, a.occupied_until
-                FROM booking_resource_allocations a
-                JOIN scheduled_bookings b ON b.id = a.booking_id
-                WHERE b.branch_id = ?
-                  AND a.occupied_from < ?
-                  AND a.occupied_until > ?
-                  AND (b.status <> 'HELD' OR b.hold_expires_at > NOW())
-                  AND booking_holds_resources(b.status)
-                """, rs -> {
+        jdbc.query(LIVE_ALLOCATIONS_SQL.formatted("a.resource_id, a.occupied_from, a.occupied_until"), rs -> {
             UUID resourceId = rs.getObject("resource_id", UUID.class);
-            if (resourcesById.containsKey(resourceId)) {
-                result.computeIfAbsent(resourceId, ignored -> new ArrayList<>())
-                        .add(new OccupiedInterval(rs.getTimestamp("occupied_from").toInstant(),
-                                rs.getTimestamp("occupied_until").toInstant()));
-            }
-        }, branchId, OffsetDateTime.ofInstant(until, ZoneOffset.UTC),
-                OffsetDateTime.ofInstant(from, ZoneOffset.UTC));
+            result.computeIfAbsent(resourceId, ignored -> new ArrayList<>())
+                    .add(new OccupiedInterval(rs.getTimestamp("occupied_from").toInstant(),
+                            rs.getTimestamp("occupied_until").toInstant()));
+        }, resourcesById.keySet().toArray(UUID[]::new),
+                OffsetDateTime.ofInstant(from, ZoneOffset.UTC), OffsetDateTime.ofInstant(until, ZoneOffset.UTC));
         return result;
     }
 
@@ -204,9 +212,21 @@ public class BookingResourceQueries {
     }
 
     List<Resource> resourcesFor(UUID branchId, String type) {
+        return resourcesFor(branchId, type, machineRepository.findByBranchId(branchId));
+    }
+
+    /** Bookable resources of each type, from one load of the branch's machines. */
+    Map<String, List<Resource>> resourcesByType(UUID branchId, List<String> types, List<Machine> branchMachines) {
+        Map<String, List<Resource>> result = new java.util.LinkedHashMap<>();
+        types.forEach(type -> result.put(type, resourcesFor(branchId, type, branchMachines)));
+        return result;
+    }
+
+    /** Same as {@link #resourcesFor(UUID, String)} with the branch's machines already loaded by the caller. */
+    List<Resource> resourcesFor(UUID branchId, String type, List<Machine> branchMachines) {
         if ("WASHER".equals(type) || "DRYER".equals(type)) {
             MachineType machineType = MachineType.valueOf(type);
-            return machineRepository.findByBranchId(branchId).stream()
+            return branchMachines.stream()
                     .filter(machine -> machine.getType() == machineType && isOperationallyUsable(machine))
                     .sorted(Comparator.comparing(Machine::getMachineCode))
                     .map(machine -> new Resource(type, machine.getId(), machine.getMachineCode(),
@@ -217,7 +237,7 @@ public class BookingResourceQueries {
         }
         // A compartment fitted to a smart locker is only bookable while its cabinet
         // is usable (online, commissioned); unlinked compartments are managed by hand.
-        Set<UUID> usableCabinets = machineRepository.findByBranchId(branchId).stream()
+        Set<UUID> usableCabinets = branchMachines.stream()
                 .filter(machine -> machine.getType() == MachineType.LOCKER && isOperationallyUsable(machine))
                 .map(Machine::getId)
                 .collect(java.util.stream.Collectors.toSet());
@@ -238,31 +258,31 @@ public class BookingResourceQueries {
      * True when {@code plan} overlaps a live booking/hold allocation or the machine's
      * current session (running cycle).
      */
-    boolean resourceBusy(Resource resource,
-                                 AllocationPlan plan,
-                                 UUID excludeBookingId,
-                                 int bufferMinutes) {
-        boolean sessionConflict = activeSession(resource, bufferMinutes, Instant.now())
-                .filter(session -> intervalsOverlap(plan.from(), plan.until(), session.start(), session.end()))
-                .isPresent();
-        if (sessionConflict) {
-            return true;
+    boolean resourceBusy(Resource resource, AllocationPlan plan, int bufferMinutes) {
+        return busyResources(List.of(resource), plan, bufferMinutes).contains(resource.id());
+    }
+
+    /**
+     * The resources among {@code resources} that cannot take {@code plan}: a running session overlaps it
+     * (in memory) or a live booking/hold allocation does. One SQL statement for the whole list, so the
+     * recommendation path does not issue a query per machine.
+     */
+    Set<UUID> busyResources(Collection<Resource> resources, AllocationPlan plan, int bufferMinutes) {
+        Set<UUID> busy = new HashSet<>();
+        if (resources.isEmpty()) {
+            return busy;
         }
-        Integer scheduledCount = jdbc.queryForObject("""
-                SELECT COUNT(*)
-                FROM booking_resource_allocations a
-                JOIN scheduled_bookings b ON b.id = a.booking_id
-                WHERE a.resource_id = ?
-                  AND a.occupied_from < ?
-                  AND a.occupied_until > ?
-                  AND (?::uuid IS NULL OR b.id <> ?)
-                  AND (b.status <> 'HELD' OR b.hold_expires_at > NOW())
-                  AND booking_holds_resources(b.status)
-                """, Integer.class, resource.id(),
-                OffsetDateTime.ofInstant(plan.until(), ZoneOffset.UTC),
+        Instant now = Instant.now();
+        for (Resource resource : resources) {
+            activeSession(resource, bufferMinutes, now)
+                    .filter(session -> intervalsOverlap(plan.from(), plan.until(), session.start(), session.end()))
+                    .ifPresent(session -> busy.add(resource.id()));
+        }
+        UUID[] ids = resources.stream().map(Resource::id).distinct().toArray(UUID[]::new);
+        busy.addAll(jdbc.queryForList(LIVE_ALLOCATIONS_SQL.formatted("DISTINCT a.resource_id"), UUID.class, ids,
                 OffsetDateTime.ofInstant(plan.from(), ZoneOffset.UTC),
-                excludeBookingId, excludeBookingId);
-        return scheduledCount != null && scheduledCount > 0;
+                OffsetDateTime.ofInstant(plan.until(), ZoneOffset.UTC)));
+        return busy;
     }
 
     /**
