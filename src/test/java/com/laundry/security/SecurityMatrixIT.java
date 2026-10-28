@@ -86,6 +86,14 @@ class SecurityMatrixIT {
     }
 
     @Test
+    @DisplayName("TD-32: the profile answers on /api/users/me and on the old /api/v1 alias; anonymous callers are refused")
+    void profilePaths() throws Exception {
+        mvc.perform(get("/api/users/me").with(as(staffOfA, Role.STAFF))).andExpect(status().isOk());
+        mvc.perform(get("/api/v1/users/me").with(as(staffOfA, Role.STAFF))).andExpect(status().isOk());
+        mvc.perform(get("/api/users/me")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
     @DisplayName("Deny by default: an unlisted endpoint is refused even for Admin")
     void unknownEndpointIsDenied() throws Exception {
         mvc.perform(get("/api/not-in-the-matrix").with(as(Role.ADMIN)))

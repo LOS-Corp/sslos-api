@@ -9,6 +9,7 @@ import com.laundry.payment.entity.PaymentStatus;
 import com.laundry.payment.exception.PaymentException;
 import com.laundry.payment.gateway.GatewayPaymentStatus;
 import com.laundry.payment.gateway.PaymentGateway;
+import com.laundry.payment.gateway.payos.PayOSProperties;
 import com.laundry.payment.gateway.PaymentResult;
 import com.laundry.payment.repository.PaymentRepository;
 import com.laundry.booking.service.ScheduledBookingService;
@@ -37,12 +38,10 @@ public class PaymentService {
     private final TransactionQueryService transactionQueries;
     private final WalletPaymentService walletPayments;
     private final ScheduledBookingService scheduledBookingService;
+    private final PayOSProperties payos;
 
     @Value("${app.payment.callback-base-url:http://localhost:8080}")
     private String callbackBaseUrl;
-
-    @Value("${app.payos.return-url:}")
-    private String payosReturnUrl;
 
     /**
      * Create a new payment
@@ -97,9 +96,9 @@ public class PaymentService {
         payment = paymentRepository.save(payment);
 
         // Payments are online-only: always create the gateway request
-        String returnUrl = payosReturnUrl == null || payosReturnUrl.isBlank()
+        String returnUrl = payos.returnUrl().isBlank()
                 ? callbackBaseUrl + "/?paymentId=" + payment.getId()
-                : payosReturnUrl + (payosReturnUrl.contains("?") ? "&" : "?")
+                : payos.returnUrl() + (payos.returnUrl().contains("?") ? "&" : "?")
                 + "paymentId=" + payment.getId();
         PaymentResult result = paymentGateway.createPayment(payment.getId(), request.getAmount(), returnUrl);
 

@@ -8,6 +8,7 @@ import com.laundry.payment.entity.PaymentStatus;
 import com.laundry.payment.exception.PaymentException;
 import com.laundry.payment.gateway.GatewayPaymentStatus;
 import com.laundry.payment.gateway.PaymentGateway;
+import com.laundry.payment.gateway.payos.PayOSProperties;
 import com.laundry.payment.repository.PaymentRepository;
 import com.laundry.payment.service.PaymentService;
 import com.laundry.payment.service.WalletPaymentService;
@@ -37,7 +38,7 @@ class PaymentServiceTest {
         TransactionQueryService transactionQueries = mock(TransactionQueryService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, paymentGateway, transactionQueries, noWallet(), bookingService);
+                paymentRepository, paymentGateway, transactionQueries, noWallet(), bookingService, PayOSProperties.withChecksumKey(""));
         UUID transactionId = UUID.randomUUID();
         when(transactionQueries.getTransaction(transactionId)).thenReturn(TransactionResponse.builder()
                 .transactionId(transactionId)
@@ -62,7 +63,7 @@ class PaymentServiceTest {
         TransactionQueryService transactionQueries = mock(TransactionQueryService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, mock(PaymentGateway.class), transactionQueries, noWallet(), bookingService);
+                paymentRepository, mock(PaymentGateway.class), transactionQueries, noWallet(), bookingService, PayOSProperties.withChecksumKey(""));
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         UUID customerId = UUID.randomUUID();
@@ -92,7 +93,7 @@ class PaymentServiceTest {
         TransactionQueryService transactionQueries = mock(TransactionQueryService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, mock(PaymentGateway.class), transactionQueries, noWallet(), bookingService);
+                paymentRepository, mock(PaymentGateway.class), transactionQueries, noWallet(), bookingService, PayOSProperties.withChecksumKey(""));
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         Payment payment = Payment.builder()
@@ -121,7 +122,7 @@ class PaymentServiceTest {
         TransactionQueryService transactionQueries = mock(TransactionQueryService.class);
         ScheduledBookingService bookingService = mock(ScheduledBookingService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, paymentGateway, transactionQueries, noWallet(), bookingService);
+                paymentRepository, paymentGateway, transactionQueries, noWallet(), bookingService, PayOSProperties.withChecksumKey(""));
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         UUID customerId = UUID.randomUUID();
@@ -156,7 +157,7 @@ class PaymentServiceTest {
         PaymentGateway paymentGateway = mock(PaymentGateway.class);
         TransactionQueryService transactionQueries = mock(TransactionQueryService.class);
         PaymentService paymentService = new PaymentService(
-                paymentRepository, paymentGateway, transactionQueries, noWallet(), mock(ScheduledBookingService.class));
+                paymentRepository, paymentGateway, transactionQueries, noWallet(), mock(ScheduledBookingService.class), PayOSProperties.withChecksumKey(""));
         UUID paymentId = UUID.randomUUID();
         UUID transactionId = UUID.randomUUID();
         UUID customerId = UUID.randomUUID();

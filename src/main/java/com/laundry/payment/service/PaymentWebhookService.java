@@ -2,10 +2,10 @@ package com.laundry.payment.service;
 
 import com.laundry.payment.entity.Payment;
 import com.laundry.payment.gateway.payos.PayOSGateway;
+import com.laundry.payment.gateway.payos.PayOSProperties;
 import com.laundry.payment.repository.PaymentRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -23,20 +23,20 @@ public class PaymentWebhookService {
     private final PaymentRepository paymentRepository;
     private final PaymentService paymentService;
     private final PayOSGateway payOSGateway;
-    private final String checksumKey;
+    private final PayOSProperties payos;
 
     public PaymentWebhookService(PaymentRepository paymentRepository,
                                  PaymentService paymentService,
                                  @Autowired(required = false) PayOSGateway payOSGateway,
-                                 @Value("${app.payos.checksum-key:}") String checksumKey) {
+                                 PayOSProperties payos) {
         this.paymentRepository = paymentRepository;
         this.paymentService = paymentService;
         this.payOSGateway = payOSGateway;
-        this.checksumKey = checksumKey;
+        this.payos = payos;
     }
 
     public Outcome handle(Map<String, Object> payload) {
-        if (payOSGateway == null || checksumKey == null || checksumKey.isBlank()) {
+        if (payOSGateway == null || !payos.canVerifyWebhooks()) {
             log.error("PayOS webhook rejected because signature verification is not configured");
             return Outcome.UNAVAILABLE;
         }

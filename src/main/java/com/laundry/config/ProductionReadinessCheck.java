@@ -1,5 +1,6 @@
 package com.laundry.config;
 
+import com.laundry.payment.gateway.payos.PayOSProperties;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Profile;
@@ -17,6 +18,12 @@ import java.util.Locale;
 @Profile("prod")
 class ProductionReadinessCheck implements InitializingBean {
 
+    private final PayOSProperties payos;
+
+    ProductionReadinessCheck(PayOSProperties payos) {
+        this.payos = payos;
+    }
+
     private static final List<String> SAMPLE_MARKERS = List.of("change", "dev", "test", "local", "example", "secret");
 
     @Value("${app.jwt.secret}")
@@ -25,8 +32,6 @@ class ProductionReadinessCheck implements InitializingBean {
     @Value("${app.payment.gateway}")
     private String paymentGateway;
 
-    @Value("${app.payos.checksum-key:}")
-    private String payosChecksumKey;
 
     @Value("${app.iot.device-secret-key:}")
     private String deviceSecretKey;
@@ -40,7 +45,7 @@ class ProductionReadinessCheck implements InitializingBean {
         if (!"payos".equalsIgnoreCase(paymentGateway)) {
             problems.add("PAYMENT_GATEWAY must be payos in production");
         }
-        if (payosChecksumKey.isBlank()) {
+        if (!payos.canVerifyWebhooks()) {
             problems.add("PAYOS_CHECKSUM_KEY is required to verify webhooks");
         }
         if (deviceSecretKey.length() < 32) {

@@ -117,7 +117,7 @@ public class SecurityConfig {
                         // ── Accounts ─────────────────────────────────────────────────────────
                         .requestMatchers(HttpMethod.POST, "/api/auth/logout").authenticated()
                         .requestMatchers(HttpMethod.PUT, "/api/auth/change-password").authenticated()
-                        .requestMatchers("/api/v1/users/me").authenticated()
+                        .requestMatchers("/api/users/me", "/api/v1/users/me").authenticated()
                         // Admin manages Owners, Owner manages Staff (checked again in AdminUserService).
                         .requestMatchers("/api/admin/users", "/api/admin/users/**").hasAnyRole(OWNER, ADMIN)
 
