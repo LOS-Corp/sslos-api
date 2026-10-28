@@ -1,0 +1,41 @@
+# Who reviews what (task/11). GitHub requests these reviewers automatically on every PR.
+# Duy Khánh (Hikari2004-dev): shared foundation, booking, money. Bảo Khánh (LBK04): devices, IoT, locker.
+# The last matching line wins.
+
+# Shared foundation: owned by Duy Khánh, but both review because both modules depend on it
+*                                                   @Hikari2004-dev
+/pom.xml                                            @Hikari2004-dev @LBK04
+/.github/                                           @Hikari2004-dev @LBK04
+/src/main/resources/                                @Hikari2004-dev @LBK04
+/src/main/java/com/laundry/auth/security/SecurityConfig.java  @Hikari2004-dev @LBK04
+/src/main/java/com/laundry/config/                  @Hikari2004-dev @LBK04
+/src/main/java/com/laundry/shared/                  @Hikari2004-dev @LBK04
+
+# Duy Khánh: booking, payment, wallet, refund, attachment, transaction
+/src/main/java/com/laundry/booking/                 @Hikari2004-dev
+/src/main/java/com/laundry/payment/                 @Hikari2004-dev
+/src/main/java/com/laundry/wallet/                  @Hikari2004-dev
+/src/main/java/com/laundry/refund/                  @Hikari2004-dev
+/src/main/java/com/laundry/attachment/              @Hikari2004-dev
+/src/main/java/com/laundry/transaction/             @Hikari2004-dev
+/src/test/java/com/laundry/booking/                 @Hikari2004-dev
+/src/test/java/com/laundry/money/                   @Hikari2004-dev
+/src/test/java/com/laundry/payment/                 @Hikari2004-dev
+/src/test/java/com/laundry/attachment/              @Hikari2004-dev
+
+# Bảo Khánh: machine, IoT, MQTT, locker, websocket
+/src/main/java/com/laundry/machine/                 @LBK04
+/src/main/java/com/laundry/iot/                     @LBK04
+/src/main/java/com/laundry/mqtt/                    @LBK04
+/src/main/java/com/laundry/locker/                  @LBK04
+/src/main/java/com/laundry/websocket/               @LBK04
+/src/test/java/com/laundry/machine/                 @LBK04
+/src/test/java/com/laundry/iot/                     @LBK04
+/src/test/java/com/laundry/mqtt/                    @LBK04
+/src/test/java/com/laundry/websocket/               @LBK04
+
+# Contracts between the two sides: both review
+/src/main/java/com/laundry/booking/service/MachineSlotService.java       @Hikari2004-dev @LBK04
+/src/main/java/com/laundry/booking/service/BookingLifecycleService.java  @Hikari2004-dev @LBK04
+/src/main/java/com/laundry/machine/entity/Machine.java                   @LBK04 @Hikari2004-dev
+/src/main/java/com/laundry/machine/repository/MachineRepository.java     @LBK04 @Hikari2004-dev
