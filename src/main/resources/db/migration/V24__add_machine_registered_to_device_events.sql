@@ -1,0 +1,13 @@
+-- V24: Add MACHINE_REGISTERED to device_events chk_event_type constraint
+
+ALTER TABLE device_events
+    DROP CONSTRAINT IF EXISTS chk_event_type;
+
+ALTER TABLE device_events
+    ADD CONSTRAINT chk_event_type CHECK (event_type IN (
+        'STARTED', 'COMPLETED', 'DOOR_OPENED', 'DOOR_CLOSED',
+        'LEAK_DETECTED', 'OVERLOAD', 'ESTOP', 'DEVICE_ERROR',
+        'CONNECTION_RECOVERED', 'OFFLINE_DETECTED',
+        'COMMAND_SENT', 'COMMAND_ACKNOWLEDGED', 'COMMAND_REJECTED',
+        'COMMAND_TIMEOUT', 'STATUS_CHANGED', 'MACHINE_REGISTERED'
+    ));
