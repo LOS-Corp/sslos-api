@@ -88,6 +88,16 @@ public class User {
         this.phone = phone;
     }
 
+    /** Operator accounts hold exactly one role (login reports a single role). */
+    public void replaceRoles(Role role) {
+        roles.clear();
+        roles.add(role);
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
+    }
+
     @PrePersist
     void onCreate() {
         OffsetDateTime now = OffsetDateTime.now();

@@ -22,7 +22,8 @@ import jakarta.validation.Valid;
  * Handles user profile retrieval and updates.
  */
 @RestController
-@RequestMapping("/api/v1/users")
+// "/api/users/me" is the canonical path (TD-32); "/api/v1/users/me" stays as an alias for older clients.
+@RequestMapping({"/api/users", "/api/v1/users"})
 @Validated
 @Tag(name = "User Profile", description = "Endpoints for managing user profiles")
 @SecurityRequirement(name = "bearerAuth")

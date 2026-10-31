@@ -43,6 +43,12 @@ public class Payment {
     @Column(name = "gateway_response", columnDefinition = "TEXT")
     private String gatewayResponse;
 
+    @Column(name = "checkout_url", columnDefinition = "TEXT")
+    private String checkoutUrl;
+
+    @Column(name = "qr_code", columnDefinition = "TEXT")
+    private String qrCode;
+
     @Column(name = "idempotency_key", unique = true)
     private String idempotencyKey;
 

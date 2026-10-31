@@ -4,12 +4,10 @@ import jakarta.persistence.*;
 import lombok.*;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.List;
 import java.util.UUID;
 
 /**
- * Transaction entity - represents a purchase transaction in SSLOS
+ * Payment header of one scheduled booking: amount due, status and when it was paid.
  */
 @Entity
 @Table(name = "transactions")
@@ -24,7 +22,7 @@ public class Transaction {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @Column(name = "customer_id", nullable = false)
+    @Column(name = "customer_id")
     private UUID customerId;
 
     @Enumerated(EnumType.STRING)
@@ -53,25 +51,8 @@ public class Transaction {
     @Builder.Default
     private LocalDateTime updatedAt = LocalDateTime.now();
 
-    @OneToMany(mappedBy = "transaction", cascade = CascadeType.ALL, orphanRemoval = true)
-    @Builder.Default
-    private List<MachineReservation> machineReservations = new ArrayList<>();
-
-    @OneToOne(mappedBy = "transaction", cascade = CascadeType.ALL, orphanRemoval = true)
-    private LaundryServiceOrder laundryServiceOrder;
-
     @PreUpdate
     protected void onUpdate() {
         updatedAt = LocalDateTime.now();
-    }
-
-    public void addMachineReservation(MachineReservation reservation) {
-        machineReservations.add(reservation);
-        reservation.setTransaction(this);
-    }
-
-    public void removeMachineReservation(MachineReservation reservation) {
-        machineReservations.remove(reservation);
-        reservation.setTransaction(null);
     }
 }
