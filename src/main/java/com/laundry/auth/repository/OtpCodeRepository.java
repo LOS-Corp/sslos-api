@@ -33,11 +33,4 @@ public interface OtpCodeRepository extends JpaRepository<OtpCode, UUID> {
     @Modifying
     @Query("UPDATE OtpCode o SET o.used = true WHERE o.user = :user AND o.used = false")
     void invalidateAllByUser(@Param("user") User user);
-
-    /**
-     * Delete all expired OTP codes (cleanup).
-     */
-    @Modifying
-    @Query("DELETE FROM OtpCode o WHERE o.expiresAt < CURRENT_TIMESTAMP")
-    void deleteExpiredCodes();
 }

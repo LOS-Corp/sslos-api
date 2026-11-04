@@ -15,13 +15,13 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
- * An exception refund raised by Staff or the Owner with evidence and decided by an Owner who did
- * not raise it (BR-14, FR-REF-05). State changes go through {@link #approve} / {@link #reject} only.
- * Times are UTC wall-clock values (column type {@code timestamp}).
+ * A refund of one payment. An exception refund is raised by Staff or the Owner with evidence and decided by
+ * an Owner who did not raise it (BR-14, FR-REF-05); its state changes go through {@link #approve} and
+ * {@link #reject} only. A refund decided by a rule is {@link #settled} at once.
  */
 @Entity
 @Table(name = "refund_requests")
@@ -68,20 +68,20 @@ public class RefundRequest {
     private String rejectionReason;
 
     @Column(name = "created_at", nullable = false, updatable = false)
-    private LocalDateTime createdAt;
+    private OffsetDateTime createdAt;
 
     @Column(name = "updated_at", nullable = false)
-    private LocalDateTime updatedAt;
+    private OffsetDateTime updatedAt;
 
     @Column(name = "approved_at")
-    private LocalDateTime decidedAt;
+    private OffsetDateTime decidedAt;
 
     @Column(name = "completed_at")
-    private LocalDateTime completedAt;
+    private OffsetDateTime completedAt;
 
     /** A new exception refund waiting for an Owner decision. */
     public static RefundRequest raise(UUID paymentId, UUID transactionId, UUID branchId, UUID requestedBy,
-                                      BigDecimal amount, String reason, String evidence, LocalDateTime now) {
+                                      BigDecimal amount, String reason, String evidence, OffsetDateTime now) {
         RefundRequest request = new RefundRequest();
         request.paymentId = paymentId;
         request.transactionId = transactionId;
@@ -96,13 +96,22 @@ public class RefundRequest {
         return request;
     }
 
-    public void approve(UUID ownerId, LocalDateTime now) {
+    /** A refund decided by a rule, already credited in this transaction (SM-06 R1–R2). */
+    public static RefundRequest settled(UUID paymentId, UUID transactionId, UUID branchId, UUID customerId,
+                                        BigDecimal amount, String reason, OffsetDateTime now) {
+        RefundRequest refund = raise(paymentId, transactionId, branchId, customerId, amount, reason, null, now);
+        refund.status = RefundStatus.COMPLETED;
+        refund.completedAt = now;
+        return refund;
+    }
+
+    public void approve(UUID ownerId, OffsetDateTime now) {
         requireDecidableBy(ownerId);
         status = RefundStatus.APPROVED;
         decide(ownerId, now);
     }
 
-    public void reject(UUID ownerId, String why, LocalDateTime now) {
+    public void reject(UUID ownerId, String why, OffsetDateTime now) {
         requireDecidableBy(ownerId);
         status = RefundStatus.REJECTED;
         rejectionReason = why;
@@ -110,7 +119,7 @@ public class RefundRequest {
     }
 
     /** Money has reached the customer (wallet credit or proven bank transfer); APPROVED alone is not enough. */
-    public void complete(LocalDateTime now) {
+    public void complete(OffsetDateTime now) {
         if (status != RefundStatus.APPROVED) {
             throw BusinessException.of(ErrorCode.INVALID_STATE_TRANSITION, "Only an approved refund can be completed");
         }
@@ -135,7 +144,7 @@ public class RefundRequest {
         }
     }
 
-    private void decide(UUID ownerId, LocalDateTime now) {
+    private void decide(UUID ownerId, OffsetDateTime now) {
         decidedBy = ownerId;
         decidedAt = now;
         updatedAt = now;

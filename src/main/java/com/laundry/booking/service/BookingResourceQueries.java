@@ -4,7 +4,6 @@ import com.laundry.shared.error.ErrorCode;
 
 import com.laundry.shared.error.BusinessException;
 
-import com.laundry.branch.entity.Branch;
 import com.laundry.machine.entity.Machine;
 import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.entity.MachineType;
@@ -30,7 +29,6 @@ import java.util.Set;
 import java.util.UUID;
 
 import static com.laundry.booking.dto.BookingDtos.*;
-import static com.laundry.booking.dto.BookingConfigDtos.*;
 
 import com.laundry.booking.domain.SlotPlanner.*;
 import static com.laundry.booking.domain.SlotPlanner.*;

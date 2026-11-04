@@ -11,6 +11,7 @@ public enum AuditAction {
     WITHDRAWAL_REJECTED,
     // devices
     REMOTE_COMMAND,
+    LOCKER_OPENED,
     // permissions & accounts
     ACCOUNT_CREATED,
     ACCOUNT_UPDATED,
@@ -24,5 +25,6 @@ public enum AuditAction {
     // order state
     BOOKING_CANCELLED,
     BOOKING_NO_SHOW,
-    BOOKING_PAYMENT_REVIEW
+    BOOKING_PAYMENT_REVIEW,
+    BOOKING_STOPPED_BY_OPERATOR
 }

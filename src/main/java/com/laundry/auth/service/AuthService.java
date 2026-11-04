@@ -35,6 +35,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom;
 import java.time.OffsetDateTime;
 import java.util.UUID;
+import java.nio.charset.StandardCharsets;
+import org.springframework.util.DigestUtils;
 
 /**
  * Service handling all authentication operations.
@@ -42,8 +44,9 @@ import java.util.UUID;
 @Service
 public class AuthService {
 
-    private static final int OTP_LENGTH = 6;
     private static final int OTP_EXPIRATION_MINUTES = 5;
+    /** Minimum gap between two reset emails for the same account (anti email-spam). */
+    private static final int OTP_RESEND_COOLDOWN_SECONDS = 60;
     private static final SecureRandom SECURE_RANDOM = new SecureRandom();
 
     private final UserRepository userRepository;
@@ -179,6 +182,14 @@ public class AuthService {
         userRepository.findByEmail(email)
             .filter(user -> "ACTIVE".equals(user.getStatus()))
             .ifPresent(user -> {
+                // Throttle silently: same response either way, so email existence is not revealed
+                boolean throttled = otpCodeRepository.findMostRecentValidOtp(user)
+                    .filter(last -> last.getCreatedAt().isAfter(OffsetDateTime.now().minusSeconds(OTP_RESEND_COOLDOWN_SECONDS)))
+                    .isPresent();
+                if (throttled) {
+                    return;
+                }
+
                 // Invalidate all existing OTP codes for this user
                 otpCodeRepository.invalidateAllByUser(user);
 
@@ -206,13 +217,17 @@ public class AuthService {
             throw new IllegalArgumentException("Password confirmation does not match");
         }
 
-        // Find user by email
-        User user = userRepository.findByEmail(email)
-            .orElseThrow(() -> new InvalidTokenException("Invalid OTP or email"));
-
-        // Find valid OTP
-        OtpCode otp = otpCodeRepository.findValidOtpByUserAndCode(user, request.otpCode())
-            .orElseThrow(() -> new InvalidTokenException("Invalid OTP or OTP has expired"));
+        // FR-AUTH-01: an unknown email counts too, so the response never reveals whether an account exists.
+        String attemptKey = otpAttemptKey(email);
+        loginAttempts.requireNotLocked(attemptKey);
+        OtpCode otp = userRepository.findByEmail(email)
+            .flatMap(candidate -> otpCodeRepository.findValidOtpByUserAndCode(candidate, request.otpCode()))
+            .orElse(null);
+        if (otp == null) {
+            loginAttempts.recordFailure(attemptKey);
+            throw new InvalidTokenException("Invalid OTP or OTP has expired");
+        }
+        User user = otp.getUser();
 
         // Check user status
         if (!"ACTIVE".equals(user.getStatus())) {
@@ -229,8 +244,14 @@ public class AuthService {
 
         // Revoke all refresh tokens for security
         refreshTokenRepository.revokeAllByUser(user);
+        loginAttempts.recordSuccess(attemptKey);
 
         return new MessageResponse("Password has been reset successfully");
+    }
+
+    /** Hashed so it always fits the 254-character key of login_attempts, whatever the email's length. */
+    private static String otpAttemptKey(String email) {
+        return "otp:" + DigestUtils.md5DigestAsHex(email.getBytes(StandardCharsets.UTF_8));
     }
 
     /**

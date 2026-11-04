@@ -9,12 +9,12 @@ import com.laundry.refund.domain.RefundPolicy;
 import com.laundry.refund.domain.RefundPolicy.CancellationCause;
 import com.laundry.refund.domain.RefundPolicy.RefundDecision;
 import com.laundry.refund.repository.PolicyViolationRepository;
+import com.laundry.refund.service.AutomaticRefundService;
 import com.laundry.shared.error.BusinessException;
 import com.laundry.shared.error.ErrorCode;
 import com.laundry.shared.money.Money;
 import com.laundry.shared.security.CurrentUser;
 import com.laundry.wallet.entity.WalletEntryType;
-import com.laundry.wallet.service.WalletService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -41,7 +41,7 @@ public class BookingCancellationService {
     private final JdbcTemplate jdbc;
     private final ScheduledBookingService bookings;
     private final PolicyViolationRepository violations;
-    private final WalletService wallet;
+    private final AutomaticRefundService refunds;
     private final AuditService audit;
     private final Clock clock;
     private final BookingProperties props;
@@ -84,8 +84,8 @@ public class BookingCancellationService {
             violations.record(customer.id(), bookingId, decision.violation(), now);
         }
         if (decision.amount().isPositive()) {
-            wallet.credit(customer.id(), decision.amount(), WalletEntryType.REFUND_CREDIT,
-                    "booking-cancel:" + bookingId, "Hoàn tiền hủy đặt chỗ (" + decision.ratePercent() + "%)");
+            refunds.settle(booking.transactionId(), booking.branchId(), customer.id(), decision.amount(),
+                    WalletEntryType.REFUND_CREDIT, "Hoàn tiền hủy đặt chỗ (" + decision.ratePercent() + "%)");
         }
         audit.record(AuditEntry.of(AuditAction.BOOKING_CANCELLED, "BOOKING", bookingId, booking.branchId(), customer)
                 .withChange(Map.of("status", "CONFIRMED"),
@@ -98,7 +98,8 @@ public class BookingCancellationService {
     private RefundDecision decide(PaidBooking booking, Instant now) {
         int prior = violations.countInWindow(booking.customerId(), now.minus(RefundPolicy.VIOLATION_WINDOW), now);
         return new RefundPolicy(props.freeCancellationBefore())
-                .evaluate(CancellationCause.CUSTOMER_CANCEL, now, booking.start(), prior, booking.paid());
+                .evaluate(CancellationCause.CUSTOMER_CANCEL, now, booking.start(), prior,
+                        refunds.refundable(booking.transactionId()));
     }
 
     private CancellationPreview toPreview(PaidBooking booking, RefundDecision decision) {

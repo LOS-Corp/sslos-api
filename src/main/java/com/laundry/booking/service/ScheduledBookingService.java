@@ -14,8 +14,8 @@ import com.laundry.transaction.repository.TransactionRepository;
 import com.laundry.config.BookingProperties;
 import com.laundry.payment.service.WalletPaymentService;
 import com.laundry.shared.money.Money;
+import com.laundry.refund.service.AutomaticRefundService;
 import com.laundry.wallet.entity.WalletEntryType;
-import com.laundry.wallet.service.WalletService;
 import com.laundry.shared.error.BusinessException;
 import com.laundry.shared.error.ErrorCode;
 import lombok.RequiredArgsConstructor;
@@ -29,7 +29,6 @@ import java.sql.SQLException;
 import java.math.BigDecimal;
 import com.laundry.machine.entity.Machine;
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
@@ -38,7 +37,6 @@ import java.util.List;
 import java.util.UUID;
 
 import static com.laundry.booking.dto.BookingDtos.*;
-import static com.laundry.booking.dto.BookingConfigDtos.*;
 
 import com.laundry.booking.domain.SlotPlanner.*;
 import static com.laundry.booking.domain.SlotPlanner.*;
@@ -58,7 +56,7 @@ public class ScheduledBookingService {
     private final TransactionRepository transactionRepository;
     private final MachineProgramService programService;
     private final BookingResourceQueries queries;
-    private final WalletService wallet;
+    private final AutomaticRefundService refunds;
     private final WalletPaymentService walletPayments;
     private final BookingProperties props;
 
@@ -137,7 +135,7 @@ public class ScheduledBookingService {
                         ? ServiceType.LAUNDRY_SERVICE : ServiceType.SELF_SERVICE)
                 .totalAmount(config.price())
                 .status(TransactionStatus.PENDING_PAYMENT)
-                .expiresAt(LocalDateTime.ofInstant(holdExpiresAt, ZoneOffset.UTC))
+                .expiresAt(OffsetDateTime.ofInstant(holdExpiresAt, ZoneOffset.UTC))
                 .build();
         transaction = transactionRepository.saveAndFlush(transaction);
 
@@ -268,7 +266,6 @@ public class ScheduledBookingService {
                 WHERE sb.id = ? AND t.customer_id = ?
                   AND sb.status = 'HELD'
                   AND sb.hold_expires_at > NOW()
-                  AND sb.start_time > NOW()
                 FOR UPDATE OF sb, t
                 """, (rs, row) -> rs.getObject(1, UUID.class), bookingId, customerId);
         if (transactionIds.isEmpty()) {
@@ -319,16 +316,7 @@ public class ScheduledBookingService {
             return;
         }
         if ("CANCELLED".equals(bookingStatus)) {
-            transaction.setStatus(TransactionStatus.PAID);
-            transaction.setPaidAt(LocalDateTime.now(ZoneOffset.UTC));
-            transactionRepository.save(transaction);
-            jdbc.update("""
-                    UPDATE scheduled_bookings SET status = 'PAYMENT_REVIEW_REQUIRED',
-                        reconciliation_reason = 'Payment succeeded after cancellation; refund or manual reconciliation is required',
-                        updated_at = NOW()
-                    WHERE id = ?
-                    """, bookingId);
-            log.error("Cancelled booking {} was paid after cancellation and requires reconciliation", bookingId);
+            sendToPaymentReview(transaction, bookingId, "Payment succeeded after cancellation (BR-04)");
             return;
         }
         if (!"HELD".equals(bookingStatus) && !"EXPIRED".equals(bookingStatus)) {
@@ -340,45 +328,43 @@ public class ScheduledBookingService {
                     SELECT hold_expires_at <= NOW()
                     FROM scheduled_bookings WHERE id = ?
                     """, Boolean.class, bookingId);
-        boolean startPassed = jdbc.queryForObject("""
-                SELECT start_time <= NOW() FROM scheduled_bookings WHERE id = ?
-                """, Boolean.class, bookingId);
         // BR-04 / SC-17: payment after the hold never re-takes the slot, even if it is still free.
-        if (startPassed || holdExpired) {
-            transaction.setStatus(TransactionStatus.PAID);
-            transaction.setPaidAt(LocalDateTime.now(ZoneOffset.UTC));
-            transactionRepository.save(transaction);
-            jdbc.update("""
-                    UPDATE scheduled_bookings SET status = 'PAYMENT_REVIEW_REQUIRED',
-                        reconciliation_reason = ?,
-                        updated_at = NOW()
-                    WHERE id = ?
-                    """, startPassed
-                    ? "Payment succeeded after the booked start time; refund or manual reconciliation is required"
-                    : "Payment succeeded after the hold expired; the slot is not re-taken automatically (BR-04)",
-                    bookingId);
-            log.warn("Paid booking {} requires reconciliation: startPassed={}, holdExpired={}",
-                    bookingId, startPassed, holdExpired);
-            // MSG11: the money is not lost. The wallet part (if any) is reversed once; what was paid
-            // outside the wallet is credited — so no order of events can pay the customer twice.
-            walletPayments.reverse(List.of(transactionId), "Hoàn phần ví: thanh toán đến sau khi hết giữ chỗ");
-            Money paidOutsideWallet = Money.of(transaction.getTotalAmount())
-                    .minus(walletPayments.walletPortion(transactionId));
-            if (transaction.getCustomerId() != null && paidOutsideWallet.isPositive()) {
-                wallet.credit(transaction.getCustomerId(), paidOutsideWallet,
-                        WalletEntryType.LATE_PAYMENT_CREDIT, "late-payment:" + transactionId,
-                        "Thanh toán sau khi hết thời gian giữ chỗ");
-            }
+        if (holdExpired) {
+            sendToPaymentReview(transaction, bookingId,
+                    "Payment succeeded after the hold expired; the slot is not re-taken automatically (BR-04)");
             return;
         }
 
         transaction.setStatus(TransactionStatus.PAID);
-        transaction.setPaidAt(LocalDateTime.now(ZoneOffset.UTC));
+        transaction.setPaidAt(OffsetDateTime.now(ZoneOffset.UTC));
         transactionRepository.save(transaction);
         jdbc.update("""
                 UPDATE scheduled_bookings SET status = 'CONFIRMED', updated_at = NOW()
                 WHERE id = ?
                 """, bookingId);
+    }
+
+    /**
+     * MSG11: the money is not lost. The wallet part (if any) was or is reversed once; what was paid outside the
+     * wallet is credited with a refund row, so no order of events can pay the customer twice.
+     */
+    private void sendToPaymentReview(Transaction transaction, UUID bookingId, String reason) {
+        transaction.setStatus(TransactionStatus.PAID);
+        transaction.setPaidAt(OffsetDateTime.now(ZoneOffset.UTC));
+        transactionRepository.save(transaction);
+        UUID branchId = jdbc.queryForObject("""
+                UPDATE scheduled_bookings SET status = 'PAYMENT_REVIEW_REQUIRED', reconciliation_reason = ?,
+                    updated_at = NOW()
+                WHERE id = ?
+                RETURNING branch_id
+                """, UUID.class, reason, bookingId);
+        log.warn("Paid booking {} went to payment review: {}", bookingId, reason);
+        walletPayments.reverse(List.of(transaction.getId()), "Hoàn phần ví: thanh toán đến sau khi đơn đã đóng");
+        Money paid = refunds.refundable(transaction.getId());
+        if (transaction.getCustomerId() != null && paid.isPositive()) {
+            refunds.settle(transaction.getId(), branchId, transaction.getCustomerId(), paid,
+                    WalletEntryType.LATE_PAYMENT_CREDIT, "Thanh toán đến sau khi đơn đã đóng");
+        }
     }
 
     @Transactional

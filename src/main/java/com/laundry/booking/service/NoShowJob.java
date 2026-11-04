@@ -9,10 +9,9 @@ import com.laundry.refund.domain.RefundPolicy;
 import com.laundry.refund.domain.RefundPolicy.CancellationCause;
 import com.laundry.refund.domain.RefundPolicy.RefundDecision;
 import com.laundry.refund.repository.PolicyViolationRepository;
-import com.laundry.shared.money.Money;
+import com.laundry.refund.service.AutomaticRefundService;
 import com.laundry.shared.scheduling.JobLock;
 import com.laundry.wallet.entity.WalletEntryType;
-import com.laundry.wallet.service.WalletService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -20,12 +19,9 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -52,7 +48,7 @@ public class NoShowJob {
     private final JobLock jobLock;
     private final CheckInWindowPolicy checkInWindow;
     private final PolicyViolationRepository violations;
-    private final WalletService wallet;
+    private final AutomaticRefundService refunds;
     private final AuditService audit;
     private final Clock clock;
     private final BookingProperties props;
@@ -90,7 +86,7 @@ public class NoShowJob {
                 ? null
                 : new RefundPolicy(props.freeCancellationBefore()).evaluate(cause, now, booking.start(),
                         violations.countInWindow(booking.customerId(), now.minus(RefundPolicy.VIOLATION_WINDOW), now),
-                        booking.paid());
+                        refunds.refundable(booking.transactionId()));
 
         jdbc.update("""
                 UPDATE scheduled_bookings SET status = 'NO_SHOW', updated_at = NOW(), reconciliation_reason = ?
@@ -102,8 +98,8 @@ public class NoShowJob {
                 violations.record(booking.customerId(), booking.bookingId(), decision.violation(), now);
             }
             if (decision.amount().isPositive()) {
-                wallet.credit(booking.customerId(), decision.amount(), WalletEntryType.REFUND_CREDIT,
-                        "no-show:" + booking.bookingId(), "Hoàn tiền không đến sử dụng (" + decision.ratePercent() + "%)");
+                refunds.settle(booking.transactionId(), booking.branchId(), booking.customerId(), decision.amount(),
+                        WalletEntryType.REFUND_CREDIT, "Hoàn tiền không đến sử dụng (" + decision.ratePercent() + "%)");
             }
         }
         audit.record(AuditEntry.of(AuditAction.BOOKING_NO_SHOW, "BOOKING", booking.bookingId(), booking.branchId(), null)
@@ -128,7 +124,7 @@ public class NoShowJob {
      */
     private List<Candidate> candidates(Instant now) {
         return jdbc.query("""
-                SELECT sb.id, sb.branch_id, sb.start_time, t.id transaction_id, t.customer_id, t.total_amount, t.paid_at,
+                SELECT sb.id, sb.branch_id, sb.start_time, t.id transaction_id, t.customer_id, t.paid_at,
                        d.service_mode = 'ASSISTED_LOCKER' AS assisted
                 FROM scheduled_bookings sb
                 JOIN transactions t ON t.id = sb.transaction_id
@@ -143,13 +139,12 @@ public class NoShowJob {
                 LIMIT ?
                 FOR UPDATE OF sb SKIP LOCKED
                 """, (rs, row) -> {
-            LocalDateTime paidAt = rs.getObject("paid_at", LocalDateTime.class);
-            BigDecimal amount = rs.getBigDecimal("total_amount");
+            Timestamp paidAt = rs.getTimestamp("paid_at");
             return new Candidate(rs.getObject("id", UUID.class), rs.getObject("branch_id", UUID.class),
                     rs.getObject("transaction_id", UUID.class), rs.getObject("customer_id", UUID.class),
                     rs.getTimestamp("start_time").toInstant(),
-                    paidAt == null ? null : paidAt.toInstant(ZoneOffset.UTC),
-                    Money.of(amount), rs.getBoolean("assisted"));
+                    paidAt == null ? null : paidAt.toInstant(),
+                    rs.getBoolean("assisted"));
         }, Timestamp.from(now.minus(props.checkInClosesAfter())),
                 Timestamp.from(now.minus(props.assistedDropOffWindow())), BATCH);
     }
@@ -170,6 +165,6 @@ public class NoShowJob {
     }
 
     private record Candidate(UUID bookingId, UUID branchId, UUID transactionId, UUID customerId, Instant start,
-                             Instant paidAt, Money paid, boolean assisted) {
+                             Instant paidAt, boolean assisted) {
     }
 }

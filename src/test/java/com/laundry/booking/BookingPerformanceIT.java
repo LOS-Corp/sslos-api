@@ -194,7 +194,7 @@ class BookingPerformanceIT {
                 """, machines.toArray(UUID[]::new), HISTORY_PER_MACHINE);
         jdbc.update("""
                 INSERT INTO transactions (id, customer_id, service_type, status, total_amount, created_at, updated_at)
-                SELECT tx, ?, 'SELF_SERVICE', 'COMPLETED', 40000, start_at, start_at FROM history
+                SELECT tx, ?, 'SELF_SERVICE', 'PAID', 40000, start_at, start_at FROM history
                 """, customer);
         jdbc.update("""
                 INSERT INTO scheduled_bookings (id, transaction_id, branch_id, service_code, status, start_time,

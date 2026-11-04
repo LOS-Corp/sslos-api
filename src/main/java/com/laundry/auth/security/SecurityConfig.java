@@ -120,6 +120,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/users/me", "/api/v1/users/me").authenticated()
                         // Admin manages Owners, Owner manages Staff (checked again in AdminUserService).
                         .requestMatchers("/api/admin/users", "/api/admin/users/**").hasAnyRole(OWNER, ADMIN)
+                        .requestMatchers(HttpMethod.GET, "/api/admin/audit-logs").hasAnyRole(OWNER, ADMIN)
 
                         // ── Branch operations (Owner manages every branch) ──────────────────
                         .requestMatchers(HttpMethod.GET, "/api/admin/branches", "/api/admin/branches/**")

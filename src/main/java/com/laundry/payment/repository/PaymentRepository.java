@@ -9,7 +9,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import jakarta.persistence.LockModeType;
 import java.util.List;
 import java.util.Optional;
@@ -41,7 +41,7 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     int updateStatusToPaid(
         @Param("id") UUID id,
         @Param("status") PaymentStatus status,
-        @Param("now") LocalDateTime now
+        @Param("now") OffsetDateTime now
     );
 
     @Modifying
@@ -49,6 +49,6 @@ public interface PaymentRepository extends JpaRepository<Payment, UUID> {
     int updateStatusToFailed(
         @Param("id") UUID id,
         @Param("reason") String reason,
-        @Param("now") LocalDateTime now
+        @Param("now") OffsetDateTime now
     );
 }

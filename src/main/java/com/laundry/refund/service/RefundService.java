@@ -31,7 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Clock;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -96,7 +96,7 @@ public class RefundService {
         RefundRequest refund = lockedRefund(refundId);
         Payment payment = payments.findByIdForUpdate(refund.getPaymentId())
                 .orElseThrow(() -> BusinessException.notFound("Payment not found"));
-        BigDecimal othersCounted = countedRefunds(payment.getId(), refund.getId());
+        BigDecimal othersCounted = refunds.countedAgainstCap(payment.getId(), refund.getId());
         if (othersCounted.add(refund.getAmount()).compareTo(payment.getAmount()) > 0) {
             throw BusinessException.of(ErrorCode.REFUND_EXCEEDS_PAID, "Total refunds would exceed the amount paid");
         }
@@ -188,7 +188,7 @@ public class RefundService {
         return payments.findByTransactionIdOrderByCreatedAtDesc(transactionId).stream()
                 .filter(payment -> payment.getStatus() == PaymentStatus.PAID)
                 .map(payment -> {
-                    BigDecimal refunded = countedRefunds(payment.getId(), null);
+                    BigDecimal refunded = refunds.countedAgainstCap(payment.getId(), null);
                     return new RefundablePayment(payment.getId(), payment.getPaymentMethod().name(),
                             payment.getAmount(), refunded, payment.getAmount().subtract(refunded).max(BigDecimal.ZERO));
                 })
@@ -196,17 +196,9 @@ public class RefundService {
     }
 
     private void requireWithinCap(Payment payment, BigDecimal amount) {
-        if (countedRefunds(payment.getId(), null).add(amount).compareTo(payment.getAmount()) > 0) {
+        if (refunds.countedAgainstCap(payment.getId(), null).add(amount).compareTo(payment.getAmount()) > 0) {
             throw BusinessException.of(ErrorCode.REFUND_EXCEEDS_PAID, "Total refunds would exceed the amount paid");
         }
-    }
-
-    private BigDecimal countedRefunds(UUID paymentId, UUID excludeRefundId) {
-        return refunds.findByPaymentId(paymentId).stream()
-                .filter(RefundRequest::countsTowardCap)
-                .filter(r -> !r.getId().equals(excludeRefundId))
-                .map(RefundRequest::getAmount)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     private RefundRequest lockedRefund(UUID refundId) {
@@ -214,7 +206,7 @@ public class RefundService {
                 .orElseThrow(() -> BusinessException.notFound("Refund request not found"));
     }
 
-    private LocalDateTime now() {
-        return LocalDateTime.now(clock);
+    private OffsetDateTime now() {
+        return OffsetDateTime.now(clock);
     }
 }

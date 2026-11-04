@@ -33,6 +33,10 @@ import org.springframework.transaction.support.TransactionSynchronizationManager
 
 import java.security.SecureRandom;
 import java.sql.Timestamp;
+import com.laundry.audit.service.AuditAction;
+import com.laundry.audit.service.AuditService;
+import com.laundry.audit.service.AuditService.AuditEntry;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
@@ -90,6 +94,7 @@ public class LockerService {
     private final BookingLifecycleService lifecycleService;
     private final BranchScopeService branchScope;
     private final BookingProperties bookingProps;
+    private final AuditService audit;
     private final SecureRandom random = new SecureRandom();
 
     /** Live door states reported by each cabinet, by machine id. */
@@ -125,7 +130,8 @@ public class LockerService {
             access = liveCode(slot, "DROP_OFF").orElseGet(() -> issueCode(slot, "DROP_OFF",
                     slot.start().minusSeconds(15 * 60), slot.start().plus(bookingProps.assistedDropOffWindow())));
         } else if (cabinet != null && "PICKUP".equals(stage)) {
-            access = liveCode(slot, "PICKUP").orElseGet(() -> issuePickupCode(slot));
+            access = liveCode(slot, "PICKUP").filter(code -> code.validUntil().isAfter(Instant.now()))
+                    .orElseGet(() -> renewPickupCode(slot));
         }
         return new CustomerLockerAccess(bookingId, stage,
                 cabinet == null ? null : cabinet.getMachineCode(),
@@ -334,11 +340,16 @@ public class LockerService {
     }
 
     @Transactional
-    public void staffOpen(UUID machineId, int compartmentNo, String action, CurrentUser staff) {
+    public void staffOpen(UUID machineId, int compartmentNo, String action, String reason, CurrentUser staff) {
         UUID staffId = staff.id();
         String act = action == null ? "" : action.trim().toUpperCase(Locale.ROOT);
         if (!STAFF_ACTIONS.contains(act)) {
             throw BusinessException.of(ErrorCode.INVALID_REQUEST, "action must be COLLECT, RETURN or INSPECT");
+        }
+        // BR-25: opening outside the order flow is an override. COLLECT and RETURN are steps of the order itself.
+        boolean noReason = reason == null || reason.isBlank();
+        if ("INSPECT".equals(act) && noReason) {
+            throw BusinessException.of(ErrorCode.REASON_REQUIRED, "Please enter a reason for this action");
         }
         Machine cabinet = cabinet(machineId);
         branchScope.require(staff, cabinet.getBranchId());
@@ -378,6 +389,10 @@ public class LockerService {
                 """, accessId, "INSPECT".equals(act) ? null : bookingId, resourceId, machineId, "STAFF_" + act,
                 utc(now), utc(now.plusSeconds(STALE_OPENING_SECONDS)), staffId);
         openCompartment(cabinet, accessId, compartmentNo, "STAFF_" + act, null, staffId);
+        audit.record(AuditEntry.of(AuditAction.LOCKER_OPENED, "LOCKER", resourceId, cabinet.getBranchId(), staff)
+                .withReason(noReason ? "Order step " + act : reason.trim())
+                .withChange(null, Map.of("action", act, "compartment", compartmentNo,
+                        "bookingId", bookingId == null ? "" : bookingId.toString())));
     }
 
     // ── Internals ─────────────────────────────────────────────────────────
@@ -495,8 +510,35 @@ public class LockerService {
                 """, (rs, row) -> Access.from(rs), slot.bookingId(), purpose).stream().findFirst();
     }
 
+    /** Until storage is built (G-03) a customer whose free pickup ran out gets a new PIN, not a locked-in order. */
+    private Access renewPickupCode(Slot slot) {
+        revokeLiveCodes(slot.bookingId());
+        return issuePickupCode(slot);
+    }
+
+    /** BR-18: free pickup runs from READY, so the PIN and the hold on the cell both last that long. */
     private Access issuePickupCode(Slot slot) {
-        return issueCode(slot, "PICKUP", Instant.now(), slot.allocationEnd());
+        Integer hours = jdbc.queryForObject("""
+                SELECT d.pickup_deadline_hours FROM scheduled_bookings b
+                JOIN booking_service_definitions d ON d.code = b.service_code
+                WHERE b.id = ?
+                """, Integer.class, slot.bookingId());
+        Instant now = Instant.now();
+        Instant until = now.plus(Duration.ofHours(hours == null ? 0 : hours));
+        holdCellUntil(slot, until);
+        return issueCode(slot, "PICKUP", now, until);
+    }
+
+    /** Extends the cell's allocation up to {@code until}, or up to the next booking of the cell if that comes first. */
+    private void holdCellUntil(Slot slot, Instant until) {
+        jdbc.update("""
+                UPDATE booking_resource_allocations a
+                SET occupied_until = LEAST(?, COALESCE(
+                        (SELECT MIN(next.occupied_from) FROM booking_resource_allocations next
+                         WHERE next.resource_id = a.resource_id AND next.active AND next.id <> a.id
+                           AND next.occupied_from >= a.occupied_until), ?))
+                WHERE a.booking_id = ? AND a.resource_id = ? AND a.occupied_until < ?
+                """, utc(until), utc(until), slot.bookingId(), slot.resourceId(), utc(until));
     }
 
     private Access issueCode(Slot slot, String purpose, Instant from, Instant until) {

@@ -159,6 +159,56 @@ class SecurityMatrixIT {
     }
 
     @Test
+    @DisplayName("FR-ACT-11: only commands the firmware executes are accepted, for every role")
+    void onlyFirmwareCommands() throws Exception {
+        for (String command : List.of("START", "PAUSE", "RESUME", "CANCEL", "TARE")) {
+            mvc.perform(command(machineA, command, "Testing").with(as(Role.OWNER)))
+                    .andExpect(status().isBadRequest());
+        }
+    }
+
+    @Test
+    @DisplayName("BR-04: only the Owner reviews and closes late payments")
+    void paymentReviewAccess() throws Exception {
+        mvc.perform(get("/api/admin/bookings/payment-reviews").with(as(Role.STAFF))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/admin/bookings/payment-reviews").with(as(Role.ADMIN))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/admin/bookings/payment-reviews").with(as(Role.OWNER))).andExpect(status().isOk());
+        mvc.perform(post("/api/admin/bookings/payment-reviews/" + UUID.randomUUID() + "/resolve").with(as(Role.OWNER))
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"reason\":\" \"}"))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("UC-10: Owner and Admin read the audit log; nobody else does")
+    void auditLogAccess() throws Exception {
+        mvc.perform(get("/api/admin/audit-logs")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/admin/audit-logs").with(as(Role.STAFF))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/admin/audit-logs").with(as(Role.CUSTOMER))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/admin/audit-logs").with(as(Role.ADMIN))).andExpect(status().isOk());
+
+        mvc.perform(command(machineA, "STOP", "Audit me").with(as(Role.OWNER))).andExpect(status().isAccepted());
+        mvc.perform(get("/api/admin/audit-logs").param("branchId", branchA.toString()).with(as(Role.OWNER)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].action").value("REMOTE_COMMAND"))
+                .andExpect(jsonPath("$.content[0].reason").value("Audit me"));
+        mvc.perform(get("/api/admin/audit-logs").param("size", "101").with(as(Role.OWNER)))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("SC-25 / BR-28: customers do not see a branch that is not ready; operators still do, to set it up")
+    void branchListFollowsReadiness() throws Exception {
+        String notReady = branchA.toString();
+        mvc.perform(get("/api/branches"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[?(@.id == '" + notReady + "')]").isEmpty());
+        mvc.perform(get("/api/branches").with(as(Role.CUSTOMER)))
+                .andExpect(jsonPath("$[?(@.id == '" + notReady + "')]").isEmpty());
+        mvc.perform(get("/api/branches").with(as(Role.OWNER)))
+                .andExpect(jsonPath("$[?(@.id == '" + notReady + "')]").isNotEmpty());
+    }
+
+    @Test
     @DisplayName("SC-16 / SC-22: Staff cannot approve refunds; Admin cannot touch prices, branches or refunds")
     void roleBoundaries() throws Exception {
         String anyRefund = "/api/refunds/" + UUID.randomUUID();

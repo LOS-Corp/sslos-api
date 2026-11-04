@@ -15,6 +15,7 @@ import com.laundry.machine.exception.MachineNotFoundException;
 import com.laundry.machine.repository.DeviceCommandRepository;
 import com.laundry.machine.repository.DeviceEventRepository;
 import com.laundry.machine.repository.MachineRepository;
+import com.laundry.machine.repository.MachineStartAuthorizationRepository;
 import com.laundry.machine.service.MachineWebSocketBroadcaster;
 import com.laundry.mqtt.service.MqttPublisher;
 import lombok.RequiredArgsConstructor;
@@ -47,9 +48,16 @@ public class CommissioningService {
 
     private static final Set<MachineDeploymentStatus> TESTABLE = EnumSet.of(
             MachineDeploymentStatus.PROVISIONED, MachineDeploymentStatus.TESTING,
-            MachineDeploymentStatus.TEST_FAILED, MachineDeploymentStatus.TEST_PASSED);
+            MachineDeploymentStatus.TEST_FAILED, MachineDeploymentStatus.TEST_PASSED,
+            MachineDeploymentStatus.MAINTENANCE);
+
+    /** Runtime states of a live customer session; maintenance must wait for them to end. */
+    private static final Set<MachineStatus> SESSION_STATUSES = EnumSet.of(
+            MachineStatus.RESERVED, MachineStatus.WAITING_START,
+            MachineStatus.RUNNING, MachineStatus.PAUSED);
 
     private final MachineRepository machineRepository;
+    private final MachineStartAuthorizationRepository startAuthorizationRepository;
     private final IotDeviceRepository deviceRepository;
     private final PairingSessionRepository sessionRepository;
     private final DeviceCommandRepository commandRepository;
@@ -80,7 +88,8 @@ public class CommissioningService {
                 pairingExpiresAt,
                 device == null ? null : device.getLastSelfTestAt(),
                 device == null ? null : device.getLastSelfTestPassed(),
-                device == null ? null : device.getLastSelfTestDetail());
+                device == null ? null : device.getLastSelfTestDetail(),
+                machine.getMaintenanceSince());
     }
 
     // ── Stage 7: self-test ──────────────────────────────────────────────────
@@ -170,7 +179,10 @@ public class CommissioningService {
         device.setLastSelfTestDetail(detail);
         deviceRepository.save(device);
 
-        machine.setDeploymentStatus(passed ? MachineDeploymentStatus.TEST_PASSED : MachineDeploymentStatus.TEST_FAILED);
+        // A failed post-repair test sends the machine back to the repair bench.
+        MachineDeploymentStatus failedStatus = machine.isUnderMaintenance()
+                ? MachineDeploymentStatus.MAINTENANCE : MachineDeploymentStatus.TEST_FAILED;
+        machine.setDeploymentStatus(passed ? MachineDeploymentStatus.TEST_PASSED : failedStatus);
         machineRepository.save(machine);
         eventRepository.save(DeviceEvent.builder()
                 .machineId(machine.getId())
@@ -198,6 +210,20 @@ public class CommissioningService {
             throw new ProvisioningRejectedException(HttpStatus.CONFLICT, "Last self-test did not pass");
         }
 
+        if (machine.isUnderMaintenance()) {
+            // Return from repair: the device keeps its original commissioning record.
+            OffsetDateTime since = machine.getMaintenanceSince();
+            machine.setMaintenanceSince(null);
+            machine.setDeploymentStatus(MachineDeploymentStatus.ACTIVE);
+            machineRepository.save(machine);
+            event(machine, DeviceEventType.MAINTENANCE_COMPLETED,
+                    "Maintenance since " + since + " completed by " + adminId
+                            + " after a passing self-test");
+            broadcaster.broadcastMachineUpdate(machine);
+            log.info("[IOT] Machine {} back from maintenance, approved by {}", machineCode, adminId);
+            return status(machineCode);
+        }
+
         OffsetDateTime now = OffsetDateTime.now();
         device.setStatus(IotDeviceStatus.ACTIVE);
         device.setCommissionedAt(now);
@@ -206,16 +232,60 @@ public class CommissioningService {
 
         machine.setDeploymentStatus(MachineDeploymentStatus.ACTIVE);
         machineRepository.save(machine);
-        eventRepository.save(DeviceEvent.builder()
-                .machineId(machine.getId())
-                .machineCode(machine.getMachineCode())
-                .eventType(DeviceEventType.MACHINE_COMMISSIONED)
-                .detail("Commissioned by " + adminId + " with device " + device.getDeviceId()
-                        + " fw " + device.getFirmwareVersion())
-                .build());
+        event(machine, DeviceEventType.MACHINE_COMMISSIONED,
+                "Commissioned by " + adminId + " with device " + device.getDeviceId()
+                        + " fw " + device.getFirmwareVersion());
         broadcaster.broadcastMachineUpdate(machine);
         log.info("[IOT] Machine {} commissioned by {}", machineCode, adminId);
         return status(machineCode);
+    }
+
+    // ── Maintenance: ACTIVE → MAINTENANCE → (self-test) → ACTIVE ────────────
+
+    /**
+     * Take an ACTIVE machine out of booking for a hardware repair. Refused while
+     * a customer session, a start authorization or a live/future booking still
+     * uses the machine. The row lock serialises this with booking creation,
+     * which re-checks {@code deployment_status} under {@code FOR UPDATE}.
+     */
+    @Transactional
+    public ProvisioningStatus startMaintenance(String machineCode, UUID adminId, String reason) {
+        Machine machine = machineRepository.findByIdForReservation(requireMachine(machineCode).getId())
+                .orElseThrow(() -> MachineNotFoundException.byCode(machineCode));
+        if (machine.getDeploymentStatus() != MachineDeploymentStatus.ACTIVE) {
+            throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
+                    "Machine is " + machine.getDeploymentStatus() + "; only an ACTIVE machine can enter maintenance");
+        }
+        if (SESSION_STATUSES.contains(machine.getStatus())) {
+            throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
+                    "Machine is " + machine.getStatus() + "; wait for the customer session to end");
+        }
+        if (startAuthorizationRepository.findActiveByMachine(machine.getId()).isPresent()) {
+            throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
+                    "Machine has a pending start authorization");
+        }
+        if (machineRepository.hasActiveBookingAllocation(machine.getId())) {
+            throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
+                    "Machine has active or future bookings; move them before maintenance");
+        }
+
+        machine.setMaintenanceSince(OffsetDateTime.now());
+        machine.setDeploymentStatus(MachineDeploymentStatus.MAINTENANCE);
+        machineRepository.save(machine);
+        String note = reason == null || reason.isBlank() ? "" : ": " + reason.strip();
+        event(machine, DeviceEventType.MAINTENANCE_STARTED, "Maintenance started by " + adminId + note);
+        broadcaster.broadcastMachineUpdate(machine);
+        log.info("[IOT] Machine {} entered maintenance by {}", machineCode, adminId);
+        return status(machineCode);
+    }
+
+    private void event(Machine machine, DeviceEventType type, String detail) {
+        eventRepository.save(DeviceEvent.builder()
+                .machineId(machine.getId())
+                .machineCode(machine.getMachineCode())
+                .eventType(type)
+                .detail(detail)
+                .build());
     }
 
     private Machine requireMachine(String machineCode) {

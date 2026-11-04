@@ -14,6 +14,7 @@ import org.testcontainers.utility.DockerImageName;
 @TestConfiguration(proxyBeanMethods = false)
 public class PostgresTestcontainer {
 
+    @SuppressWarnings("resource") // lives for the whole test JVM; Testcontainers stops it on exit
     private static final PostgreSQLContainer POSTGRES =
             new PostgreSQLContainer(DockerImageName.parse("postgres:16-alpine"))
                     .withDatabaseName("sslos_test")

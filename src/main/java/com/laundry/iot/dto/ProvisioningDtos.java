@@ -4,6 +4,7 @@ import com.laundry.iot.entity.IotDeviceStatus;
 import com.laundry.machine.entity.MachineDeploymentStatus;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 
 import java.time.OffsetDateTime;
 import java.util.List;
@@ -75,7 +76,10 @@ public final class ProvisioningDtos {
                                      String deviceId, IotDeviceStatus deviceStatus, boolean online,
                                      OffsetDateTime lastHeartbeatAt, String firmwareVersion,
                                      OffsetDateTime pairingExpiresAt, OffsetDateTime lastSelfTestAt,
-                                     Boolean lastSelfTestPassed, String lastSelfTestDetail) {}
+                                     Boolean lastSelfTestPassed, String lastSelfTestDetail,
+                                     OffsetDateTime maintenanceSince) {}
+
+    public record StartMaintenanceRequest(@Size(max = 500) String reason) {}
 
     public record SelfTestResponse(String commandId, int buttonTimeoutSeconds) {}
 }

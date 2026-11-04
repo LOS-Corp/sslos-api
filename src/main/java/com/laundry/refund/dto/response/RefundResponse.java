@@ -4,7 +4,7 @@ import com.laundry.refund.entity.RefundRequest;
 import com.laundry.refund.entity.RefundStatus;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 public record RefundResponse(
@@ -20,10 +20,10 @@ public record RefundResponse(
         String evidence,
         RefundStatus status,
         String rejectionReason,
-        LocalDateTime createdAt,
-        LocalDateTime updatedAt,
-        LocalDateTime approvedAt,
-        LocalDateTime completedAt) {
+        OffsetDateTime createdAt,
+        OffsetDateTime updatedAt,
+        OffsetDateTime approvedAt,
+        OffsetDateTime completedAt) {
 
     public static RefundResponse from(RefundRequest r) {
         return new RefundResponse(r.getId(), r.getPaymentId(), r.getOrderId(), r.getTransactionId(),

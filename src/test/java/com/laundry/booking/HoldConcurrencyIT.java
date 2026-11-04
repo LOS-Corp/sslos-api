@@ -140,6 +140,7 @@ class HoldConcurrencyIT {
         // The hold lapses (second 310 of a 300 s hold) while the slot is still free.
         jdbc.update("UPDATE scheduled_bookings SET hold_expires_at = NOW() - interval '10 seconds' WHERE id = ?",
                 late.bookingId());
+        Fixtures.paidPayment(jdbc, late.transactionId(), 30_000);
         bookings.confirmPayment(late.transactionId());
 
         assertThat(status(late.bookingId())).isEqualTo("PAYMENT_REVIEW_REQUIRED");

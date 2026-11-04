@@ -31,7 +31,6 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
-import java.time.ZoneId;
 import java.util.UUID;
 
 /**
@@ -195,9 +194,8 @@ public class MachineStartAuthorizationService {
         }
 
         // 6. Check-in window (BR-06, BR-07): T−15 … max(T, PAID) + 10 minutes.
-        //    Payment times are local wall-clock values of this JVM's zone.
         Instant paidAt = paidPayment.get().getPaidAt() == null ? null
-                : paidPayment.get().getPaidAt().atZone(ZoneId.systemDefault()).toInstant();
+                : paidPayment.get().getPaidAt().toInstant();
         CheckInWindowPolicy.Window window = checkInWindowPolicy.windowFor(slot.from(), paidAt);
         switch (window.positionOf(Instant.now())) {
             case NOT_YET_OPEN -> throw new CheckInRejectedException("Reservation window has not opened yet");
@@ -205,7 +203,19 @@ public class MachineStartAuthorizationService {
             case OPEN -> { }
         }
 
-        // 7. Persist the authorization row + publish the MQTT command.
+        // 7. Starting early (T−15) is fine on an empty machine, but not while the previous customer's
+        //    hold (cycle + checkout + buffer) is still running: their laundry may still be inside.
+        if (machineSlots.previousTurnHeldUntil(machine.getId(), userId, slot.from(), Instant.now()).isPresent()) {
+            throw new CheckInRejectedException("Previous customer has not collected their laundry yet");
+        }
+
+        // BR-07: before T the machine must be free, so a booking whose check-in is still open goes first.
+        if (Instant.now().isBefore(slot.from())
+                && machineSlots.earlierTurnStillOpen(machine.getId(), userId, slot.from(), Instant.now())) {
+            throw new CheckInRejectedException("Reservation window has not opened yet: another booking comes first");
+        }
+
+        // 8. Persist the authorization row + publish the MQTT command.
         OffsetDateTime created = OffsetDateTime.now();
         OffsetDateTime expires = created.plusSeconds(authorizationTtlSeconds);
         MachineStartAuthorization auth = MachineStartAuthorization.builder()

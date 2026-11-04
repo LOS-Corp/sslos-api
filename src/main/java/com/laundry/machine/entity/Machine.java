@@ -89,6 +89,14 @@ public class Machine {
     @Builder.Default
     private MachineDeploymentStatus deploymentStatus = MachineDeploymentStatus.UNASSIGNED;
 
+    /**
+     * When the current hardware repair began; null outside maintenance. Stays
+     * set through the post-repair self-test so a failure returns the machine
+     * to {@link MachineDeploymentStatus#MAINTENANCE}; cleared on commissioning.
+     */
+    @Column(name = "maintenance_since")
+    private OffsetDateTime maintenanceSince;
+
     /** ESP32 identity (e.g. "ESP-24A1B2C3D4E5") bound to this machine; null when unassigned. */
     @Column(name = "device_id", length = 64)
     private String deviceId;
@@ -131,6 +139,11 @@ public class Machine {
     /** True when the machine finished commissioning and may be sold to customers. */
     public boolean isCommissioned() {
         return deploymentStatus == MachineDeploymentStatus.ACTIVE;
+    }
+
+    /** True from the start of a repair until the machine is commissioned again. */
+    public boolean isUnderMaintenance() {
+        return maintenanceSince != null;
     }
 
     @PrePersist

@@ -60,6 +60,37 @@ public final class Fixtures {
         return id;
     }
 
+    /** An online, commissioned, available dryer in the branch, simulated like {@link #washer}. */
+    public static UUID dryer(JdbcTemplate jdbc, UUID branchId) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO machines (id, machine_code, branch_id, type, status, deployment_status, online,
+                                      last_heartbeat_at, created_at, updated_at)
+                VALUES (?, ?, ?, 'DRYER', 'AVAILABLE', 'ACTIVE', TRUE, NOW() + interval '1 day', NOW(), NOW())
+                """, id, "D" + id.toString().substring(0, 8).toUpperCase(), branchId);
+        return id;
+    }
+
+    /** The branch also sells {@code serviceCode} at {@code price} VND. */
+    public static void offering(JdbcTemplate jdbc, UUID branchId, String serviceCode, long price) {
+        jdbc.update("INSERT INTO branch_service_offerings (branch_id, service_code, enabled, price) VALUES (?, ?, TRUE, ?)",
+                branchId, serviceCode, price);
+    }
+
+    /** A verified online payment of a transaction; returns its id. */
+    public static UUID paidPayment(JdbcTemplate jdbc, UUID transactionId, long amount) {
+        return payment(jdbc, transactionId, amount, "ONLINE");
+    }
+
+    public static UUID payment(JdbcTemplate jdbc, UUID transactionId, long amount, String method) {
+        UUID id = UUID.randomUUID();
+        jdbc.update("""
+                INSERT INTO payments (id, transaction_id, amount, payment_method, status, paid_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'PAID', NOW(), NOW(), NOW())
+                """, id, transactionId, amount, method);
+        return id;
+    }
+
     /**
      * An online LOCKER cabinet with one compartment, and ASSISTED_LOCKER offered at {@code price} VND.
      * Returns the compartment resource (what bookings allocate) and the cabinet machine.

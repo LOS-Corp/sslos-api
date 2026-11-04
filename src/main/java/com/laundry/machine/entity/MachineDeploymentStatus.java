@@ -8,7 +8,15 @@ package com.laundry.machine.entity;
  * <pre>
  * UNASSIGNED → PAIRING → PROVISIONED → TESTING → TEST_PASSED → ACTIVE
  *                                          ↘ TEST_FAILED ↗ (re-test)
+ *
+ * ACTIVE → MAINTENANCE → TESTING → TEST_PASSED → ACTIVE
+ *               ↖ (self-test failed) ↙
  * </pre>
+ *
+ * <p>{@link #MAINTENANCE} is a hardware repair: the machine must pass a new
+ * self-test before it is commissioned again; there is no direct
+ * MAINTENANCE → ACTIVE transition. A short operational pause that needs no
+ * repair is {@link MachineStatus#OUT_OF_SERVICE} instead.
  */
 public enum MachineDeploymentStatus {
     /** Machine record exists; no ESP32 bound to it. */
@@ -30,5 +38,8 @@ public enum MachineDeploymentStatus {
     TEST_PASSED,
 
     /** Commissioned: machine may take part in booking and check-in. */
-    ACTIVE
+    ACTIVE,
+
+    /** Under hardware repair; leaves only through a passing self-test. */
+    MAINTENANCE
 }

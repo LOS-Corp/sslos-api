@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.math.BigDecimal;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -15,6 +16,15 @@ import java.util.UUID;
 public interface RefundRequestRepository extends JpaRepository<RefundRequest, UUID> {
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
+    /** What counts against the cap of a payment (BR-14), optionally leaving out one request. */
+    default BigDecimal countedAgainstCap(UUID paymentId, UUID excludeRefundId) {
+        return findByPaymentId(paymentId).stream()
+                .filter(RefundRequest::countsTowardCap)
+                .filter(r -> !r.getId().equals(excludeRefundId))
+                .map(RefundRequest::getAmount)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+    }
+
     @Query("select r from RefundRequest r where r.id = :id")
     Optional<RefundRequest> findByIdForUpdate(@Param("id") UUID id);
 

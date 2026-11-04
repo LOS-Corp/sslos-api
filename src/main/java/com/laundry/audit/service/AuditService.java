@@ -6,6 +6,9 @@ import com.laundry.audit.entity.AuditLog;
 import com.laundry.audit.repository.AuditLogRepository;
 import com.laundry.shared.security.CurrentUser;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -55,6 +58,24 @@ public class AuditService {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Audit state is not serializable", e);
         }
+    }
+
+    /** UC-10: newest first; {@code branchId} narrows the list to one branch. */
+    @Transactional(readOnly = true)
+    public Page<AuditLogView> list(UUID branchId, int page, int size) {
+        Pageable pageable = PageRequest.of(page, size);
+        Page<AuditLog> logs = branchId == null
+                ? repository.findAllByOrderByOccurredAtDesc(pageable)
+                : repository.findByBranchIdOrderByOccurredAtDesc(branchId, pageable);
+        return logs.map(log -> new AuditLogView(log.getId(), log.getOccurredAt(), log.getActorId(), log.getActorRole(),
+                log.getAction(), log.getEntityType(), log.getEntityId(), log.getBranchId(), log.getReason(),
+                log.getBeforeState(), log.getAfterState()));
+    }
+
+    /** One audit entry; {@code before} and {@code after} are the stored JSON states. */
+    public record AuditLogView(Long id, OffsetDateTime occurredAt, UUID actorId, String actorRole, String action,
+                               String entityType, String entityId, UUID branchId, String reason, String before,
+                               String after) {
     }
 
     /** What happened, to which entity, by whom (null actor = system job). */

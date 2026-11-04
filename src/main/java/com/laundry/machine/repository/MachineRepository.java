@@ -102,12 +102,14 @@ public interface MachineRepository extends JpaRepository<Machine, UUID> {
     int markOffline(@Param("ids") List<UUID> ids, @Param("ts") OffsetDateTime ts);
 
     /**
-     * Conditional bulk UPDATE: flip online → false ONLY for machines that are
-     * currently marked online AND whose {@code last_heartbeat_at} is older than
-     * {@code threshold}.
+     * Conditional bulk UPDATE: flip online → false and status → OFFLINE (BR-31, SM-03) ONLY for machines that
+     * are currently marked online AND whose {@code last_heartbeat_at} is older than {@code threshold}. A machine
+     * paused by an operator keeps OUT_OF_SERVICE, so a reconnect does not put it back on sale.
      */
     @Modifying
-    @Query("UPDATE Machine m SET m.online = false, m.updatedAt = :ts " +
+    @Query("UPDATE Machine m SET m.online = false, m.updatedAt = :ts, m.status = CASE " +
+           "WHEN m.status = com.laundry.machine.entity.MachineStatus.OUT_OF_SERVICE THEN m.status " +
+           "ELSE com.laundry.machine.entity.MachineStatus.OFFLINE END " +
            "WHERE m.id IN :ids AND m.online = true " +
            "AND (m.lastHeartbeatAt IS NULL OR m.lastHeartbeatAt < :threshold)")
     int markOfflineIfStale(@Param("ids") List<UUID> ids,

@@ -216,7 +216,7 @@ public class MachineController {
      * so the response is 202 with the PENDING command to poll.
      */
     @PostMapping("/{machineCode}/commands")
-    @Operation(summary = "Issue a command to a machine (START, STOP, PAUSE, RESUME, RESET, STATUS, TARE)")
+    @Operation(summary = "Issue a command to a machine (STOP, RESET, STATUS)")
     public ResponseEntity<DeviceCommandDto> issueCommand(@PathVariable String machineCode,
                                                          @Valid @RequestBody DeviceCommandRequest request,
                                                          CurrentUser actor) {

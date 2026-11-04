@@ -18,7 +18,7 @@ import java.util.Set;
 /**
  * Who may send which command to a machine (FR-ACT-06, FR-ACT-11, BR-25, SC-20, SC-45).
  * <ul>
- *   <li>Customer: STOP / PAUSE / RESUME / STATUS on the machine's latest session, and only if it is theirs.</li>
+ *   <li>Customer: STOP / STATUS on the machine's latest session, and only if it is theirs.</li>
  *   <li>Staff (assigned branch), Owner, Admin: any known command; every command except STATUS needs a reason.</li>
  * </ul>
  * Customers start machines through QR check-in, never through this endpoint.
@@ -27,10 +27,9 @@ import java.util.Set;
 @RequiredArgsConstructor
 public class RemoteCommandAuthorizer {
 
-    /** Commands the firmware understands; anything else is refused before it reaches a device. */
-    static final Set<String> KNOWN_COMMANDS =
-            Set.of("START", "STOP", "CANCEL", "PAUSE", "RESUME", "RESET", "STATUS", "TARE");
-    static final Set<String> CUSTOMER_COMMANDS = Set.of("STOP", "PAUSE", "RESUME", "STATUS");
+    /** Remote commands the firmware executes; anything else is refused before it reaches a device. */
+    static final Set<String> KNOWN_COMMANDS = Set.of("STOP", "RESET", "STATUS");
+    static final Set<String> CUSTOMER_COMMANDS = Set.of("STOP", "STATUS");
     static final String READ_ONLY_COMMAND = "STATUS";
 
     private static final Set<MachineStartAuthorizationStatus> LIVE_SESSION = EnumSet.of(

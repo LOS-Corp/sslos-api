@@ -55,7 +55,7 @@ public class DeviceCommand {
     private String machineCode;
 
     /**
-     * The command verb: START, STOP, RESET, PAUSE, RESUME, CANCEL, TARE, STATUS, etc.
+     * The command verb: STOP, RESET, STATUS, SELF_TEST, etc.
      * Stored as a String (not enum) to remain open to future firmware-defined commands.
      */
     @Column(nullable = false, length = 30)
@@ -98,18 +98,16 @@ public class DeviceCommand {
     private OffsetDateTime timeoutAt;
 
     @Column(name = "created_at", nullable = false, updatable = false)
-    @Builder.Default
-    private OffsetDateTime createdAt = OffsetDateTime.now();
+    private OffsetDateTime createdAt;
 
     @Column(name = "updated_at", nullable = false)
-    @Builder.Default
-    private OffsetDateTime updatedAt = OffsetDateTime.now();
+    private OffsetDateTime updatedAt;
 
     @PrePersist
     void onCreate() {
         OffsetDateTime now = OffsetDateTime.now();
-        if (createdAt == null) createdAt = now;
-        if (updatedAt == null) updatedAt = now;
+        createdAt = now;
+        updatedAt = now;
     }
 
     @PreUpdate

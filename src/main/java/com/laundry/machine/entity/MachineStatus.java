@@ -25,7 +25,10 @@ public enum MachineStatus {
     /** Cycle finished normally. */
     COMPLETED,
 
-    /** Machine is taken out of service by staff/admin (maintenance). */
+    /**
+     * Machine is paused by staff/admin without a repair. Hardware repairs use
+     * {@link MachineDeploymentStatus#MAINTENANCE}, which requires a self-test.
+     */
     OUT_OF_SERVICE,
 
     /** Machine reported a hardware or software error. */

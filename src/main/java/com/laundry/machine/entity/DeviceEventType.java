@@ -84,5 +84,12 @@ public enum DeviceEventType {
     MACHINE_COMMISSIONED,
 
     /** Device identity revoked and its EMQX credentials removed. */
-    DEVICE_REVOKED
+    DEVICE_REVOKED,
+
+    // ── Maintenance ─────────────────────────────────────────────────────────
+    /** Admin took an ACTIVE machine out of booking for a hardware repair. */
+    MAINTENANCE_STARTED,
+
+    /** Machine passed its post-repair self-test and is bookable again. */
+    MAINTENANCE_COMPLETED
 }

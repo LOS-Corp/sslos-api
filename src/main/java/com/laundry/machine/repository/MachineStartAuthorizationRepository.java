@@ -1,7 +1,6 @@
 package com.laundry.machine.repository;
 
 import com.laundry.machine.entity.MachineStartAuthorization;
-import com.laundry.machine.entity.MachineStartAuthorizationStatus;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;

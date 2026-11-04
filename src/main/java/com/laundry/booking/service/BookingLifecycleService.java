@@ -46,6 +46,7 @@ public class BookingLifecycleService {
     private final EmailService emailService;
     private final org.springframework.transaction.PlatformTransactionManager transactionManager;
     private final com.laundry.config.BookingProperties props;
+    private final OperatorStopService operatorStops;
 
     /**
      * A machine accepted START for the allocation {@code allocationId}: the customer's booking is now in use.
@@ -59,6 +60,25 @@ public class BookingLifecycleService {
     /** The machine finished its cycle: close its running allocation and advance the booking. */
     public void onMachineCycleFinished(UUID machineId) {
         afterCommit("cycle finished " + machineId, () -> markFinished(machineId));
+    }
+
+    /**
+     * The machine went back to idle without reporting COMPLETED: an operator stopped the cycle, or the
+     * COMPLETED message was lost.
+     */
+    public void onMachineBackToIdle(UUID machineId) {
+        afterCommit("machine idle " + machineId, () -> operatorStops.stoppedCycle(machineId)
+                .ifPresentOrElse(operatorStops::settle, () -> markFinished(machineId)));
+    }
+
+    /** SM-01 B12: closes a Wash–Dry booking whose dryer was not started, joining the caller's transaction. */
+    void completeWithoutDryer(UUID bookingId) {
+        jdbc.update("""
+                UPDATE scheduled_bookings SET status = 'COMPLETED', updated_at = NOW(),
+                    reconciliation_reason = 'Dryer not started within the transfer time (BR-09)'
+                WHERE id = ? AND status = 'TRANSFER_PENDING'
+                """, bookingId);
+        sendCompletionEmailAfterCommit(bookingId);
     }
 
     /**

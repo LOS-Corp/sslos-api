@@ -23,7 +23,6 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 
 import java.time.Instant;
-import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -32,8 +31,6 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.reset;
-import static org.mockito.Mockito.times;
-import static org.mockito.Mockito.verify;
 
 /**
  * End-to-end integration tests for the QR check-in + physical START
@@ -114,7 +111,7 @@ class MachineStartAuthorizationServiceTest {
     @Test
     @DisplayName("Happy path: valid reservation + paid → check-in publishes AUTHORIZE_START")
     void case1_happyPath() {
-        UUID reservationId = seedReservationAndPayment(true, false);
+        seedReservationAndPayment(true, false);
 
         var response = service.checkIn("WM001", customerId);
 
@@ -141,7 +138,7 @@ class MachineStartAuthorizationServiceTest {
     @Test
     @DisplayName("Rejects when reservation belongs to a different customer")
     void case3_wrongCustomer() {
-        UUID reservationId = seedReservationAndPayment(true, false, UUID.randomUUID());
+        seedReservationAndPayment(true, false, UUID.randomUUID());
         assertThatThrownBy(() -> service.checkIn("WM001", customerId))
                 .isInstanceOf(CheckInRejectedException.class)
                 .hasMessageContaining("reservation");
@@ -168,7 +165,7 @@ class MachineStartAuthorizationServiceTest {
     @Test
     @DisplayName("Rejects when payment is not PAID")
     void case5_unpaid() {
-        UUID reservationId = seedReservationAndPayment(false, false);
+        seedReservationAndPayment(false, false);
 
         assertThatThrownBy(() -> service.checkIn("WM001", customerId))
                 .isInstanceOf(CheckInRejectedException.class)
@@ -196,13 +193,58 @@ class MachineStartAuthorizationServiceTest {
                 .isInstanceOf(CheckInRejectedException.class);
     }
 
+    // ── 7b. Early start vs. the previous customer's turn ─────────────────────
+
+    @Test
+    @DisplayName("Early check-in is refused while the previous customer's hold is still running")
+    void case7b_previousTurnStillHeld() {
+        // Customer 1 washed (cycle DONE) and still has 5 min of checkout/buffer; customer 2 starts in 10 min.
+        seedBooking(machine.getId(), UUID.randomUUID(), "COMPLETED", "DONE", -40, 5, true);
+        seedBooking(machine.getId(), customerId, "CONFIRMED", "PENDING", 10, 60, true);
+
+        assertThatThrownBy(() -> service.checkIn("WM001", customerId))
+                .isInstanceOf(CheckInRejectedException.class)
+                .hasMessageStartingWith("Previous customer has not collected");
+        assertThat(authorizationRepository.findActiveByMachine(machine.getId())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("Early check-in is allowed when the previous customer never started (no-show)")
+    void case7c_previousTurnUnused() {
+        seedBooking(machine.getId(), UUID.randomUUID(), "CONFIRMED", "PENDING", -40, 5, true);
+        seedBooking(machine.getId(), customerId, "CONFIRMED", "PENDING", 10, 60, true);
+
+        assertThat(service.checkIn("WM001", customerId).authorizationId()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("Early check-in is allowed once the previous customer's hold is over")
+    void case7d_previousTurnOver() {
+        seedBooking(machine.getId(), UUID.randomUUID(), "COMPLETED", "DONE", -60, -1, true);
+        seedBooking(machine.getId(), customerId, "CONFIRMED", "PENDING", 10, 60, true);
+
+        assertThat(service.checkIn("WM001", customerId).authorizationId()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("BR-07: early check-in waits for T while another customer's check-in is still open")
+    void case7e_earlierTurnStillOpen() {
+        seedBooking(machine.getId(), UUID.randomUUID(), "CONFIRMED", "PENDING", -5, 5, true);
+        seedBooking(machine.getId(), customerId, "CONFIRMED", "PENDING", 10, 60, true);
+
+        assertThatThrownBy(() -> service.checkIn("WM001", customerId))
+                .isInstanceOf(CheckInRejectedException.class)
+                .hasMessageContaining("another booking comes first");
+        assertThat(authorizationRepository.findActiveByMachine(machine.getId())).isEmpty();
+    }
+
     // ── 8. Expiry sweep ──────────────────────────────────────────────────────
 
     @Test
     @DisplayName("Expired authorization is flipped to EXPIRED and REVOKE is published")
     void case8_expiryTimeout() throws Exception {
         // Force a 2-second TTL via the test profile; then sleep 3 s and sweep.
-        UUID reservationId = seedReservationAndPayment(true, false);
+        seedReservationAndPayment(true, false);
         var response = service.checkIn("WM001", customerId);
 
         // Manually backdate the row's expiry so we don't have to wait.
@@ -724,8 +766,8 @@ class MachineStartAuthorizationServiceTest {
                 .serviceType(com.laundry.transaction.entity.ServiceType.SELF_SERVICE)
                 .status(com.laundry.transaction.entity.TransactionStatus.PAID)
                 .totalAmount(new java.math.BigDecimal("25000.00"))
-                .expiresAt(LocalDateTime.now().plusHours(2))
-                .paidAt(LocalDateTime.now())
+                .expiresAt(OffsetDateTime.now().plusHours(2))
+                .paidAt(OffsetDateTime.now())
                 .build();
     }
 
@@ -736,7 +778,7 @@ class MachineStartAuthorizationServiceTest {
                 .paymentMethod(PaymentMethod.ONLINE)
                 .status(PaymentStatus.PAID)
                 .build();
-        p.setPaidAt(LocalDateTime.now());
+        p.setPaidAt(OffsetDateTime.now());
         return p;
     }
 

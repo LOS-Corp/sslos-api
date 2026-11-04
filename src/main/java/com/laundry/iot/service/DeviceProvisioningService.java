@@ -315,6 +315,7 @@ public class DeviceProvisioningService {
         String previousDevice = machine.getDeviceId();
         machine.setDeviceId(null);
         machine.setDeploymentStatus(MachineDeploymentStatus.UNASSIGNED);
+        machine.setMaintenanceSince(null);   // a new device is commissioned from scratch
         machine.setOnline(false);
         machineRepository.save(machine);
         event(machine, DeviceEventType.DEVICE_REVOKED, "Unpaired device " + previousDevice);

@@ -51,7 +51,8 @@ public class MachineStateService {
         MachineStatus.PAUSED,         EnumSet.of(MachineStatus.RUNNING, MachineStatus.ERROR, MachineStatus.OFFLINE),
         MachineStatus.COMPLETED,      EnumSet.of(MachineStatus.AVAILABLE, MachineStatus.OFFLINE),
         MachineStatus.ERROR,          EnumSet.of(MachineStatus.AVAILABLE, MachineStatus.OUT_OF_SERVICE, MachineStatus.OFFLINE),
-        MachineStatus.OFFLINE,        EnumSet.of(MachineStatus.AVAILABLE, MachineStatus.ERROR, MachineStatus.OUT_OF_SERVICE),
+        MachineStatus.OFFLINE,        EnumSet.of(MachineStatus.AVAILABLE, MachineStatus.RUNNING, MachineStatus.COMPLETED,
+                                                 MachineStatus.ERROR, MachineStatus.OUT_OF_SERVICE),
         MachineStatus.OUT_OF_SERVICE, EnumSet.of(MachineStatus.AVAILABLE, MachineStatus.OFFLINE)
     );
 

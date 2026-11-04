@@ -18,7 +18,6 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.sql.ResultSet;
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.Instant;
@@ -32,7 +31,6 @@ import java.util.Set;
 import java.util.UUID;
 
 import static com.laundry.booking.dto.BookingDtos.*;
-import static com.laundry.booking.dto.BookingConfigDtos.*;
 
 import com.laundry.booking.domain.SlotPlanner.*;
 import static com.laundry.booking.domain.SlotPlanner.*;
@@ -412,6 +410,7 @@ public class BookingAvailabilityService {
     }
 
     private static String unavailableReason(Machine machine) {
+        if (machine.isUnderMaintenance()) return "MAINTENANCE";
         if (!machine.isCommissioned()) return "NOT_COMMISSIONED";
         if (!machine.isOnline()) return "OFFLINE";
         if (machine.getStatus() == MachineStatus.ERROR) return "ERROR";

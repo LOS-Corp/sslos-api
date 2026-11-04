@@ -55,7 +55,7 @@ public enum ErrorCode {
     SELF_APPROVAL_FORBIDDEN(HttpStatus.CONFLICT, null),
     INSUFFICIENT_BALANCE(HttpStatus.CONFLICT, null),
     FILE_REJECTED(HttpStatus.UNSUPPORTED_MEDIA_TYPE, null),
-    FILE_TOO_LARGE(HttpStatus.PAYLOAD_TOO_LARGE, null),
+    FILE_TOO_LARGE(HttpStatus.CONTENT_TOO_LARGE, null),
 
     // ── Legacy transaction envelope ────────────────────────────────────────
     TRANSACTION_REJECTED(HttpStatus.BAD_REQUEST, null);

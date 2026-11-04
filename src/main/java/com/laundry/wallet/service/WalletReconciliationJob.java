@@ -25,10 +25,17 @@ public class WalletReconciliationJob {
     public void reconcile() {
         jobLock.runExclusive("wallet-reconciliation", () -> {
             List<UUID> broken = walletService.outOfBalanceWallets();
-            if (broken.isEmpty()) {
-                log.info("Wallet reconciliation: every balance matches its ledger");
-            } else {
+            List<UUID> unreconciled = walletService.unreconciledCustomers();
+            if (broken.isEmpty() && unreconciled.isEmpty()) {
+                log.info("Wallet reconciliation: balances match the ledger, and the ledger matches refunds and payments");
+                return;
+            }
+            if (!broken.isEmpty()) {
                 log.error("Wallet reconciliation: {} wallet(s) differ from their ledger: {}", broken.size(), broken);
+            }
+            if (!unreconciled.isEmpty()) {
+                log.error("Wallet reconciliation: {} customer(s) differ from refunds or payments: {}",
+                        unreconciled.size(), unreconciled);
             }
         });
     }

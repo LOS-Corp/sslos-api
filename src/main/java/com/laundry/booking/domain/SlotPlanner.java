@@ -15,7 +15,6 @@ import java.util.Map;
 import java.util.UUID;
 
 import static com.laundry.booking.dto.BookingDtos.*;
-import static com.laundry.booking.dto.BookingConfigDtos.*;
 
 /**
  * Pure booking time arithmetic (BR-07, BR-09, BR-26, BR-30): the phases and resource intervals of a

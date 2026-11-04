@@ -15,7 +15,7 @@ import java.util.UUID;
 
 /**
  * Stages 3, 7 and 8 for one machine: pair a scanned device, run the remote
- * self-test, commission. Lives under {@code /api/admin/machines} so the
+ * self-test, commission, and take it into maintenance. Lives under {@code /api/admin/machines} so the
  * existing admin/owner rule in {@code SecurityConfig} applies.
  */
 @RestController
@@ -51,6 +51,16 @@ public class MachineProvisioningController {
     @Operation(summary = "Mark the machine ACTIVE (bookable) after a passing self-test")
     public ProvisioningStatus commission(@PathVariable String machineCode, Authentication authentication) {
         return commissioningService.commission(machineCode, userId(authentication));
+    }
+
+    @PostMapping("/maintenance")
+    @Operation(summary = "Take an ACTIVE machine out of booking for a hardware repair;"
+            + " it returns via /self-test then /commission")
+    public ProvisioningStatus startMaintenance(@PathVariable String machineCode,
+                                               @Valid @RequestBody(required = false) StartMaintenanceRequest request,
+                                               Authentication authentication) {
+        return commissioningService.startMaintenance(machineCode, userId(authentication),
+                request == null ? null : request.reason());
     }
 
     @PostMapping("/unpair")

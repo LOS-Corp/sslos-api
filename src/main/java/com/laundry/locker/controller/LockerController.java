@@ -41,10 +41,10 @@ public class LockerController {
     }
 
     @PostMapping("/api/staff/lockers/{machineId}/compartments/{no}/open")
-    @Operation(summary = "Staff opens a compartment: COLLECT (take laundry), RETURN (put it back), INSPECT")
+    @Operation(summary = "Staff opens a compartment: COLLECT (take laundry), RETURN (put it back), INSPECT (needs a reason)")
     public void open(@PathVariable UUID machineId, @PathVariable int no,
                      @Valid @RequestBody StaffOpenRequest request, CurrentUser staff) {
-        lockerService.staffOpen(machineId, no, request.action(), staff);
+        lockerService.staffOpen(machineId, no, request.action(), request.reason(), staff);
     }
 
     @PostMapping("/api/staff/lockers/{machineId}/compartments")

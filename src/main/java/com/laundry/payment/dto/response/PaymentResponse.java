@@ -8,7 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
@@ -28,6 +28,6 @@ public class PaymentResponse {
     private String gatewayTransactionId;
     private String paymentUrl; // For ONLINE payment
     private String qrCode;     // VietQR code string for direct display
-    private LocalDateTime createdAt;
-    private LocalDateTime paidAt;
+    private OffsetDateTime createdAt;
+    private OffsetDateTime paidAt;
 }

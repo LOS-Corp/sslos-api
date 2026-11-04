@@ -10,13 +10,10 @@ import com.laundry.machine.dto.DeviceCommandRequest;
 import com.laundry.machine.entity.DeviceCommand;
 import com.laundry.machine.entity.DeviceCommandStatus;
 import com.laundry.machine.entity.Machine;
-import com.laundry.machine.entity.MachineStartAuthorization;
-import com.laundry.machine.entity.MachineStartAuthorizationStatus;
 import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.repository.DeviceCommandRepository;
 import com.laundry.machine.repository.MachineRepository;
 import com.laundry.machine.exception.MachineNotFoundException;
-import com.laundry.machine.repository.MachineStartAuthorizationRepository;
 import com.laundry.shared.error.BusinessException;
 import com.laundry.shared.error.ErrorCode;
 import com.laundry.shared.security.CurrentUser;
@@ -41,7 +38,6 @@ import java.util.UUID;
  * <ol>
  *   <li>{@link RemoteCommandAuthorizer} decides whether the caller may send this command (FR-ACT-06, BR-25).</li>
  *   <li>Validate the machine is online and its state allows the command.</li>
- *   <li>For START: an active START authorization must exist for the booking.</li>
  *   <li>Persist {@link DeviceCommand} as PENDING and write the audit entry — one transaction.</li>
  *   <li>After commit, {@link DeviceCommandDispatcher} publishes to MQTT and marks it SENT or FAILED,
  *       so a rolled-back request never reaches a device (ADR-08).</li>
@@ -58,7 +54,6 @@ public class DeviceCommandService {
 
     private final MachineRepository machineRepository;
     private final DeviceCommandRepository deviceCommandRepository;
-    private final MachineStartAuthorizationRepository startAuthorizationRepository;
     private final RemoteCommandAuthorizer commandAuthorizer;
     private final AuditService auditService;
     private final ApplicationEventPublisher events;
@@ -66,8 +61,6 @@ public class DeviceCommandService {
 
     @Value("${app.machine.command-timeout-seconds:15}")
     private int commandTimeoutSeconds;
-
-    private static final Set<String> COMMANDS_REQUIRING_BOOKING = Set.of("START");
 
     /**
      * Commands that bypass status validation. Used for RESET (recovery) and
@@ -88,13 +81,6 @@ public class DeviceCommandService {
         validateCommandForStatus(cmd, machine);
 
         UUID bookingId = request.getBookingId();
-        if (COMMANDS_REQUIRING_BOOKING.contains(cmd)) {
-            if (bookingId == null) {
-                throw BusinessException.of(ErrorCode.VALIDATION_FAILED, "bookingId is required for START command");
-            }
-            validateBookingForStart(machine, bookingId);
-        }
-
         OffsetDateTime now = OffsetDateTime.now();
         String commandId = "CMD-" + UUID.randomUUID();
         DeviceCommand command = deviceCommandRepository.save(DeviceCommand.builder()
@@ -162,63 +148,10 @@ public class DeviceCommandService {
             return;
         }
 
-        switch (cmd) {
-            case "START" -> {
-                if (status != MachineStatus.WAITING_START && status != MachineStatus.AVAILABLE) {
-                    throw new IllegalStateException(
-                        "Cannot START machine in status: " + status +
-                        ". Machine must be AVAILABLE or WAITING_START.");
-                }
-            }
-            case "STOP", "CANCEL" -> {
-                // STOP/CANCEL are valid in any non-OFFLINE state.
-                if (status == MachineStatus.OFFLINE || status == MachineStatus.COMPLETED) {
-                    throw new IllegalStateException("Cannot " + cmd + " machine in status: " + status);
-                }
-            }
-            case "PAUSE" -> {
-                if (status != MachineStatus.RUNNING) {
-                    throw new IllegalStateException("Cannot PAUSE machine not in RUNNING status");
-                }
-            }
-            case "RESUME" -> {
-                if (status != MachineStatus.PAUSED) {
-                    throw new IllegalStateException("Cannot RESUME machine not in PAUSED status");
-                }
-            }
-            case "TARE" -> {
-                // TARE is allowed whenever the device is online (handled by caller).
-            }
-            default -> {
-                // RemoteCommandAuthorizer refuses unknown commands before this point.
-            }
+        // STOP is valid in any state except where nothing can stop.
+        if (status == MachineStatus.OFFLINE || status == MachineStatus.COMPLETED) {
+            throw new IllegalStateException("Cannot " + cmd + " machine in status: " + status);
         }
-    }
-
-    /**
-     * Customers start machines through QR check-in; this remote START is an operator override and
-     * still requires the active authorization of that booking.
-     */
-    private void validateBookingForStart(Machine machine, UUID bookingId) {
-        var active = startAuthorizationRepository.findActiveByMachine(machine.getId());
-        if (active.isEmpty()) {
-            throw new IllegalStateException(
-                    "No active START authorization for machine " + machine.getMachineCode()
-                            + ". Customer must scan the QR at the machine first.");
-        }
-        MachineStartAuthorization auth = active.get();
-        if (auth.getBookingId() == null || !auth.getBookingId().equals(bookingId)) {
-            throw new IllegalStateException(
-                    "bookingId does not match the active authorization for this machine");
-        }
-        if (auth.getStatus() != MachineStartAuthorizationStatus.GRANTED
-                && auth.getStatus() != MachineStartAuthorizationStatus.START_PENDING) {
-            throw new IllegalStateException(
-                    "Active authorization is in status " + auth.getStatus()
-                            + "; press START on the device after the device ACKs.");
-        }
-        log.info("[{}] START authorization OK for booking {} (auth {})",
-                machine.getMachineCode(), bookingId, auth.getId());
     }
 
     private DeviceCommandDto toDto(DeviceCommand cmd) {

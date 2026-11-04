@@ -114,7 +114,8 @@ public class AuthChannelHandler {
         try {
             return objectMapper.readValue(payload, AuthMessage.class);
         } catch (JsonProcessingException e) {
-            log.warn("Cannot parse auth payload: {} — payload: {}", e.getOriginalMessage(), payload);
+            // Never log the payload: it can carry a locker PIN (NFR-23).
+            log.warn("Cannot parse auth payload ({} characters)", payload == null ? 0 : payload.length());
             return null;
         }
     }

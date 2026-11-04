@@ -98,7 +98,7 @@ public final class BookingDtos {
             List<SlotPhaseDto> timeline
     ) {}
 
-    /** Reason codes: OFFLINE, ERROR, OUT_OF_SERVICE, NOT_COMMISSIONED, DISABLED, FULLY_BOOKED. */
+    /** Reason codes: OFFLINE, ERROR, OUT_OF_SERVICE, MAINTENANCE, NOT_COMMISSIONED, DISABLED, FULLY_BOOKED. */
     public record UnavailableMachineDto(
             UUID resourceId,
             String resourceType,

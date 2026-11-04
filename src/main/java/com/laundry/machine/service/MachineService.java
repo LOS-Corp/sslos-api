@@ -134,12 +134,13 @@ public class MachineService {
                 persistentStateChanged = true;
                 persistEvent(machine, DeviceEventType.STATUS_CHANGED,
                         "Status: " + previousStatus + " → " + machine.getStatus(), null);
-                // A cycle ended (COMPLETED, or straight back to AVAILABLE if that message was lost).
                 boolean wasRunning = previousStatus == MachineStatus.RUNNING || previousStatus == MachineStatus.PAUSED;
-                boolean nowIdle = machine.getStatus() == MachineStatus.COMPLETED
-                        || machine.getStatus() == MachineStatus.AVAILABLE;
-                if (wasRunning && nowIdle) {
+                // A cycle that continued through a network loss reports COMPLETED straight from OFFLINE (BR-24).
+                if (machine.getStatus() == MachineStatus.COMPLETED
+                        && (wasRunning || previousStatus == MachineStatus.OFFLINE)) {
                     bookingLifecycleService.onMachineCycleFinished(machine.getId());
+                } else if (machine.getStatus() == MachineStatus.AVAILABLE && wasRunning) {
+                    bookingLifecycleService.onMachineBackToIdle(machine.getId());
                 }
             }
         }
@@ -270,6 +271,14 @@ public class MachineService {
         if (wasOffline) {
             machine.setOnline(true);
             machine.setLastHeartbeatAt(now);
+            if (machine.getStatus() == MachineStatus.OFFLINE) {
+                // The detector set OFFLINE; a heartbeat carries the device's state, if it reports one.
+                String reported = snapshot == null ? null : snapshot.getStatus();
+                if (reported == null || reported.isBlank()
+                        || !machineStateService.applyDeviceStatus(machine, reported)) {
+                    machine.setStatus(MachineStatus.AVAILABLE);
+                }
+            }
             machineRepository.save(machine);
             persistEvent(machine, DeviceEventType.CONNECTION_RECOVERED,
                     "Machine came back online", null);

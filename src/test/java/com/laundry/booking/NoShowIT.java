@@ -138,6 +138,7 @@ class NoShowIT {
         Instant start = Instant.now().plus(2, ChronoUnit.MINUTES).truncatedTo(ChronoUnit.MINUTES);
         var hold = bookings.createHold(customerId, new CreateHoldRequest(branchId, service, start, List.of(resource),
                 "noshow-" + UUID.randomUUID(), null, null, null));
+        Fixtures.paidPayment(jdbc, hold.transactionId(), hold.totalAmount().longValue());
         bookings.confirmPayment(hold.transactionId());
         jdbc.update("""
                 UPDATE scheduled_bookings
@@ -145,7 +146,7 @@ class NoShowIT {
                     expected_end_time = NOW() - make_interval(mins => ?) + interval '45 minutes'
                 WHERE id = ?
                 """, minutesAgo, minutesAgo, hold.bookingId());
-        jdbc.update("UPDATE transactions SET paid_at = (NOW() AT TIME ZONE 'UTC') - make_interval(mins => ?) WHERE id = ?",
+        jdbc.update("UPDATE transactions SET paid_at = NOW() - make_interval(mins => ?) WHERE id = ?",
                 minutesAgo + 5, hold.transactionId());
         return hold.bookingId();
     }

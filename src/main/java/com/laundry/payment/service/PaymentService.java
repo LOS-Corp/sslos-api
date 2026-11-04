@@ -303,10 +303,6 @@ public class PaymentService {
         scheduledBookingService.confirmPayment(transactionId);
     }
 
-    private PaymentResponse toResponse(Payment payment, String paymentUrl) {
-        return toResponse(payment, paymentUrl, null);
-    }
-
     private PaymentResponse toResponse(Payment payment, String paymentUrl, String qrCode) {
         return PaymentResponse.builder()
             .paymentId(payment.getId())

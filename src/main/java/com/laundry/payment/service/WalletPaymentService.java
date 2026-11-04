@@ -14,7 +14,7 @@ import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.UUID;
@@ -50,7 +50,7 @@ public class WalletPaymentService {
         }
         wallet.debit(customerId, part, WalletEntryType.PAYMENT_DEBIT, "payment:" + transactionId,
                 "Thanh toán đơn bằng ví");
-        LocalDateTime now = LocalDateTime.now(clock);
+        OffsetDateTime now = OffsetDateTime.now(clock);
         Payment payment = Payment.builder()
                 .transactionId(transactionId)
                 .amount(java.math.BigDecimal.valueOf(part.vnd()))
@@ -81,7 +81,7 @@ public class WalletPaymentService {
                             "payment-reversal:" + payment.getId(), why);
                 }
                 payment.setStatus(PaymentStatus.REVERSED);
-                payment.setUpdatedAt(LocalDateTime.now(clock));
+                payment.setUpdatedAt(OffsetDateTime.now(clock));
                 payments.save(payment);
             }
         }

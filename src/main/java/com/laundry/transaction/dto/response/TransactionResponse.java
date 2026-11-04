@@ -8,7 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /** Read model of a transaction for the payment module. */
@@ -23,7 +23,7 @@ public class TransactionResponse {
     private ServiceType serviceType;
     private TransactionStatus status;
     private BigDecimal totalAmount;
-    private LocalDateTime expiresAt;
-    private LocalDateTime paidAt;
-    private LocalDateTime createdAt;
+    private OffsetDateTime expiresAt;
+    private OffsetDateTime paidAt;
+    private OffsetDateTime createdAt;
 }

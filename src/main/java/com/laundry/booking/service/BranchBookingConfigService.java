@@ -4,7 +4,6 @@ import com.laundry.shared.error.ErrorCode;
 
 import com.laundry.shared.error.BusinessException;
 
-import com.laundry.branch.entity.Branch;
 import com.laundry.branch.repository.BranchRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

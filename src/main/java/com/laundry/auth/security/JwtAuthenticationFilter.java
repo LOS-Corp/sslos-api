@@ -48,12 +48,12 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             var claims = jwtService.parseToken(token);
             
             // Extract roles from JWT claims
-            var roles = claims.get("roles", List.class);
+            List<?> roles = claims.get("roles", List.class);
             if (roles == null) {
                 roles = List.of();
             }
             
-            var authorities = roles.stream()
+            List<SimpleGrantedAuthority> authorities = roles.stream()
                 .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
                 .toList();
             

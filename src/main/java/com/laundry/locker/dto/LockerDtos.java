@@ -3,6 +3,7 @@ package com.laundry.locker.dto;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 
 import java.time.Instant;
 import java.util.List;
@@ -77,7 +78,7 @@ public final class LockerDtos {
     }
 
     /** COLLECT: take the customer's laundry out; RETURN: put the clean laundry back; INSPECT: just open. */
-    public record StaffOpenRequest(@NotNull String action) {
+    public record StaffOpenRequest(@NotNull String action, @Size(max = 500) String reason) {
     }
 
     public record SyncCompartmentsRequest(@Min(1) @Max(8) int count) {

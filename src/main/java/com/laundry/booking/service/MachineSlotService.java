@@ -1,12 +1,15 @@
 package com.laundry.booking.service;
 
 import lombok.RequiredArgsConstructor;
+import com.laundry.config.BookingProperties;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -22,6 +25,7 @@ public class MachineSlotService {
     private static final String STARTABLE_BOOKINGS = "('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING')";
 
     private final JdbcTemplate jdbc;
+    private final BookingProperties props;
 
     /**
      * One washer or dryer allocation of a booking. {@code used} once its cycle has started: a booking
@@ -50,6 +54,39 @@ public class MachineSlotService {
                 """, (rs, row) -> new MachineSlot(rs.getObject("id", UUID.class), rs.getObject("booking_id", UUID.class),
                 rs.getObject("transaction_id", UUID.class), rs.getTimestamp("occupied_from").toInstant(),
                 rs.getTimestamp("occupied_until").toInstant(), rs.getString("cycle_state")), machineId, customerId);
+    }
+
+    /**
+     * End of the hold of another customer's earlier turn on this machine that was actually used (its cycle
+     * started) and is not over yet. Until then their laundry may still be in the drum: the washer has no
+     * door switch, so the booked hold (cycle + checkout + turnover buffer) stands in for "unloaded".
+     */
+    @Transactional(readOnly = true)
+    public Optional<Instant> previousTurnHeldUntil(UUID machineId, UUID customerId, Instant slotFrom, Instant now) {
+        Timestamp until = jdbc.queryForObject("""
+                SELECT MAX(a.occupied_until)
+                FROM booking_resource_allocations a
+                JOIN scheduled_bookings b ON b.id = a.booking_id
+                JOIN transactions t ON t.id = b.transaction_id
+                WHERE a.resource_id = ? AND t.customer_id <> ?
+                  AND a.cycle_state IN ('RUNNING', 'DONE')
+                  AND a.occupied_from < ? AND a.occupied_until > ?
+                """, Timestamp.class, machineId, customerId, Timestamp.from(slotFrom), Timestamp.from(now));
+        return Optional.ofNullable(until).map(Timestamp::toInstant);
+    }
+
+    /** Another customer has an unstarted turn before {@code slotFrom} whose check-in has not closed yet. */
+    @Transactional(readOnly = true)
+    public boolean earlierTurnStillOpen(UUID machineId, UUID customerId, Instant slotFrom, Instant now) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+                SELECT EXISTS (
+                    SELECT 1 FROM booking_resource_allocations a
+                    JOIN scheduled_bookings b ON b.id = a.booking_id
+                    JOIN transactions t ON t.id = b.transaction_id
+                    WHERE a.resource_id = ? AND t.customer_id <> ? AND a.active AND a.cycle_state = 'PENDING'
+                      AND a.occupied_from < ? AND a.occupied_from > ?)
+                """, Boolean.class, machineId, customerId, Timestamp.from(slotFrom),
+                Timestamp.from(now.minus(props.checkInClosesAfter()))));
     }
 
     /** The machine accepted START for this slot. False when it was already running or finished. */
