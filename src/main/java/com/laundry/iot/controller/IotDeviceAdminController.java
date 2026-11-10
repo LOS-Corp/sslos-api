@@ -8,19 +8,23 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.Authentication;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.UUID;
 
 /**
- * Stage 1 (workshop enrollment) and device revocation. Admin/owner only
- * (enforced in {@code SecurityConfig}).
+ * Device catalog, adding a board before its machine, MANUAL-mode EMQX
+ * credentials and revocation. Admin only (enforced in {@code SecurityConfig}).
+ * A device row is created the first time its code is scanned, here or while
+ * pairing a machine.
  */
 @RestController
 @RequestMapping("/api/admin/iot-devices")
 @RequiredArgsConstructor
-@Tag(name = "IoT Devices (Admin)", description = "ESP32 enrollment, credentials and revocation")
+@Tag(name = "IoT Devices (Admin)", description = "ESP32 catalog, credentials and revocation")
 public class IotDeviceAdminController {
 
     private final DeviceProvisioningService provisioningService;
@@ -28,13 +32,14 @@ public class IotDeviceAdminController {
     private final IotProvisioningProperties iotProperties;
 
     @PostMapping
-    @Operation(summary = "Enroll an ESP32; returns its claim secret and pairing code once")
-    public ResponseEntity<EnrollDeviceResponse> enroll(@Valid @RequestBody EnrollDeviceRequest request) {
-        return ResponseEntity.status(201).body(provisioningService.enroll(request.deviceId()));
+    @Operation(summary = "Add a board before its machine: open a verification with the code shown on the board")
+    public ResponseEntity<RegisterDeviceResponse> register(@Valid @RequestBody StartPairingRequest request,
+                                                           Authentication authentication) {
+        return ResponseEntity.status(201).body(provisioningService.registerDevice(request, userId(authentication)));
     }
 
     @GetMapping
-    @Operation(summary = "List enrolled devices")
+    @Operation(summary = "List devices that have been scanned at least once")
     public List<DeviceSummary> list() {
         return provisioningService.listDevices();
     }
@@ -57,5 +62,13 @@ public class IotDeviceAdminController {
     public ResponseEntity<Void> revoke(@PathVariable String deviceId) {
         provisioningService.revoke(deviceId);
         return ResponseEntity.noContent().build();
+    }
+
+    private static UUID userId(Authentication authentication) {
+        try {
+            return authentication == null ? null : UUID.fromString(authentication.getName());
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 }

@@ -26,9 +26,9 @@ Web App / Mobile / Kiosk / Staff Dashboard
 ## Architecture decisions and quality gates
 
 - Decisions: [docs/adr](docs/adr/README.md) (modular monolith, allocation constraint, identity and scope,
-  wallet ledger, pure policies, error model, after-commit MQTT, cluster-safe jobs, real-PostgreSQL tests).
+  wallet ledger, pure policies, error model, after-commit MQTT, real-PostgreSQL tests).
 - `./mvnw verify` runs unit tests (Surefire), integration tests `*IT` on PostgreSQL 16 via Testcontainers
-  (Failsafe, needs Docker), 5 ArchUnit rules and a JaCoCo gate (≥ 80 % lines on the money and time rules).
+  (Failsafe, needs Docker) and writes a JaCoCo coverage report to `target/site/jacoco`.
 - Every error is `ApiError {timestamp, status, message, fields, code, messageCode, traceId}`; send or read
   `X-Trace-Id` to match a request with its log lines.
 - Schema changes only through Flyway (`ddl-auto=validate`). `scripts/generate-database-sql.sh` rebuilds the

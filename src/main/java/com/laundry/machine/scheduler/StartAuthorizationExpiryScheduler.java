@@ -1,6 +1,5 @@
 package com.laundry.machine.scheduler;
 
-import com.laundry.shared.scheduling.JobLock;
 import com.laundry.machine.service.MachineStartAuthorizationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -18,9 +17,8 @@ import java.time.OffsetDateTime;
  * the physical START button open for more than a few seconds past deadline,
  * long enough that the query stays cheap.
  *
- * <p>Concurrency-safe: the underlying UPDATE is conditional on the row
- * still being in an ACTIVE state, so multiple instances (or a manual retry)
- * cannot double-flip a row.
+ * <p>The UPDATE is conditional on the row still being ACTIVE, so a retry
+ * cannot flip a row twice.
  */
 @Component
 @RequiredArgsConstructor
@@ -28,7 +26,6 @@ import java.time.OffsetDateTime;
 public class StartAuthorizationExpiryScheduler {
 
     private final MachineStartAuthorizationService startAuthorizationService;
-    private final JobLock jobLock;
 
     /**
      * Sweep expiry every 5 s.
@@ -37,7 +34,7 @@ public class StartAuthorizationExpiryScheduler {
     @Scheduled(fixedDelayString = "${app.machine.start-authorization.sweep-millis:5000}",
                initialDelay = 10_000)
     public void sweep() {
-        jobLock.runExclusive("start-authorization-expiry", this::sweepOnce);
+        sweepOnce();
     }
 
     private void sweepOnce() {

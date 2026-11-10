@@ -2,7 +2,6 @@ package com.laundry.machine.service;
 
 
 
-import com.laundry.shared.scheduling.JobLock;
 import com.laundry.machine.entity.*;
 import com.laundry.machine.exception.MachineNotFoundException;
 import com.laundry.machine.repository.DeviceCommandRepository;
@@ -13,6 +12,7 @@ import com.laundry.machine.runtime.MachineRuntimeStateService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -58,7 +58,7 @@ public class MachineService {
     private final MachineWebSocketBroadcaster broadcaster;
     private final MachineRuntimeStateService runtimeStateService;
     private final com.laundry.booking.service.BookingLifecycleService bookingLifecycleService;
-    private final JobLock jobLock;
+    private final ApplicationEventPublisher events;
 
     @Autowired
     public MachineService(
@@ -69,7 +69,7 @@ public class MachineService {
             MachineWebSocketBroadcaster broadcaster,
             MachineRuntimeStateService runtimeStateService,
             com.laundry.booking.service.BookingLifecycleService bookingLifecycleService,
-            JobLock jobLock) {
+            ApplicationEventPublisher events) {
         this.machineRepository = machineRepository;
         this.deviceEventRepository = deviceEventRepository;
         this.deviceCommandRepository = deviceCommandRepository;
@@ -77,7 +77,7 @@ public class MachineService {
         this.broadcaster = broadcaster;
         this.runtimeStateService = runtimeStateService;
         this.bookingLifecycleService = bookingLifecycleService;
-        this.jobLock = jobLock;
+        this.events = events;
     }
 
     @Value("${app.machine.heartbeat-timeout-seconds:30}")
@@ -284,6 +284,10 @@ public class MachineService {
                     "Machine came back online", null);
             broadcaster.broadcastMachineUpdate(machine);
             log.info("[{}/{}] Machine came back online", branchId, machineCode);
+            if (machine.getDeploymentStatus() == MachineDeploymentStatus.PROVISIONED) {
+                // A freshly activated board just reached MQTT: the IoT module starts its self-test after commit.
+                events.publishEvent(new MachineCameOnline(machine.getId(), machine.getMachineCode()));
+            }
         }
     }
 
@@ -404,9 +408,6 @@ public class MachineService {
     @Scheduled(fixedDelayString = "${app.machine.offline-detector-interval-ms:10000}")
     @Transactional
     public void detectOfflineMachines() {
-        if (!jobLock.tryLockForTransaction("machine-offline-detector")) {
-            return;
-        }
         long startNs = System.nanoTime();
         OffsetDateTime threshold = OffsetDateTime.now().minusSeconds(heartbeatTimeoutSeconds);
 
@@ -461,9 +462,6 @@ public class MachineService {
     @Scheduled(fixedDelayString = "${app.machine.command-timeout-interval-ms:5000}")
     @Transactional
     public void detectCommandTimeouts() {
-        if (!jobLock.tryLockForTransaction("device-command-timeout")) {
-            return;
-        }
         long startNs = System.nanoTime();
         OffsetDateTime now = OffsetDateTime.now();
 

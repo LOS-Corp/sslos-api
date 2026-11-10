@@ -6,6 +6,7 @@ import com.laundry.shared.error.ErrorCode;
 import com.laundry.shared.error.BusinessException;
 
 import com.laundry.branch.repository.BranchRepository;
+import com.laundry.iot.service.DeviceProvisioningService;
 import com.laundry.machine.dto.CreateMachineRequest;
 import com.laundry.machine.dto.MachineDto;
 import com.laundry.machine.dto.UpdateMachineRequest;
@@ -46,6 +47,7 @@ public class MachineCatalogService {
     private final MachineStateService machineStateService;
     private final MachineWebSocketBroadcaster broadcaster;
     private final DeviceEventRepository deviceEventRepository;
+    private final DeviceProvisioningService provisioningService;
 
 // ── Admin CRUD ─────────────────────────────────────────────────────────
 
@@ -53,12 +55,14 @@ public class MachineCatalogService {
      * Create a new machine. Throws {@link DuplicateResourceException} if the
      * machineCode is already taken within the same branch.
      *
-     * <p>Newly created machines start as OFFLINE — they have never sent a
-     * heartbeat. The first {@code processHeartbeat} call flips them to
-     * AVAILABLE once the device connects.
+     * <p>A new machine is {@code AVAILABLE} with {@code online = false} and
+     * {@code deploymentStatus = UNASSIGNED}; it cannot be booked until it is
+     * commissioned ({@code ACTIVE}). When the request carries the scanned
+     * setup QR ({@code device}), the machine is paired in the same transaction
+     * and starts in {@code PAIRING}; a pairing failure rolls back the machine.
      */
     @Transactional
-    public MachineDto createMachine(CreateMachineRequest request) {
+    public MachineDto createMachine(CreateMachineRequest request, UUID adminId) {
         String code = request.getMachineCode().trim().toUpperCase();
 
         if (request.getBranchId() == null) {
@@ -91,7 +95,11 @@ public class MachineCatalogService {
 
         persistEvent(machine, DeviceEventType.MACHINE_REGISTERED,
                 "Machine registered by admin: " + branchId + "/" + code, null);
-        log.info("[{}/{}] Machine created", branchId, code);
+        if (request.getDevice() != null) {
+            provisioningService.pair(machine, request.getDevice(), adminId);
+        }
+        log.info("[{}/{}] Machine created{}", branchId, code,
+                request.getDevice() == null ? "" : " and pairing with " + request.getDevice().deviceId());
         return toDto(machine);
     }
 

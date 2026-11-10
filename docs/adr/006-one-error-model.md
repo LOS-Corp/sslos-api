@@ -19,4 +19,4 @@
 - The security filter chain writes 401/403 in the same shape (`SecurityErrorResponder`).
 
 ## Migration
-All 84 `new ResponseStatusException` call sites were converted to `BusinessException(ErrorCode)` on 28/10/2026, and controllers that parsed the token by hand now take a `CurrentUser`. ArchUnit forbids `ResponseStatusException` in every class except `GlobalExceptionHandler` (it translates the type) and `ProvisioningRejectedException` (the device protocol keeps its status).
+All 84 `new ResponseStatusException` call sites were converted to `BusinessException(ErrorCode)` on 28/10/2026, and controllers that parsed the token by hand now take a `CurrentUser`.

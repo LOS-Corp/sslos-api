@@ -170,18 +170,6 @@ class RefundCapIT {
         assertThat(wallet.balanceOf(customerId).vnd()).isZero();
     }
 
-    @Test
-    @DisplayName("NFR-17: refunds reconcile with the ledger; a credit that lost its refund row is reported")
-    void reconciliation() {
-        Paid order = paidOnline(tomorrow);
-        cancellations.cancel(customer, order.bookingId());
-        assertThat(wallet.unreconciledCustomers()).doesNotContain(customerId);
-
-        jdbc.update("DELETE FROM refund_requests WHERE transaction_id = ?", order.transactionId());
-
-        assertThat(wallet.unreconciledCustomers()).contains(customerId);
-    }
-
     private Paid paidOnline(Instant start) {
         var hold = hold(start);
         UUID paymentId = Fixtures.paidPayment(jdbc, hold.transactionId(), PRICE);

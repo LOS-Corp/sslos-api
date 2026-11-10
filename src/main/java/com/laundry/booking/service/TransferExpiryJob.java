@@ -11,7 +11,6 @@ import com.laundry.refund.domain.RefundPolicy.RefundDecision;
 import com.laundry.refund.repository.PolicyViolationRepository;
 import com.laundry.refund.service.AutomaticRefundService;
 import com.laundry.shared.money.Money;
-import com.laundry.shared.scheduling.JobLock;
 import com.laundry.wallet.entity.WalletEntryType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -41,7 +40,6 @@ public class TransferExpiryJob {
     private static final int BATCH = 100;
 
     private final JdbcTemplate jdbc;
-    private final JobLock jobLock;
     private final PolicyViolationRepository violations;
     private final AutomaticRefundService refunds;
     private final ComboStageValues stageValues;
@@ -54,9 +52,6 @@ public class TransferExpiryJob {
     @Scheduled(fixedDelayString = "${app.booking.transfer-sweep-ms:60000}", initialDelay = 50_000)
     @Transactional
     public void sweep() {
-        if (!jobLock.tryLockForTransaction("booking-transfer-expiry")) {
-            return;
-        }
         Instant now = clock.instant();
         List<Expired> expired = expired(now);
         expired.forEach(booking -> close(booking, now));

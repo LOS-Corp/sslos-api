@@ -27,13 +27,28 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * Stages 1, 3, 5 and 6 of the machine onboarding flow: enrollment, pairing,
- * device authentication and per-device EMQX credential issuance. Also
- * handles unpairing / revocation.
+ * Machine onboarding: pairing (admin scans the setup QR on the board's screen),
+ * device authentication and per-device EMQX credential issuance. Also handles
+ * unpairing / revocation.
+ *
+ * <p>The board generates its own 6-digit code on first boot, so there is no
+ * workshop enrollment: the scan both identifies the board and proves the admin
+ * is standing in front of it. The board then polls {@link #challenge} until a
+ * pairing is open and proves it holds the same code in {@link #activate}.
+ *
+ * <p>Either order works:
+ * <ul>
+ *   <li>machine first: {@link #pair} with the scanned code (from "Thêm máy" or the
+ *       machine's Lắp đặt tab); the board activates and gets its MQTT identity;</li>
+ *   <li>device first: {@link #registerDevice} on the IoT page; the board proves the
+ *       code and becomes {@code VERIFIED}. Later {@link #pair} without a code attaches
+ *       it to a machine, and the board's next poll activates it.</li>
+ * </ul>
  */
 @Service
 @RequiredArgsConstructor
@@ -54,41 +69,6 @@ public class DeviceProvisioningService {
     private final IotProvisioningProperties properties;
     private final MachineWebSocketBroadcaster broadcaster;
 
-    // ── Stage 1: enrollment ─────────────────────────────────────────────────
-
-    /**
-     * Register an ESP32 (or re-enroll a REVOKED/LOCKED/UNCLAIMED one). Returns
-     * the claim secret and pairing code exactly once.
-     */
-    @Transactional
-    public EnrollDeviceResponse enroll(String deviceId) {
-        IotDevice device = deviceRepository.findByDeviceIdForUpdate(deviceId).orElse(null);
-        if (device == null) {
-            device = IotDevice.builder().deviceId(deviceId).status(IotDeviceStatus.UNCLAIMED).build();
-        } else {
-            if (device.getStatus() != IotDeviceStatus.UNCLAIMED
-                    && device.getStatus() != IotDeviceStatus.LOCKED
-                    && device.getStatus() != IotDeviceStatus.REVOKED) {
-                throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
-                        "Device " + deviceId + " is " + device.getStatus() + "; unpair it before re-enrolling");
-            }
-            device.setEnrollmentVersion(device.getEnrollmentVersion() + 1);
-            device.setStatus(IotDeviceStatus.UNCLAIMED);
-            device.setRevokedAt(null);
-        }
-        String pairingCode = secrets.newPairingCode();
-        device.setPairingCodeHash(secrets.sha256Hex(pairingCode));
-        device.setFailedPairingAttempts(0);
-        device.setChallengeNonce(null);
-        device = deviceRepository.save(device);
-
-        log.info("[IOT] Enrolled device {} (enrollment v{})", deviceId, device.getEnrollmentVersion());
-        return new EnrollDeviceResponse(deviceId,
-                secrets.claimSecret(deviceId, device.getEnrollmentVersion()),
-                pairingCode,
-                "laundryos://device?id=" + deviceId + "&code=" + pairingCode);
-    }
-
     @Transactional(readOnly = true)
     public List<DeviceSummary> listDevices() {
         Map<UUID, String> machineCodes = machineRepository.findAll().stream()
@@ -97,110 +77,169 @@ public class DeviceProvisioningService {
                 .map(d -> new DeviceSummary(d.getDeviceId(), d.getStatus(), d.getMachineId(),
                         d.getMachineId() == null ? null : machineCodes.get(d.getMachineId()),
                         d.getFirmwareVersion(), d.getEnrolledAt(), d.getActivatedAt(),
-                        d.getCommissionedAt(), d.getRevokedAt()))
+                        d.getCommissionedAt(), d.getRevokedAt(), d.getVerifiedAt()))
                 .toList();
     }
 
-    // ── Stage 3: pairing ────────────────────────────────────────────────────
+    // ── Device first: add the board on the IoT page ────────────────────────
 
     /**
-     * Admin scanned the device QR next to the machine. The pairing code on the
-     * label is the proof that the admin is in front of the physical board.
+     * Admin scanned (or typed) the board's code on the IoT page, before any machine
+     * exists for it. Opens a machine-less verification; the board's next poll
+     * proves the code and the device becomes {@code VERIFIED}.
      */
-    @Transactional(noRollbackFor = ProvisioningRejectedException.class)
+    @Transactional
+    public RegisterDeviceResponse registerDevice(StartPairingRequest request, UUID adminId) {
+        String setupKey = requireSetupKey(request.setupKey());
+        String deviceId = normalizeDeviceId(request.deviceId());
+        OffsetDateTime now = OffsetDateTime.now();
+        IotDevice device = findOrCreate(deviceId);
+        switch (device.getStatus()) {
+            case PROVISIONED, ACTIVE -> throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
+                    "Device is already bound to a machine; unpair it first");
+            case PAIRING -> {
+                if (openMachineSession(deviceId, now) != null) {
+                    throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
+                            "Device is being paired to a machine right now");
+                }
+            }
+            case UNCLAIMED, VERIFIED, REVOKED -> { }
+        }
+        cancelOpenSessions(sessionRepository.findByDeviceIdAndStatus(deviceId, PairingSession.Status.OPEN));
+        PairingSession session = sessionRepository.save(PairingSession.builder()
+                .machineId(null)
+                .deviceId(deviceId)
+                .status(PairingSession.Status.OPEN)
+                .createdBy(adminId)
+                .createdAt(now)
+                .expiresAt(now.plusSeconds(properties.getPairingTtlSeconds()))
+                .build());
+        openForProof(device, setupKey);
+        log.info("[IOT] Device-first verification {} opened for {}", session.getId(), deviceId);
+        return new RegisterDeviceResponse(session.getId(), deviceId, session.getExpiresAt());
+    }
+
+    // ── Pairing with a machine ──────────────────────────────────────────────
+
+    /** Admin scanned the board's code, or picked a VERIFIED board, for an existing machine. */
+    @Transactional
     public PairingResponse startPairing(String machineCode, StartPairingRequest request, UUID adminId) {
         Machine machine = machineRepository.findByMachineCode(machineCode)
                 .orElseThrow(() -> MachineNotFoundException.byCode(machineCode));
+        return pair(machine, request, adminId);
+    }
+
+    /**
+     * Open a pairing session between {@code machine} and a board. Joins the
+     * caller's transaction, so machine creation can create and pair in one step
+     * and roll back both on failure.
+     *
+     * <p>With a code: the code cannot be checked here (only the board knows it);
+     * a mistyped code surfaces as a failed proof in {@link #activate}. Without a
+     * code: only a {@code VERIFIED} board, whose code the backend already holds.
+     */
+    @Transactional
+    public PairingResponse pair(Machine machine, StartPairingRequest request, UUID adminId) {
         if (machine.getDeploymentStatus() != MachineDeploymentStatus.UNASSIGNED
                 && machine.getDeploymentStatus() != MachineDeploymentStatus.PAIRING) {
             throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
-                    "Machine " + machineCode + " is " + machine.getDeploymentStatus() + "; unpair it first");
+                    "Machine " + machine.getMachineCode() + " is " + machine.getDeploymentStatus() + "; unpair it first");
         }
-
-        IotDevice device = deviceRepository.findByDeviceIdForUpdate(request.deviceId())
-                .orElseThrow(() -> new ProvisioningRejectedException(HttpStatus.NOT_FOUND,
-                        "Device " + request.deviceId() + " is not enrolled"));
+        boolean codeGiven = request.setupKey() != null && !request.setupKey().isBlank();
+        String setupKey = codeGiven ? requireSetupKey(request.setupKey()) : null;
+        String deviceId = normalizeDeviceId(request.deviceId());
         OffsetDateTime now = OffsetDateTime.now();
+        IotDevice device = findOrCreate(deviceId);
 
         switch (device.getStatus()) {
-            case LOCKED, REVOKED -> throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
-                    "Device is " + device.getStatus() + "; re-enroll it at the workshop");
             case PROVISIONED, ACTIVE -> throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
-                    "Device is already bound to another machine");
+                    "Device is already bound to another machine; unpair it first");
             case PAIRING -> {
-                boolean busyElsewhere = sessionRepository
-                        .findFirstByDeviceIdAndStatusOrderByCreatedAtDesc(device.getDeviceId(), PairingSession.Status.OPEN)
-                        .filter(s -> s.isUsable(now) && !s.getMachineId().equals(machine.getId()))
-                        .isPresent();
-                if (busyElsewhere) {
+                PairingSession other = openMachineSession(deviceId, now);
+                if (other != null && !other.getMachineId().equals(machine.getId())) {
                     throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
                             "Device is being paired to another machine");
                 }
             }
-            case UNCLAIMED -> { }
+            case UNCLAIMED, VERIFIED, REVOKED -> { }
         }
-
-        if (!secrets.hashMatches(device.getPairingCodeHash(), request.pairingCode().trim().toUpperCase())) {
-            device.setFailedPairingAttempts(device.getFailedPairingAttempts() + 1);
-            if (device.getFailedPairingAttempts() >= properties.getMaxPairingAttempts()) {
-                device.setStatus(IotDeviceStatus.LOCKED);
-                device.setPairingCodeHash(null);
-                log.warn("[IOT] Device {} LOCKED after {} wrong pairing codes",
-                        device.getDeviceId(), device.getFailedPairingAttempts());
-            }
-            deviceRepository.save(device);
-            throw new ProvisioningRejectedException(HttpStatus.BAD_REQUEST, "Wrong pairing code");
+        if (!codeGiven && !isVerified(device)) {
+            throw new ProvisioningRejectedException(HttpStatus.BAD_REQUEST,
+                    "Enter the 6-digit code shown on the board, or add the board on the IoT page first");
         }
 
         cancelOpenSessions(sessionRepository.findByMachineIdAndStatus(machine.getId(), PairingSession.Status.OPEN));
-        cancelOpenSessions(sessionRepository.findByDeviceIdAndStatus(device.getDeviceId(), PairingSession.Status.OPEN));
+        cancelOpenSessions(sessionRepository.findByDeviceIdAndStatus(deviceId, PairingSession.Status.OPEN));
 
         PairingSession session = sessionRepository.save(PairingSession.builder()
                 .machineId(machine.getId())
-                .deviceId(device.getDeviceId())
+                .deviceId(deviceId)
                 .status(PairingSession.Status.OPEN)
                 .createdBy(adminId)
                 .createdAt(now)
                 .expiresAt(now.plusSeconds(properties.getPairingTtlSeconds()))
                 .build());
 
-        device.setStatus(IotDeviceStatus.PAIRING);
-        device.setFailedPairingAttempts(0);
-        deviceRepository.save(device);
+        if (codeGiven) {
+            openForProof(device, setupKey);
+        } else {
+            // VERIFIED board: reuse the code it already proved; it activates on its next poll.
+            device.setStatus(IotDeviceStatus.PAIRING);
+            device.setFailedPairingAttempts(0);
+            device.setChallengeNonce(null);
+            device.setChallengeExpiresAt(null);
+            deviceRepository.save(device);
+        }
 
         machine.setDeploymentStatus(MachineDeploymentStatus.PAIRING);
         machineRepository.save(machine);
         event(machine, DeviceEventType.DEVICE_PAIRING_STARTED,
-                "Pairing " + device.getDeviceId() + " by admin " + adminId);
+                "Pairing " + deviceId + (codeGiven ? "" : " (verified board)") + " by admin " + adminId);
         broadcaster.broadcastMachineUpdate(machine);
 
-        log.info("[IOT] Pairing session {} opened: {} ↔ {}", session.getId(), machineCode, device.getDeviceId());
-        return new PairingResponse(session.getId(), machineCode, device.getDeviceId(), session.getExpiresAt());
+        log.info("[IOT] Pairing session {} opened: {} <-> {}", session.getId(), machine.getMachineCode(), deviceId);
+        return new PairingResponse(session.getId(), machine.getMachineCode(), deviceId, session.getExpiresAt());
     }
 
-    // ── Stage 5: device authentication ──────────────────────────────────────
+    // ── Device authentication (the unprovisioned board polls this) ──────────
 
+    /**
+     * A nonce when a pairing is open; empty (HTTP 202) when the board is VERIFIED
+     * and waits to be attached to a machine, so it keeps its code and shows
+     * "CHO GAN MAY"; otherwise 409 (the board may rotate its code).
+     */
     @Transactional
-    public ChallengeResponse challenge(String deviceId) {
+    public Optional<ChallengeResponse> challenge(String deviceId) {
         IotDevice device = deviceRepository.findByDeviceIdForUpdate(deviceId).orElse(null);
         OffsetDateTime now = OffsetDateTime.now();
-        if (device == null || device.getStatus() != IotDeviceStatus.PAIRING || openSession(deviceId, now) == null) {
-            // Same answer for unknown and not-pairing devices: no enumeration.
-            throw new ProvisioningRejectedException(HttpStatus.CONFLICT, "No open pairing session for this device");
+        if (device != null && device.getStatus() == IotDeviceStatus.PAIRING && openSession(deviceId, now) != null) {
+            String nonce = secrets.newNonce();
+            device.setChallengeNonce(nonce);
+            device.setChallengeExpiresAt(now.plusSeconds(properties.getChallengeTtlSeconds()));
+            deviceRepository.save(device);
+            return Optional.of(new ChallengeResponse(nonce, properties.getChallengeTtlSeconds()));
         }
-        String nonce = secrets.newNonce();
-        device.setChallengeNonce(nonce);
-        device.setChallengeExpiresAt(now.plusSeconds(properties.getChallengeTtlSeconds()));
-        deviceRepository.save(device);
-        return new ChallengeResponse(nonce, properties.getChallengeTtlSeconds());
+        if (device != null && isVerified(device)
+                && (device.getStatus() == IotDeviceStatus.VERIFIED || device.getStatus() == IotDeviceStatus.PAIRING)) {
+            if (device.getStatus() == IotDeviceStatus.PAIRING) {
+                // The machine pairing expired before the board activated: it is still a verified board.
+                device.setStatus(IotDeviceStatus.VERIFIED);
+                deviceRepository.save(device);
+            }
+            return Optional.empty();
+        }
+        // Same answer for unknown and not-pairing devices: no enumeration.
+        throw new ProvisioningRejectedException(HttpStatus.CONFLICT, "No open pairing session for this device");
     }
 
     /**
-     * Verify the ESP32's HMAC proof, bind it to the machine and issue its own
-     * EMQX identity (stage 6). The nonce is single-use even when the proof fails.
+     * Verify the ESP32's HMAC proof. For a machine pairing: bind it to the machine
+     * and issue its own EMQX identity. For a device-first verification: mark it
+     * VERIFIED and return empty (HTTP 202, no credential yet). The nonce is
+     * single-use even when the proof fails.
      */
     @Transactional(noRollbackFor = ProvisioningRejectedException.class)
-    public ActivateResponse activate(ActivateRequest request) {
+    public Optional<ActivateResponse> activate(ActivateRequest request) {
         String deviceId = request.deviceId();
         IotDevice device = deviceRepository.findByDeviceIdForUpdate(deviceId)
                 .orElseThrow(() -> rejected("Activation refused"));
@@ -216,14 +255,31 @@ public class DeviceProvisioningService {
         if (device.getStatus() != IotDeviceStatus.PAIRING || !nonceValid) {
             throw rejected("Activation refused: no pairing in progress or nonce expired");
         }
-        if (!secrets.verifyProof(deviceId, device.getEnrollmentVersion(), request.nonce(), request.proof())) {
-            throw rejected("Activation refused: invalid proof - the claim secret on the device is not the one"
-                    + " from the latest enrollment; run 'claim <secret>' with the newest secret");
+        String setupKey = secrets.decryptSetupKey(device.getSetupKeyEnc());
+        if (!secrets.verifyProof(deviceId, setupKey, request.nonce(), request.proof())) {
+            recordFailedProof(device);
+            throw rejected("Activation refused: invalid proof - the code on the device is not the one"
+                    + " that was scanned; scan the code on the device screen again");
         }
         PairingSession session = openSession(deviceId, now);
         if (session == null) {
             throw rejected("Activation refused: pairing session expired");
         }
+
+        if (session.getMachineId() == null) {
+            // Device first: the board is real and holds the code; keep the code until it gets a machine.
+            device.setStatus(IotDeviceStatus.VERIFIED);
+            device.setVerifiedAt(now);
+            device.setFailedPairingAttempts(0);
+            device.setFirmwareVersion(request.firmwareVersion());
+            deviceRepository.save(device);
+            session.setStatus(PairingSession.Status.COMPLETED);
+            session.setCompletedAt(now);
+            sessionRepository.save(session);
+            log.info("[IOT] Device {} verified (fw {}), waiting for a machine", deviceId, request.firmwareVersion());
+            return Optional.empty();
+        }
+
         Machine machine = machineRepository.findById(session.getMachineId())
                 .orElseThrow(() -> rejected("Activation refused: machine no longer exists"));
         if (machine.getDeploymentStatus() != MachineDeploymentStatus.PAIRING
@@ -231,7 +287,7 @@ public class DeviceProvisioningService {
             throw rejected("Activation refused: machine is not waiting for this device");
         }
 
-        // Stage 6: per-device EMQX identity with least-privilege ACL.
+        // Per-device EMQX identity with least-privilege ACL.
         device.setCredentialVersion(device.getCredentialVersion() + 1);
         String username = deviceId;
         String password = secrets.mqttPassword(deviceId, device.getCredentialVersion());
@@ -243,7 +299,8 @@ public class DeviceProvisioningService {
         device.setMachineId(machine.getId());
         device.setMqttUsername(username);
         device.setActivatedAt(now);
-        device.setPairingCodeHash(null);   // the label's code is one-time
+        device.setSetupKeyEnc(null);       // the code is single-use
+        device.setFailedPairingAttempts(0);
         device.setFirmwareVersion(request.firmwareVersion());
         deviceRepository.save(device);
 
@@ -260,8 +317,8 @@ public class DeviceProvisioningService {
         broadcaster.broadcastMachineUpdate(machine);
 
         log.info("[IOT] Device {} activated for {}/{}", deviceId, machine.getBranchId(), machine.getMachineCode());
-        return new ActivateResponse(mqttHost(), mqttPort(), username, password, deviceId,
-                machine.getBranchId(), machine.getMachineCode(), topicBase, machine.getType().name());
+        return Optional.of(new ActivateResponse(mqttHost(), mqttPort(), username, password, deviceId,
+                machine.getBranchId(), machine.getMachineCode(), topicBase, machine.getType().name()));
     }
 
     /** MANUAL mode: the credential the admin must create in the EMQX console. */
@@ -306,10 +363,19 @@ public class DeviceProvisioningService {
         if (machine.getDeviceId() != null) {
             deviceRepository.findByDeviceIdForUpdate(machine.getDeviceId()).ifPresent(this::revokeDevice);
         } else {
-            // Still PAIRING: release the scanned device so it can be paired elsewhere.
+            // Still PAIRING: release the device so it can be paired elsewhere. A board
+            // verified on the IoT page stays VERIFIED and can be picked again.
             open.forEach(s -> deviceRepository.findByDeviceIdForUpdate(s.getDeviceId())
                     .filter(d -> d.getStatus() == IotDeviceStatus.PAIRING)
-                    .ifPresent(d -> { d.setStatus(IotDeviceStatus.UNCLAIMED); deviceRepository.save(d); }));
+                    .ifPresent(d -> {
+                        if (isVerified(d)) {
+                            d.setStatus(IotDeviceStatus.VERIFIED);
+                        } else {
+                            d.setStatus(IotDeviceStatus.UNCLAIMED);
+                            d.setSetupKeyEnc(null);
+                        }
+                        deviceRepository.save(d);
+                    }));
         }
 
         String previousDevice = machine.getDeviceId();
@@ -338,7 +404,7 @@ public class DeviceProvisioningService {
         List<PairingSession> open = sessionRepository.findByDeviceIdAndStatus(deviceId, PairingSession.Status.OPEN);
         cancelOpenSessions(open);
         // A machine waiting on this device must not stay stuck in PAIRING.
-        open.forEach(s -> machineRepository.findById(s.getMachineId())
+        open.stream().filter(s -> s.getMachineId() != null).forEach(s -> machineRepository.findById(s.getMachineId())
                 .filter(m -> m.getDeploymentStatus() == MachineDeploymentStatus.PAIRING && m.getDeviceId() == null)
                 .ifPresent(m -> {
                     m.setDeploymentStatus(MachineDeploymentStatus.UNASSIGNED);
@@ -355,13 +421,82 @@ public class DeviceProvisioningService {
         device.setStatus(IotDeviceStatus.REVOKED);
         device.setMachineId(null);
         device.setMqttUsername(null);
-        device.setPairingCodeHash(null);
+        device.setSetupKeyEnc(null);
+        device.setVerifiedAt(null);
         device.setChallengeNonce(null);
         device.setRevokedAt(OffsetDateTime.now());
         deviceRepository.save(device);
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────────
+
+    /**
+     * A wrong proof means the scanned key is not the board's (mistyped, or a
+     * spoofed deviceId). After {@code maxPairingAttempts} the pairing is
+     * aborted and the admin must scan the board again.
+     */
+    private void recordFailedProof(IotDevice device) {
+        device.setFailedPairingAttempts(device.getFailedPairingAttempts() + 1);
+        if (device.getFailedPairingAttempts() >= properties.getMaxPairingAttempts()) {
+            List<PairingSession> open = sessionRepository.findByDeviceIdAndStatus(
+                    device.getDeviceId(), PairingSession.Status.OPEN);
+            cancelOpenSessions(open);
+            open.stream().filter(s -> s.getMachineId() != null).forEach(s -> machineRepository.findById(s.getMachineId())
+                    .filter(m -> m.getDeploymentStatus() == MachineDeploymentStatus.PAIRING && m.getDeviceId() == null)
+                    .ifPresent(m -> {
+                        m.setDeploymentStatus(MachineDeploymentStatus.UNASSIGNED);
+                        machineRepository.save(m);
+                        broadcaster.broadcastMachineUpdate(m);
+                    }));
+            device.setStatus(IotDeviceStatus.UNCLAIMED);
+            device.setSetupKeyEnc(null);
+            device.setVerifiedAt(null);
+            log.warn("[IOT] Pairing of {} aborted after {} wrong proofs",
+                    device.getDeviceId(), device.getFailedPairingAttempts());
+        }
+        deviceRepository.save(device);
+    }
+
+    private String requireSetupKey(String raw) {
+        String setupKey = DeviceSecretService.normalizeSetupKey(raw);
+        if (!secrets.isValidSetupKey(setupKey)) {
+            throw new ProvisioningRejectedException(HttpStatus.BAD_REQUEST,
+                    "Pairing code must be the 6 digits shown on the device screen");
+        }
+        return setupKey;
+    }
+
+    private static String normalizeDeviceId(String raw) {
+        return raw.trim().toUpperCase();
+    }
+
+    /** The first scan of a board creates its row; there is no separate enrollment. */
+    private IotDevice findOrCreate(String deviceId) {
+        return deviceRepository.findByDeviceIdForUpdate(deviceId)
+                .orElseGet(() -> IotDevice.builder().deviceId(deviceId).status(IotDeviceStatus.UNCLAIMED).build());
+    }
+
+    /** Proved its code on the IoT page and still holds it: can be attached to a machine without a new scan. */
+    private static boolean isVerified(IotDevice device) {
+        return device.getVerifiedAt() != null && device.getSetupKeyEnc() != null && device.getMachineId() == null;
+    }
+
+    /** Store a freshly scanned code and wait for the board's proof. */
+    private void openForProof(IotDevice device, String setupKey) {
+        device.setStatus(IotDeviceStatus.PAIRING);
+        device.setSetupKeyEnc(secrets.encryptSetupKey(setupKey));
+        device.setVerifiedAt(null);
+        device.setFailedPairingAttempts(0);
+        device.setChallengeNonce(null);
+        device.setChallengeExpiresAt(null);
+        device.setRevokedAt(null);
+        deviceRepository.save(device);
+    }
+
+    private PairingSession openMachineSession(String deviceId, OffsetDateTime now) {
+        PairingSession session = openSession(deviceId, now);
+        return session != null && session.getMachineId() != null ? session : null;
+    }
 
     private PairingSession openSession(String deviceId, OffsetDateTime now) {
         return sessionRepository

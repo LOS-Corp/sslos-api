@@ -58,9 +58,10 @@ public class MachineAdminController {
     private String qrBaseUrl;
 
     @PostMapping
-    @Operation(summary = "Create a new machine")
-    public ResponseEntity<MachineDto> createMachine(@Valid @RequestBody CreateMachineRequest request) {
-        MachineDto created = machineCatalogService.createMachine(request);
+    @Operation(summary = "Create a new machine; with `device` (the scanned setup QR) it is paired in the same step")
+    public ResponseEntity<MachineDto> createMachine(@Valid @RequestBody CreateMachineRequest request,
+                                                    Authentication authentication) {
+        MachineDto created = machineCatalogService.createMachine(request, userId(authentication));
         return ResponseEntity.status(201).body(created);
     }
 

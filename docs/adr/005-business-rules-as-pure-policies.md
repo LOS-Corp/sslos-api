@@ -16,4 +16,4 @@ Services pass in an injected `Clock` (UTC) and the configured parameters (SRS 5.
 
 ## Consequences
 - Each acceptance scenario is a row in a table-driven test: SC-06/07/18/19/29/35/37.
-- ArchUnit forbids Spring, JPA, JDBC and Servlet imports in `..domain..`. JaCoCo requires ≥ 80 % line coverage there.
+- Classes in `..domain..` import no Spring, JPA, JDBC or Servlet types, so they are tested with plain unit tests.

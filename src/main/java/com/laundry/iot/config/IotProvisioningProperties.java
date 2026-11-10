@@ -15,9 +15,9 @@ import org.springframework.stereotype.Component;
 public class IotProvisioningProperties {
 
     /**
-     * Server-side master key (≥ 32 chars). Per-device claim secrets and MQTT
-     * passwords are HMAC-derived from it, so nothing secret is stored per row.
-     * Rotating it invalidates every enrolled device.
+     * Server-side master key (≥ 32 chars). Per-device MQTT passwords are
+     * HMAC-derived from it and setup keys of open pairings are encrypted with
+     * it. Rotating it invalidates every issued MQTT password.
      */
     private String deviceSecretKey = "";
 
@@ -27,7 +27,7 @@ public class IotProvisioningProperties {
     /** Lifetime of an activation challenge nonce. */
     private int challengeTtlSeconds = 60;
 
-    /** Wrong pairing codes tolerated before the device is LOCKED. */
+    /** Wrong activation proofs tolerated before the pairing is aborted and must be re-scanned. */
     private int maxPairingAttempts = 5;
 
     /** How long the device waits for the technician to press START during SELF_TEST. */

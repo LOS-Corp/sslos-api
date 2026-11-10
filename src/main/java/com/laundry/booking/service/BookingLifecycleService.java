@@ -1,6 +1,5 @@
 package com.laundry.booking.service;
 
-import com.laundry.shared.scheduling.JobLock;
 import com.laundry.shared.EmailService;
 import com.laundry.shared.LaundryCompletedEmail;
 import lombok.RequiredArgsConstructor;
@@ -42,7 +41,6 @@ public class BookingLifecycleService {
             "('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'TRANSFER_PENDING', 'READY_FOR_PICKUP')";
 
     private final JdbcTemplate jdbc;
-    private final JobLock jobLock;
     private final EmailService emailService;
     private final org.springframework.transaction.PlatformTransactionManager transactionManager;
     private final com.laundry.config.BookingProperties props;
@@ -120,9 +118,6 @@ public class BookingLifecycleService {
     @Scheduled(fixedDelayString = "${app.booking.completion-sweep-ms:60000}", initialDelay = 30_000)
     @Transactional
     public void sweepFinishedReservations() {
-        if (!jobLock.tryLockForTransaction("booking-completion-sweep")) {
-            return;
-        }
         Timestamp cutoff = Timestamp.from(Instant.now().minus(Duration.ofMinutes(props.completionGraceMinutes())));
         List<UUID> bookings = jdbc.query("""
                 UPDATE booking_resource_allocations a SET cycle_state = 'DONE'

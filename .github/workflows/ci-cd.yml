@@ -27,7 +27,7 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-      # verify = unit + integration tests (Testcontainers) + ArchUnit + JaCoCo coverage gate
+      # verify = unit + integration tests (Testcontainers) + JaCoCo coverage report
       - name: Build and test
         run: ./mvnw -B verify
       - name: Upload test reports

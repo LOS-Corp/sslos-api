@@ -17,38 +17,39 @@ public final class ProvisioningDtos {
 
     public static final String DEVICE_ID_REGEX = "^ESP-[0-9A-F]{12}$";
 
-    // ── Stage 1: enrollment (admin, workshop) ──────────────────────────────
-
-    public record EnrollDeviceRequest(
-            @NotBlank @Pattern(regexp = DEVICE_ID_REGEX, message = "deviceId must look like ESP-24A1B2C3D4E5")
-            String deviceId) {}
-
-    /**
-     * Returned once. {@code claimSecret} is written to the ESP32 over USB
-     * ({@code claim <hex>}); {@code qrPayload} goes on the physical label.
-     */
-    public record EnrollDeviceResponse(String deviceId, String claimSecret,
-                                       String pairingCode, String qrPayload) {}
+    /** 6-digit pairing code shown on the board (QR + digits). A space or dash between the groups is allowed. */
+    public static final String SETUP_KEY_REGEX = "^[0-9 -]{6,9}$";
 
     public record DeviceSummary(String deviceId, IotDeviceStatus status, UUID machineId, String machineCode,
                                 String firmwareVersion, OffsetDateTime enrolledAt,
                                 OffsetDateTime activatedAt, OffsetDateTime commissionedAt,
-                                OffsetDateTime revokedAt) {}
+                                OffsetDateTime revokedAt, OffsetDateTime verifiedAt) {}
 
     /** What the admin console needs to adapt its UI to the backend configuration. */
     public record ProvisioningSettings(String emqxProvisioningMode, int pairingTtlSeconds,
                                        int selfTestButtonTimeoutSeconds) {}
 
-    // ── Stage 3: pairing (admin scans QR at the machine) ──────────────────
+    // ── Pairing (admin scans the setup QR on the board's screen) ──────────
 
+    /**
+     * Content of the setup QR: {@code LOS:<deviceId>:<setupKey>}. Also nested in
+     * {@code CreateMachineRequest.device} so a machine can be created and paired
+     * in one step. {@code setupKey} may be omitted only for a VERIFIED device
+     * (added earlier on the IoT page), whose code the backend already holds.
+     */
     public record StartPairingRequest(
-            @NotBlank @Pattern(regexp = DEVICE_ID_REGEX) String deviceId,
-            @NotBlank String pairingCode) {}
+            @NotBlank @Pattern(regexp = DEVICE_ID_REGEX, message = "deviceId must look like ESP-24A1B2C3D4E5")
+            String deviceId,
+            @Pattern(regexp = SETUP_KEY_REGEX, message = "setupKey must be the 6-digit code on the device screen")
+            String setupKey) {}
+
+    /** Device-first: the board's code was scanned on the IoT page; verification is open until {@code expiresAt}. */
+    public record RegisterDeviceResponse(UUID sessionId, String deviceId, OffsetDateTime expiresAt) {}
 
     public record PairingResponse(UUID sessionId, String machineCode, String deviceId,
                                   OffsetDateTime expiresAt) {}
 
-    // ── Stage 5–6: activation (ESP32 → backend over HTTPS) ────────────────
+    // ── Activation (ESP32 → backend; the board polls while unprovisioned) ─
 
     public record ChallengeRequest(@NotBlank @Pattern(regexp = DEVICE_ID_REGEX) String deviceId) {}
 
@@ -57,7 +58,7 @@ public final class ProvisioningDtos {
     public record ActivateRequest(
             @NotBlank @Pattern(regexp = DEVICE_ID_REGEX) String deviceId,
             @NotBlank String nonce,
-            /** hex(HMAC-SHA256(claimSecret, deviceId + ":" + nonce)) */
+            /** hex(HMAC-SHA256(setupKey, deviceId + ":" + nonce)) */
             @NotBlank String proof,
             String firmwareVersion) {}
 

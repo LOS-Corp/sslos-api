@@ -9,10 +9,10 @@ import java.util.UUID;
 /**
  * A physical ESP32 controller and its provisioning state.
  *
- * <p>No secret is stored here in plain text: the claim secret and the MQTT
- * password are derived on demand from the server-side device key
- * (see {@code DeviceSecretService}), and the pairing code is kept as a
- * SHA-256 hash.
+ * <p>No secret is stored here in plain text: the MQTT password is derived on
+ * demand from the server-side device key (see {@code DeviceSecretService}),
+ * and the setup key scanned from the device screen is kept AES-GCM encrypted
+ * only while a pairing session is open.
  */
 @Entity
 @Table(name = "iot_devices")
@@ -36,19 +36,16 @@ public class IotDevice {
     @Column(nullable = false, length = 20)
     private IotDeviceStatus status;
 
-    /** Bumped on every (re-)enrollment so the claim secret rotates. */
-    @Column(name = "enrollment_version", nullable = false)
-    @Builder.Default
-    private int enrollmentVersion = 1;
-
     /** Bumped on every credential issuance so the MQTT password rotates. */
     @Column(name = "credential_version", nullable = false)
     @Builder.Default
     private int credentialVersion = 0;
 
-    @Column(name = "pairing_code_hash", length = 64)
-    private String pairingCodeHash;
+    /** Setup key from the scanned device QR, encrypted; wiped once the device activates. */
+    @Column(name = "setup_key_enc", columnDefinition = "TEXT")
+    private String setupKeyEnc;
 
+    /** Wrong activation proofs in the current pairing; the key is wiped at the limit. */
     @Column(name = "failed_pairing_attempts", nullable = false)
     @Builder.Default
     private int failedPairingAttempts = 0;
@@ -80,8 +77,13 @@ public class IotDevice {
     @Column(name = "last_self_test_detail", columnDefinition = "TEXT")
     private String lastSelfTestDetail;
 
+    /** First time an admin scanned this board. */
     @Column(name = "enrolled_at", nullable = false)
     private OffsetDateTime enrolledAt;
+
+    /** Board proved it holds the scanned code (device added before its machine). */
+    @Column(name = "verified_at")
+    private OffsetDateTime verifiedAt;
 
     @Column(name = "activated_at")
     private OffsetDateTime activatedAt;

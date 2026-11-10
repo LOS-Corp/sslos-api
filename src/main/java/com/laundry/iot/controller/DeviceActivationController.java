@@ -6,6 +6,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -22,14 +23,18 @@ public class DeviceActivationController {
     private final DeviceProvisioningService provisioningService;
 
     @PostMapping("/challenge")
-    @Operation(summary = "Get a single-use nonce (only while a pairing session is open)")
-    public ChallengeResponse challenge(@Valid @RequestBody ChallengeRequest request) {
-        return provisioningService.challenge(request.deviceId());
+    @Operation(summary = "Single-use nonce while a pairing is open; 202 when the board is verified and waits for a machine")
+    public ResponseEntity<ChallengeResponse> challenge(@Valid @RequestBody ChallengeRequest request) {
+        return provisioningService.challenge(request.deviceId())
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.accepted().build());
     }
 
     @PostMapping
-    @Operation(summary = "Prove possession of the claim secret and receive per-device MQTT credentials")
-    public ActivateResponse activate(@Valid @RequestBody ActivateRequest request) {
-        return provisioningService.activate(request);
+    @Operation(summary = "Prove the pairing code: MQTT credentials when paired to a machine, 202 when only verified (device added first)")
+    public ResponseEntity<ActivateResponse> activate(@Valid @RequestBody ActivateRequest request) {
+        return provisioningService.activate(request)
+                .map(ResponseEntity::ok)
+                .orElseGet(() -> ResponseEntity.accepted().build());
     }
 }

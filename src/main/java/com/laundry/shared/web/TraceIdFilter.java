@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
 
 /**
  * Gives every request a trace id (MDC {@code traceId}, response header {@code X-Trace-Id}) so a
- * customer-reported error can be matched to its log lines (ADR-12).
+ * customer-reported error can be matched to its log lines.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)

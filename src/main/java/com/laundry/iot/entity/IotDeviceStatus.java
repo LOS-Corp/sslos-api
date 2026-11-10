@@ -4,21 +4,25 @@ package com.laundry.iot.entity;
  * Lifecycle of a physical ESP32 controller.
  *
  * <pre>
- * UNCLAIMED → PAIRING → PROVISIONED → ACTIVE
- *      ↘ LOCKED (too many wrong pairing codes)      any → REVOKED
+ * PAIRING ──(machine session)──────────────→ PROVISIONED → ACTIVE
+ * PAIRING ──(device-first)──→ VERIFIED ──(attach to machine)──→ PAIRING
+ * any → REVOKED → (re-scan) PAIRING
  * </pre>
+ *
+ * <p>A device row is created the first time an admin scans the setup QR on the
+ * board's screen, so there is no separate workshop enrollment.
  */
 public enum IotDeviceStatus {
-    /** Enrolled at the workshop; not bound to any machine. */
+    /** Pairing ended without activation (expired, cancelled or too many wrong proofs). */
     UNCLAIMED,
-    /** An admin opened a pairing session for this device. */
+    /** An admin scanned the board's setup QR; waiting for the board to prove it holds the key. */
     PAIRING,
+    /** Added before its machine: the board proved its code; waiting to be attached to a machine. */
+    VERIFIED,
     /** Device authenticated and holds its own EMQX credentials. */
     PROVISIONED,
     /** The machine it controls has been commissioned. */
     ACTIVE,
-    /** Pairing locked after repeated wrong pairing codes; re-enroll to unlock. */
-    LOCKED,
-    /** Identity withdrawn; EMQX credentials deleted. Re-enroll to reuse the board. */
+    /** Identity withdrawn; EMQX credentials deleted. Reset the board and scan its new QR to reuse it. */
     REVOKED
 }

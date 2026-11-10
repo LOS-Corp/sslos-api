@@ -27,7 +27,8 @@ public class PairingSession {
     @Column(nullable = false, updatable = false)
     private UUID id;
 
-    @Column(name = "machine_id", nullable = false)
+    /** Null for a device-first verification (the board is added before its machine). */
+    @Column(name = "machine_id")
     private UUID machineId;
 
     @Column(name = "device_id", nullable = false, length = 64)

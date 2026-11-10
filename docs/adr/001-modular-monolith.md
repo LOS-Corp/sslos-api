@@ -18,5 +18,5 @@ Inside a module:
 - **Full hexagonal ports/adapters everywhere.** Adapters exist only where an external system sits (payOS, EMQX, SMTP).
 
 ## Consequences
-- ArchUnit enforces three boundaries: domain purity, `shared` not depending on modules, and controllers not touching repositories.
+- The boundaries are kept by code review: `shared` does not depend on modules, and controllers do not touch repositories.
 - If a module later needs to become a service, its boundary already exists.

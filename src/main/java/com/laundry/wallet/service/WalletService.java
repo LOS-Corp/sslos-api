@@ -69,11 +69,6 @@ public class WalletService {
         return wallets.findOutOfBalanceWalletIds();
     }
 
-    /** NFR-17: customers whose ledger disagrees with their refund rows or wallet payments (should be empty). */
-    @Transactional(readOnly = true)
-    public List<UUID> unreconciledCustomers() {
-        return wallets.findUnreconciledCustomerIds();
-    }
 
     private void post(UUID customerId, Money amount, WalletEntryType type, String reference, String description) {
         OffsetDateTime now = OffsetDateTime.now(clock);

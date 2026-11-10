@@ -10,7 +10,6 @@ import com.laundry.refund.domain.RefundPolicy.CancellationCause;
 import com.laundry.refund.domain.RefundPolicy.RefundDecision;
 import com.laundry.refund.repository.PolicyViolationRepository;
 import com.laundry.refund.service.AutomaticRefundService;
-import com.laundry.shared.scheduling.JobLock;
 import com.laundry.wallet.entity.WalletEntryType;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -45,7 +44,6 @@ public class NoShowJob {
     private static final int BATCH = 100;
 
     private final JdbcTemplate jdbc;
-    private final JobLock jobLock;
     private final CheckInWindowPolicy checkInWindow;
     private final PolicyViolationRepository violations;
     private final AutomaticRefundService refunds;
@@ -57,9 +55,6 @@ public class NoShowJob {
     @Scheduled(fixedDelayString = "${app.booking.no-show-sweep-ms:60000}", initialDelay = 45_000)
     @Transactional
     public void sweep() {
-        if (!jobLock.tryLockForTransaction("booking-no-show")) {
-            return;
-        }
         Instant now = clock.instant();
         int marked = 0;
         for (Candidate candidate : candidates(now)) {

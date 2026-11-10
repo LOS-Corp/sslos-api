@@ -1,6 +1,8 @@
 package com.laundry.machine.dto;
 
+import com.laundry.iot.dto.ProvisioningDtos.StartPairingRequest;
 import com.laundry.machine.entity.MachineType;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -26,6 +28,8 @@ import java.util.UUID;
  *   <li>{@code branchId}: required UUID — MQTT topics are scoped per branch.</li>
  *   <li>{@code displayName}: optional, max 100 chars.</li>
  *   <li>{@code locationDescription}: optional, max 200 chars.</li>
+ *   <li>{@code device}: optional. The content of the setup QR on the ESP32 screen;
+ *       when present the machine is created and paired in one transaction.</li>
  * </ul>
  */
 @Data
@@ -57,4 +61,7 @@ public class CreateMachineRequest {
     @jakarta.validation.constraints.DecimalMin(value = "0.1", message = "capacityKg must be greater than 0")
     @jakarta.validation.constraints.DecimalMax(value = "9999.9", message = "capacityKg is too large")
     private java.math.BigDecimal capacityKg;
+
+    @Valid
+    private StartPairingRequest device;
 }
