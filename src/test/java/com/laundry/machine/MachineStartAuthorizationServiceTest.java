@@ -63,7 +63,6 @@ class MachineStartAuthorizationServiceTest {
     private BookingLifecycleService lifecycle;
 
     @Autowired
-    private com.laundry.branch.repository.BranchRepository branchRepository;
     @PersistenceContext
     private EntityManager entityManager;
 
@@ -76,7 +75,6 @@ class MachineStartAuthorizationServiceTest {
 
     private Machine machine;
     private UUID customerId;
-    private UUID branchId;
 
     @BeforeEach
     void setUp() {
@@ -89,12 +87,8 @@ class MachineStartAuthorizationServiceTest {
         machineRepository.deleteAll();
 
         customerId = UUID.randomUUID();
-        branchId = branchRepository.save(com.laundry.branch.entity.Branch.builder()
-                .name("Test branch " + UUID.randomUUID())
-                .build()).getId();
         machine = Machine.builder()
                 .machineCode("WM001")
-                .branchId(branchId)
                 .type(MachineType.WASHER)
                 .status(MachineStatus.AVAILABLE)
                 .deploymentStatus(MachineDeploymentStatus.ACTIVE)
@@ -147,7 +141,6 @@ class MachineStartAuthorizationServiceTest {
         // Create a second machine + a CONFIRMED reservation targeting it.
         UUID otherMachineId = machineRepository.save(Machine.builder()
                 .machineCode("WM002")
-                .branchId(branchId)
                 .type(MachineType.WASHER)
                 .status(MachineStatus.AVAILABLE)
                 .deploymentStatus(MachineDeploymentStatus.ACTIVE)
@@ -722,10 +715,10 @@ class MachineStartAuthorizationServiceTest {
         Instant end = Instant.now().plus(endMinutes, ChronoUnit.MINUTES);
         UUID bookingId = UUID.randomUUID();
         jdbc.update("""
-                INSERT INTO scheduled_bookings (id, transaction_id, branch_id, service_code, status, start_time,
+                INSERT INTO scheduled_bookings (id, transaction_id, service_code, status, start_time,
                                                 expected_end_time, hold_expires_at, timeline)
-                VALUES (?, ?, ?, 'WASH_ONLY', ?, ?, ?, ?, '[]'::jsonb)
-                """, bookingId, tx.getId(), branchId, bookingStatus, utc(start), utc(end), utc(start));
+                VALUES (?, ?, 'WASH_ONLY', ?, ?, ?, ?, '[]'::jsonb)
+                """, bookingId, tx.getId(), bookingStatus, utc(start), utc(end), utc(start));
         UUID allocationId = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO booking_resource_allocations

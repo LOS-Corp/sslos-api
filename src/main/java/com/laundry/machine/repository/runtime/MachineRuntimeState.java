@@ -29,11 +29,9 @@ import java.util.UUID;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class MachineRuntimeState implements Serializable {
 
-    /** Logical key: matches {@code machines.id}. UUID, not branchId+machineCode. */
+    /** Logical key: matches {@code machines.id}. UUID, not the machine code. */
     private UUID machineId;
 
-    /** Denormalized for cheap broadcasting/lookup. */
-    private UUID branchId;
     private String machineCode;
 
     // ── Connectivity & device health ────────────────────────────────────────

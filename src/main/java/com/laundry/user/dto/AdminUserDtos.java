@@ -8,7 +8,7 @@ import jakarta.validation.constraints.Size;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
-/** Operator accounts: Admin manages Admin/Owner accounts, the Owner manages Staff (single store, no branch assignment). */
+/** Operator accounts: Admin manages Admin/Owner accounts, the Owner manages Staff. */
 public final class AdminUserDtos {
     private AdminUserDtos() {}
 

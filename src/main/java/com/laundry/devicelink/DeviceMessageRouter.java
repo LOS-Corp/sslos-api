@@ -22,24 +22,24 @@ public class DeviceMessageRouter {
     private final AuthChannelHandler authHandler;
 
     @Async(DeviceLinkConfig.DEVICE_EXECUTOR)
-    public void route(UUID branchId, String machineCode, DeviceChannel channel, String payload) {
+    public void route(String machineCode, DeviceChannel channel, String payload) {
         if (channel == DeviceChannel.TELEMETRY || channel == DeviceChannel.HEARTBEAT) {
-            log.debug("DEVICE RX branch={} machine={} channel={}", branchId, machineCode, channel);
+            log.debug("DEVICE RX machine={} channel={}", machineCode, channel);
         } else {
-            log.info("DEVICE RX branch={} machine={} channel={}", branchId, machineCode, channel);
+            log.info("DEVICE RX machine={} channel={}", machineCode, channel);
         }
         try {
             switch (channel) {
-                case STATUS -> washerHandler.handleStatus(branchId, machineCode, payload);
-                case TELEMETRY -> washerHandler.handleTelemetry(branchId, machineCode, payload);
-                case HEARTBEAT -> washerHandler.handleHeartbeat(branchId, machineCode, payload);
-                case EVENT -> washerHandler.handleEvent(branchId, machineCode, payload);
-                case COMMAND_ACK -> washerHandler.handleCommandAck(branchId, machineCode, payload);
-                case AUTH -> authHandler.handle(branchId, machineCode, payload);
+                case STATUS -> washerHandler.handleStatus(machineCode, payload);
+                case TELEMETRY -> washerHandler.handleTelemetry(machineCode, payload);
+                case HEARTBEAT -> washerHandler.handleHeartbeat(machineCode, payload);
+                case EVENT -> washerHandler.handleEvent(machineCode, payload);
+                case COMMAND_ACK -> washerHandler.handleCommandAck(machineCode, payload);
+                case AUTH -> authHandler.handle(machineCode, payload);
             }
         } catch (RuntimeException e) {
-            log.error("Failed to handle device frame branch={} machine={} channel={}",
-                    branchId, machineCode, channel, e);
+            log.error("Failed to handle device frame machine={} channel={}",
+                    machineCode, channel, e);
         }
     }
 }

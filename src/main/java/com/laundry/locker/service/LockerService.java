@@ -4,7 +4,6 @@ import com.laundry.shared.error.ErrorCode;
 
 import com.laundry.shared.error.BusinessException;
 import com.laundry.shared.security.CurrentUser;
-import com.laundry.user.service.BranchScopeService;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -60,7 +59,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   --pickup PIN, door opened+closed--> COMPLETED
  * </pre>
  *
- * Device protocol, on the cabinet's {@code laundry/washer/{branchId}/{machineCode}} topics:
+ * Device protocol, on the cabinet's USB serial link:
  * <ul>
  *   <li>auth ← {@code PIN_ENTERED {requestId, compartment, pin}}: the customer picked a
  *       compartment (A = 1, B = 2) and typed its PIN. A PIN only opens the compartment of
@@ -90,7 +89,6 @@ public class LockerService {
     private final DeviceEventRepository deviceEventRepository;
     private final DeviceLink deviceLink;
     private final BookingLifecycleService lifecycleService;
-    private final BranchScopeService branchScope;
     private final BookingProperties bookingProps;
     private final AuditService audit;
     private final SecureRandom random = new SecureRandom();
@@ -159,7 +157,7 @@ public class LockerService {
                 SELECT a.id, a.booking_id, a.resource_id, a.purpose, a.pin, a.status, a.valid_from,
                        a.valid_until, a.opened_at, r.compartment_no, b.status AS booking_status, b.transaction_id
                 FROM locker_accesses a
-                JOIN branch_service_resources r ON r.id = a.resource_id
+                JOIN service_resources r ON r.id = a.resource_id
                 JOIN scheduled_bookings b ON b.id = a.booking_id
                 WHERE a.machine_id = ? AND r.compartment_no = ? AND a.pin = ?
                   AND a.status IN ('ACTIVE', 'OPENING')
@@ -261,16 +259,10 @@ public class LockerService {
     // ── Staff ─────────────────────────────────────────────────────────────
 
     @Transactional(readOnly = true)
-    /** Cabinets the viewer may see: Owner every branch, Staff only assigned branches (BR-01). */
-    public List<LockerCabinetDto> cabinets(UUID branchId, CurrentUser viewer) {
-        if (branchId != null) {
-            branchScope.require(viewer, branchId);
-        }
-        java.util.Optional<java.util.Set<UUID>> visible = branchScope.visibleBranches(viewer);
-        return cabinetDtos((branchId == null ? machineRepository.findAll() : machineRepository.findByBranchId(branchId))
-                .stream()
+    /** Every locker cabinet of the store (operators only, checked by the controller). */
+    public List<LockerCabinetDto> cabinets(CurrentUser viewer) {
+        return cabinetDtos(machineRepository.findAll().stream()
                 .filter(m -> m.getType() == MachineType.LOCKER)
-                .filter(m -> visible.isEmpty() || visible.get().contains(m.getBranchId()))
                 .toList());
     }
 
@@ -282,7 +274,7 @@ public class LockerService {
                     SELECT r.id, r.resource_code, r.display_name, r.compartment_no,
                            b.id AS booking_id, b.status AS booking_status, b.start_time,
                            u.full_name, u.phone
-                    FROM branch_service_resources r
+                    FROM service_resources r
                     LEFT JOIN LATERAL (
                         SELECT sb.* FROM booking_resource_allocations a
                         JOIN scheduled_bookings sb ON sb.id = a.booking_id
@@ -309,7 +301,7 @@ public class LockerService {
                         state == null ? null : state.doorGpio(), booking);
             }, cabinet.getId());
             result.add(new LockerCabinetDto(cabinet.getId(), cabinet.getMachineCode(), displayName(cabinet),
-                    cabinet.getBranchId(), cabinet.isOnline(), cabinet.isCommissioned(),
+                    cabinet.isOnline(), cabinet.isCommissioned(),
                     cabinet.getStatus().name(), compartments));
         }
         return result;
@@ -321,17 +313,17 @@ public class LockerService {
         Machine cabinet = cabinet(machineId);
         for (int no = 1; no <= count; no++) {
             Integer exists = jdbc.queryForObject("""
-                    SELECT COUNT(*) FROM branch_service_resources WHERE locker_machine_id = ? AND compartment_no = ?
+                    SELECT COUNT(*) FROM service_resources WHERE locker_machine_id = ? AND compartment_no = ?
                     """, Integer.class, machineId, no);
             if (exists != null && exists > 0) continue;
             String code = cabinet.getMachineCode() + "-" + no;
             jdbc.update("""
-                    INSERT INTO branch_service_resources
-                      (id, branch_id, resource_type, resource_code, display_name, enabled, locker_machine_id, compartment_no)
-                    VALUES (?, ?, 'LOCKER', ?, ?, TRUE, ?, ?)
-                    ON CONFLICT (branch_id, resource_code) DO UPDATE
+                    INSERT INTO service_resources
+                      (id, resource_type, resource_code, display_name, enabled, locker_machine_id, compartment_no)
+                    VALUES (?, 'LOCKER', ?, ?, TRUE, ?, ?)
+                    ON CONFLICT (resource_code) DO UPDATE
                       SET locker_machine_id = EXCLUDED.locker_machine_id, compartment_no = EXCLUDED.compartment_no
-                    """, UUID.randomUUID(), cabinet.getBranchId(), code,
+                    """, UUID.randomUUID(), code,
                     displayName(cabinet) + " · Ô " + no, machineId, no);
         }
         return cabinetDtos(List.of(cabinet)).getFirst();
@@ -350,7 +342,6 @@ public class LockerService {
             throw BusinessException.of(ErrorCode.REASON_REQUIRED, "Please enter a reason for this action");
         }
         Machine cabinet = cabinet(machineId);
-        branchScope.require(staff, cabinet.getBranchId());
         if (!cabinet.isOnline()) {
             throw BusinessException.of(ErrorCode.CONFLICT, "Tủ đang mất kết nối");
         }
@@ -361,7 +352,7 @@ public class LockerService {
                          WHERE a.resource_id = r.id
                            AND sb.status IN ('CONFIRMED', 'CHECKED_IN', 'IN_PROGRESS', 'READY_FOR_PICKUP')
                          ORDER BY sb.start_time LIMIT 1) AS booking_id
-                FROM branch_service_resources r
+                FROM service_resources r
                 WHERE r.locker_machine_id = ? AND r.compartment_no = ?
                 """, machineId, compartmentNo);
         if (rows.isEmpty()) {
@@ -387,7 +378,7 @@ public class LockerService {
                 """, accessId, "INSPECT".equals(act) ? null : bookingId, resourceId, machineId, "STAFF_" + act,
                 utc(now), utc(now.plusSeconds(STALE_OPENING_SECONDS)), staffId);
         openCompartment(cabinet, accessId, compartmentNo, "STAFF_" + act, null, staffId);
-        audit.record(AuditEntry.of(AuditAction.LOCKER_OPENED, "LOCKER", resourceId, cabinet.getBranchId(), staff)
+        audit.record(AuditEntry.of(AuditAction.LOCKER_OPENED, "LOCKER", resourceId, staff)
                 .withReason(noReason ? "Order step " + act : reason.trim())
                 .withChange(null, Map.of("action", act, "compartment", compartmentNo,
                         "bookingId", bookingId == null ? "" : bookingId.toString())));
@@ -469,7 +460,7 @@ public class LockerService {
                 SELECT a.id, a.booking_id, a.resource_id, a.purpose, a.pin, a.status, a.valid_from,
                        a.valid_until, a.opened_at, r.compartment_no, b.status AS booking_status, b.transaction_id
                 FROM locker_accesses a
-                JOIN branch_service_resources r ON r.id = a.resource_id
+                JOIN service_resources r ON r.id = a.resource_id
                 LEFT JOIN scheduled_bookings b ON b.id = a.booking_id
                 WHERE a.id = ? AND a.machine_id = ? AND a.status = 'OPENING'
                 FOR UPDATE OF a
@@ -483,7 +474,7 @@ public class LockerService {
                 FROM scheduled_bookings b
                 JOIN transactions t ON t.id = b.transaction_id
                 JOIN booking_resource_allocations a ON a.booking_id = b.id AND a.resource_type = 'LOCKER'
-                JOIN branch_service_resources r ON r.id = a.resource_id
+                JOIN service_resources r ON r.id = a.resource_id
                 WHERE b.id = ? AND (?::uuid IS NULL OR t.customer_id = ?)
                 ORDER BY a.occupied_until DESC LIMIT 1
                 """, (rs, row) -> new Slot(rs.getObject("id", UUID.class), rs.getObject("transaction_id", UUID.class),
@@ -499,7 +490,7 @@ public class LockerService {
                 SELECT a.id, a.booking_id, a.resource_id, a.purpose, a.pin, a.status, a.valid_from,
                        a.valid_until, a.opened_at, r.compartment_no, b.status AS booking_status, b.transaction_id
                 FROM locker_accesses a
-                JOIN branch_service_resources r ON r.id = a.resource_id
+                JOIN service_resources r ON r.id = a.resource_id
                 JOIN scheduled_bookings b ON b.id = a.booking_id
                 WHERE a.booking_id = ? AND a.purpose = ? AND a.status IN ('ACTIVE', 'OPENING')
                 ORDER BY a.created_at DESC LIMIT 1

@@ -52,68 +52,68 @@ public class WasherMessageHandler {
     private final CommissioningService commissioningService;
     private final LockerService lockerService;
 
-    public void handleStatus(UUID branchId, String machineCode, String payload) {
-        withMachine(branchId, machineCode, payload, DeviceSnapshot.class, (machine, data) -> {
+    public void handleStatus(String machineCode, String payload) {
+        withMachine(machineCode, payload, DeviceSnapshot.class, (machine, data) -> {
             MachineRuntimeState state = data.toRuntimeState();
             runtimeStateService.applyStatus(machine, state);
 
             if (data.isOffline()) {
-                machineService.markOfflineFromDevice(branchId, machineCode,
+                machineService.markOfflineFromDevice(machineCode,
                         data.trimmedStatus(), state.getErrorMessage());
                 return;
             }
-            machineService.processStatus(branchId, machineCode, state);
+            machineService.processStatus(machineCode, state);
             if (machine.getType() == MachineType.LOCKER) lockerService.recordSnapshot(machine, payload);
             broadcastMergedState(machine, state);
         });
     }
 
-    public void handleTelemetry(UUID branchId, String machineCode, String payload) {
-        withMachine(branchId, machineCode, payload, DeviceSnapshot.class, (machine, data) -> {
+    public void handleTelemetry(String machineCode, String payload) {
+        withMachine(machineCode, payload, DeviceSnapshot.class, (machine, data) -> {
             MachineRuntimeState state = data.toRuntimeState();
             runtimeStateService.applyTelemetry(machine, state);
 
             if (state.getStatus() != null) {
-                machineService.processStatusFromRuntime(branchId, machineCode, state);
+                machineService.processStatusFromRuntime(machineCode, state);
             }
             if (machine.getType() == MachineType.LOCKER) lockerService.recordSnapshot(machine, payload);
             broadcastMergedState(machine, state);
         });
     }
 
-    public void handleHeartbeat(UUID branchId, String machineCode, String payload) {
-        withMachine(branchId, machineCode, payload, DeviceSnapshot.class, (machine, data) -> {
+    public void handleHeartbeat(String machineCode, String payload) {
+        withMachine(machineCode, payload, DeviceSnapshot.class, (machine, data) -> {
             MachineRuntimeState state = data.toRuntimeState();
             runtimeStateService.applyHeartbeat(machine, state);
-            machineService.processHeartbeat(branchId, machineCode, state);
+            machineService.processHeartbeat(machineCode, state);
         });
     }
 
-    public void handleEvent(UUID branchId, String machineCode, String payload) {
+    public void handleEvent(String machineCode, String payload) {
         EventPayload data = parse(payload, EventPayload.class);
         if (data == null) {
             return;
         }
 
         if (data.isSelfTestResult()) {
-            commissioningService.handleSelfTestResult(branchId, machineCode, data.commandId(),
+            commissioningService.handleSelfTestResult(machineCode, data.commandId(),
                     Boolean.TRUE.equals(data.passed()),
                     data.checks() == null ? "" : data.checks().toString());
             return;
         }
 
-        findMachine(branchId, machineCode).ifPresent(machine -> {
+        findMachine(machineCode).ifPresent(machine -> {
             MachineRuntimeState state = data.toRuntimeState();
             runtimeStateService.applyEvent(machine, state);
-            machineService.processDeviceEvent(branchId, machineCode, state,
+            machineService.processDeviceEvent(machineCode, state,
                     data.event(), data.detail(), data.bookingId());
         });
     }
 
-    public void handleCommandAck(UUID branchId, String machineCode, String payload) {
-        withMachine(branchId, machineCode, payload, CommandAckPayload.class, (machine, data) -> {
+    public void handleCommandAck(String machineCode, String payload) {
+        withMachine(machineCode, payload, CommandAckPayload.class, (machine, data) -> {
             runtimeStateService.applyEvent(machine, data.toRuntimeState());
-            machineService.processCommandAck(branchId, machineCode, data.correlationId(),
+            machineService.processCommandAck(machineCode, data.correlationId(),
                     data.accepted(), data.result(), data.message(), data.reason());
         });
     }
@@ -124,18 +124,18 @@ public class WasherMessageHandler {
         broadcaster.broadcastRuntimeSnapshot(machine, merged);
     }
 
-    private <T> void withMachine(UUID branchId, String machineCode, String payload,
+    private <T> void withMachine(String machineCode, String payload,
                                  Class<T> type, BiConsumer<Machine, T> action) {
         T data = parse(payload, type);
         if (data != null) {
-            findMachine(branchId, machineCode).ifPresent(machine -> action.accept(machine, data));
+            findMachine(machineCode).ifPresent(machine -> action.accept(machine, data));
         }
     }
 
-    private Optional<Machine> findMachine(UUID branchId, String machineCode) {
-        Optional<Machine> machine = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
+    private Optional<Machine> findMachine(String machineCode) {
+        Optional<Machine> machine = machineRepository.findByMachineCode(machineCode);
         if (machine.isEmpty()) {
-            log.warn("UNKNOWN_DEVICE_MACHINE branchId={} machineId={}", branchId, machineCode);
+            log.warn("UNKNOWN_DEVICE_MACHINE machineId={}", machineCode);
         }
         return machine;
     }

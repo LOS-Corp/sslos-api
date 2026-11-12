@@ -31,12 +31,11 @@ class BookingRulesIT {
     @Autowired private BookingAvailabilityService availability;
     @Autowired private JdbcTemplate jdbc;
 
-    private UUID branchId;
     private Instant tomorrow;
 
     @BeforeEach
     void setUp() {
-        branchId = Fixtures.bookableBranch(jdbc, 30_000);
+        Fixtures.bookableStore(jdbc, 30_000);
         tomorrow = LocalDate.now(Fixtures.ZONE).plusDays(1).atTime(9, 0).atZone(Fixtures.ZONE).toInstant();
     }
 
@@ -51,7 +50,7 @@ class BookingRulesIT {
                 .satisfies(e -> assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.MACHINE_TOO_SMALL));
         assertThat(hold(tomorrow, big, new BigDecimal("10"))).isNotNull();
 
-        var search = availability.machineSearch(branchId, "WASH_ONLY", tomorrow, tomorrow.plus(2, ChronoUnit.HOURS),
+        var search = availability.machineSearch("WASH_ONLY", tomorrow, tomorrow.plus(2, ChronoUnit.HOURS),
                 null, null, new BigDecimal("10"));
         assertThat(search.unavailable()).anySatisfy(machine -> {
             assertThat(machine.resourceId()).isEqualTo(small);
@@ -64,6 +63,8 @@ class BookingRulesIT {
     @Test
     @DisplayName("SC-47: with 3 washers, book-later fills at most 2 per slot (70 %); use-now still gets the third")
     void advanceQuotaKeepsMachinesForUseNow() {
+        // One store for every test: take the machines earlier tests left behind out of service first.
+        jdbc.update("UPDATE machines SET online = FALSE");
         UUID w1 = washer(null);
         UUID w2 = washer(null);
         UUID w3 = washer(null);
@@ -95,21 +96,21 @@ class BookingRulesIT {
                     assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.BEYOND_ADVANCE_HORIZON);
                     assertThat(((BusinessException) e).code().messageCode()).isEqualTo("MSG09");
                 });
-        assertThatThrownBy(() -> availability.machineSearch(branchId, "WASH_ONLY", tooFar,
+        assertThatThrownBy(() -> availability.machineSearch("WASH_ONLY", tooFar,
                 tooFar.plus(1, ChronoUnit.HOURS), null, null, null))
                 .isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> availability.timelineAvailability(branchId, "WASH_ONLY",
+        assertThatThrownBy(() -> availability.timelineAvailability("WASH_ONLY",
                 LocalDate.now(Fixtures.ZONE).plusDays(5), null, null))
                 .isInstanceOf(BusinessException.class);
     }
 
     private Object hold(Instant start, UUID washer, BigDecimal load) {
-        return bookings.createHold(UUID.randomUUID(), new CreateHoldRequest(branchId, "WASH_ONLY", start,
+        return bookings.createHold(UUID.randomUUID(), new CreateHoldRequest("WASH_ONLY", start,
                 List.of(washer), "rules-" + UUID.randomUUID(), null, null, load));
     }
 
     private UUID washer(BigDecimal capacityKg) {
-        UUID id = Fixtures.washer(jdbc, branchId);
+        UUID id = Fixtures.washer(jdbc);
         jdbc.update("UPDATE machines SET capacity_kg = ? WHERE id = ?", capacityKg, id);
         return id;
     }

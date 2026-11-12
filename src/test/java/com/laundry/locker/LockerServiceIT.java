@@ -42,11 +42,11 @@ class LockerServiceIT {
 
     @BeforeEach
     void setUp() {
-        UUID branchId = Fixtures.bookableBranch(jdbc, 50_000);
-        locker = Fixtures.lockerCompartment(jdbc, branchId, 80_000);
+        Fixtures.bookableStore(jdbc, 50_000);
+        locker = Fixtures.lockerCompartment(jdbc, 80_000);
         owner = CurrentUser.of(Fixtures.user(jdbc, "OWNER"), Role.OWNER);
         customerId = Fixtures.customer(jdbc);
-        var hold = bookings.createHold(customerId, new CreateHoldRequest(branchId, "ASSISTED_LOCKER",
+        var hold = bookings.createHold(customerId, new CreateHoldRequest("ASSISTED_LOCKER",
                 Instant.now().plus(2, ChronoUnit.HOURS).truncatedTo(ChronoUnit.MINUTES),
                 List.of(locker.compartmentId()), "locker-" + UUID.randomUUID(), null, null, null));
         bookingId = hold.bookingId();

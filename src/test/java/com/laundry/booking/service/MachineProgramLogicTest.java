@@ -63,7 +63,7 @@ class MachineProgramLogicTest {
     private static SlotPlanner.ServiceConfig service(String code, int primary, int secondary,
                                                                  List<String> requirements) {
         return new SlotPlanner.ServiceConfig(code, code, "SELF_SERVICE", "", primary, secondary,
-                5, 5, 10, 0, new BigDecimal("40000"), UUID.randomUUID(), "UTC",
+                5, 5, 10, 0, new BigDecimal("40000"), "UTC",
                 LocalTime.MIN, LocalTime.MAX, requirements, 0);
     }
 

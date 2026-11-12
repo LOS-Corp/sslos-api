@@ -17,11 +17,8 @@ public enum AuditAction {
     ACCOUNT_UPDATED,
     ACCOUNT_STATUS_CHANGED,
     ACCOUNT_PASSWORD_RESET,
-    STAFF_BRANCHES_ASSIGNED,
-    // branch configuration
-    BRANCH_CREATED,
-    BRANCH_UPDATED,
-    BRANCH_DEACTIVATED,
+    // store configuration
+    STORE_UPDATED,
     // order state
     BOOKING_CANCELLED,
     BOOKING_NO_SHOW,

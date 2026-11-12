@@ -12,7 +12,7 @@ import java.util.UUID;
 /**
  * Optional filter for admin list endpoint. Every field is optional.
  *
- * <p>Used by {@code GET /api/admin/machines?status=...&type=...&branchId=...&q=...}.
+ * <p>Used by {@code GET /api/admin/machines?status=...&type=...&q=...}.
  * Free-text {@code q} matches case-insensitively against machineCode and
  * displayName. Page/pageSize are 1-based to match admin UIs.
  */
@@ -39,6 +39,4 @@ public class MachineListFilter {
     /** Exact type filter. */
     private String type;
 
-    /** Exact branchId filter. */
-    private UUID branchId;
 }

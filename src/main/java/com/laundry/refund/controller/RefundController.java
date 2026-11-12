@@ -37,7 +37,7 @@ public class RefundController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize(Roles.OPERATOR)
-    @Operation(summary = "Raise an exception refund request (Staff of the branch or Owner)")
+    @Operation(summary = "Raise an exception refund request (Staff or Owner)")
     public RefundResponse raise(@Valid @RequestBody CreateRefundRequest request, CurrentUser requester) {
         return refundService.raise(request, requester);
     }
@@ -58,9 +58,9 @@ public class RefundController {
 
     @GetMapping("/pending")
     @PreAuthorize(Roles.OPERATOR)
-    @Operation(summary = "Pending refund requests visible to the caller, optionally for one branch")
-    public List<RefundResponse> pending(@RequestParam(required = false) UUID branchId, CurrentUser viewer) {
-        return refundService.pending(branchId, viewer);
+    @Operation(summary = "Pending refund requests of the store")
+    public List<RefundResponse> pending(CurrentUser viewer) {
+        return refundService.pending(viewer);
     }
 
     @PostMapping("/{id}/approve")

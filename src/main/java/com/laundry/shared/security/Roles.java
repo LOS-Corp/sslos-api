@@ -11,7 +11,7 @@ public final class Roles {
     public static final String OWNER = "hasRole('OWNER')";
     public static final String ADMIN = "hasRole('ADMIN')";
     public static final String OWNER_OR_ADMIN = "hasAnyRole('OWNER','ADMIN')";
-    /** People who run a branch day to day (branch scope is checked in the service for STAFF). */
+    /** People who run the store day to day. */
     public static final String OPERATOR = "hasAnyRole('STAFF','OWNER')";
     public static final String OPERATOR_OR_ADMIN = "hasAnyRole('STAFF','OWNER','ADMIN')";
 

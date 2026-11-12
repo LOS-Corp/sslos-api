@@ -93,11 +93,11 @@ public class NoShowJob {
                 violations.record(booking.customerId(), booking.bookingId(), decision.violation(), now);
             }
             if (decision.amount().isPositive()) {
-                refunds.settle(booking.transactionId(), booking.branchId(), booking.customerId(), decision.amount(),
+                refunds.settle(booking.transactionId(), booking.customerId(), decision.amount(),
                         WalletEntryType.REFUND_CREDIT, "Hoàn tiền không đến sử dụng (" + decision.ratePercent() + "%)");
             }
         }
-        audit.record(AuditEntry.of(AuditAction.BOOKING_NO_SHOW, "BOOKING", booking.bookingId(), booking.branchId(), null)
+        audit.record(AuditEntry.of(AuditAction.BOOKING_NO_SHOW, "BOOKING", booking.bookingId(), null)
                 .withChange(Map.of("status", "CONFIRMED"), Map.of("status", "NO_SHOW", "cause", cause.name(),
                         "refundVnd", decision == null ? 0 : decision.amount().vnd())));
     }
@@ -119,7 +119,7 @@ public class NoShowJob {
      */
     private List<Candidate> candidates(Instant now) {
         return jdbc.query("""
-                SELECT sb.id, sb.branch_id, sb.start_time, t.id transaction_id, t.customer_id, t.paid_at,
+                SELECT sb.id, sb.start_time, t.id transaction_id, t.customer_id, t.paid_at,
                        d.service_mode = 'ASSISTED_LOCKER' AS assisted
                 FROM scheduled_bookings sb
                 JOIN transactions t ON t.id = sb.transaction_id
@@ -135,8 +135,7 @@ public class NoShowJob {
                 FOR UPDATE OF sb SKIP LOCKED
                 """, (rs, row) -> {
             Timestamp paidAt = rs.getTimestamp("paid_at");
-            return new Candidate(rs.getObject("id", UUID.class), rs.getObject("branch_id", UUID.class),
-                    rs.getObject("transaction_id", UUID.class), rs.getObject("customer_id", UUID.class),
+            return new Candidate(rs.getObject("id", UUID.class), rs.getObject("transaction_id", UUID.class), rs.getObject("customer_id", UUID.class),
                     rs.getTimestamp("start_time").toInstant(),
                     paidAt == null ? null : paidAt.toInstant(),
                     rs.getBoolean("assisted"));
@@ -152,14 +151,14 @@ public class NoShowJob {
         Boolean failed = jdbc.queryForObject("""
                 SELECT COALESCE(bool_or(NOT m.online OR m.status IN ('ERROR', 'OUT_OF_SERVICE', 'OFFLINE')), FALSE)
                 FROM booking_resource_allocations a
-                LEFT JOIN branch_service_resources r ON r.id = a.resource_id
+                LEFT JOIN service_resources r ON r.id = a.resource_id
                 JOIN machines m ON m.id = COALESCE(r.locker_machine_id, a.resource_id)
                 WHERE a.booking_id = ?
                 """, Boolean.class, bookingId);
         return Boolean.TRUE.equals(failed);
     }
 
-    private record Candidate(UUID bookingId, UUID branchId, UUID transactionId, UUID customerId, Instant start,
+    private record Candidate(UUID bookingId, UUID transactionId, UUID customerId, Instant start,
                              Instant paidAt, boolean assisted) {
     }
 }

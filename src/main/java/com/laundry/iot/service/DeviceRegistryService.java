@@ -122,7 +122,7 @@ public class DeviceRegistryService {
         deviceRepository.findByDeviceId(deviceId)
                 .filter(d -> d.getMachineId() != null)
                 .flatMap(d -> machineRepository.findById(d.getMachineId()))
-                .ifPresent(m -> machineService.markOfflineFromDevice(m.getBranchId(), m.getMachineCode(),
+                .ifPresent(m -> machineService.markOfflineFromDevice(m.getMachineCode(),
                         "OFFLINE", null));
     }
 
@@ -214,7 +214,7 @@ public class DeviceRegistryService {
                 + (actorId == null ? "" : " by " + actorId));
         broadcaster.broadcastMachineUpdate(machine);
         events.publishEvent(new DeviceLinkChanged(deviceId));
-        log.info("[IOT] Device {} attached to {}/{}", deviceId, machine.getBranchId(), machine.getMachineCode());
+        log.info("[IOT] Device {} attached to {}", deviceId, machine.getMachineCode());
     }
 
     /** Detach and revoke the device; the machine returns to UNASSIGNED. */
@@ -263,7 +263,7 @@ public class DeviceRegistryService {
             case PROVISIONED, ACTIVE -> device.getMachineId() == null
                     ? LinkState.of(LinkState.State.VERIFIED, device.getDeviceId())
                     : machineRepository.findById(device.getMachineId())
-                            .map(m -> LinkState.bound(device.getDeviceId(), m.getBranchId(), m.getMachineCode(),
+                            .map(m -> LinkState.bound(device.getDeviceId(), m.getMachineCode(),
                                     m.getType().name(), qrUrlOf(m)))
                             .orElse(LinkState.of(LinkState.State.VERIFIED, device.getDeviceId()));
         };

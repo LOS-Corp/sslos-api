@@ -84,10 +84,10 @@ public class BookingCancellationService {
             violations.record(customer.id(), bookingId, decision.violation(), now);
         }
         if (decision.amount().isPositive()) {
-            refunds.settle(booking.transactionId(), booking.branchId(), customer.id(), decision.amount(),
+            refunds.settle(booking.transactionId(), customer.id(), decision.amount(),
                     WalletEntryType.REFUND_CREDIT, "Hoàn tiền hủy đặt chỗ (" + decision.ratePercent() + "%)");
         }
-        audit.record(AuditEntry.of(AuditAction.BOOKING_CANCELLED, "BOOKING", bookingId, booking.branchId(), customer)
+        audit.record(AuditEntry.of(AuditAction.BOOKING_CANCELLED, "BOOKING", bookingId, customer)
                 .withChange(Map.of("status", "CONFIRMED"),
                         Map.of("status", "CANCELLED", "refundVnd", decision.amount().vnd(),
                                 "rate", decision.ratePercent(),
@@ -111,7 +111,7 @@ public class BookingCancellationService {
     /** A CONFIRMED, paid booking of this customer that has not started yet (UC-08 pre-condition). */
     private PaidBooking paidBooking(UUID customerId, UUID bookingId, boolean lock) {
         List<PaidBooking> rows = jdbc.query("""
-                SELECT sb.id, sb.branch_id, sb.status, sb.start_time, t.id transaction_id, t.customer_id,
+                SELECT sb.id, sb.status, sb.start_time, t.id transaction_id, t.customer_id,
                        t.status transaction_status, t.total_amount
                 FROM scheduled_bookings sb JOIN transactions t ON t.id = sb.transaction_id
                 WHERE sb.id = ? AND t.customer_id = ?
@@ -121,8 +121,7 @@ public class BookingCancellationService {
                         "Only a paid, confirmed booking can be cancelled for a refund");
             }
             BigDecimal amount = rs.getBigDecimal("total_amount");
-            return new PaidBooking(rs.getObject("id", UUID.class), rs.getObject("branch_id", UUID.class),
-                    rs.getObject("transaction_id", UUID.class), rs.getObject("customer_id", UUID.class),
+            return new PaidBooking(rs.getObject("id", UUID.class), rs.getObject("transaction_id", UUID.class), rs.getObject("customer_id", UUID.class),
                     rs.getTimestamp("start_time").toInstant(), Money.of(amount));
         }, bookingId, customerId);
         if (rows.isEmpty()) {
@@ -136,7 +135,7 @@ public class BookingCancellationService {
         return booking;
     }
 
-    private record PaidBooking(UUID bookingId, UUID branchId, UUID transactionId, UUID customerId, Instant start,
+    private record PaidBooking(UUID bookingId, UUID transactionId, UUID customerId, Instant start,
                                Money paid) {
     }
 

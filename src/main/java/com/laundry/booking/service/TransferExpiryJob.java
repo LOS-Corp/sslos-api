@@ -63,7 +63,7 @@ public class TransferExpiryJob {
     private void close(Expired booking, Instant now) {
         CancellationCause cause = dryerUnavailable(booking.dryerId())
                 ? CancellationCause.SYSTEM_FAILURE : CancellationCause.NO_SHOW;
-        Money stage = stageValues.dryerStage(booking.branchId(), booking.total());
+        Money stage = stageValues.dryerStage(booking.total());
         Money left = refunds.refundable(booking.transactionId());
         Money eligible = left.compareTo(stage) < 0 ? left : stage;
         RefundDecision decision = new RefundPolicy(props.freeCancellationBefore()).evaluate(cause, now, booking.start(),
@@ -75,10 +75,10 @@ public class TransferExpiryJob {
             violations.record(booking.customerId(), booking.bookingId(), decision.violation(), now);
         }
         Money credited = decision.amount().isPositive()
-                ? refunds.settle(booking.transactionId(), booking.branchId(), booking.customerId(), decision.amount(),
+                ? refunds.settle(booking.transactionId(), booking.customerId(), decision.amount(),
                         WalletEntryType.REFUND_CREDIT, "Hoàn tiền giai đoạn sấy không sử dụng (" + decision.ratePercent() + "%)")
                 : Money.ZERO;
-        audit.record(AuditEntry.of(AuditAction.BOOKING_NO_SHOW, "BOOKING", booking.bookingId(), booking.branchId(), null)
+        audit.record(AuditEntry.of(AuditAction.BOOKING_NO_SHOW, "BOOKING", booking.bookingId(), null)
                 .withChange(Map.of("status", "TRANSFER_PENDING"), Map.of("status", "COMPLETED", "stage", "DRYER",
                         "cause", cause.name(), "refundVnd", credited.vnd())));
     }
@@ -86,7 +86,7 @@ public class TransferExpiryJob {
     /** The later of the planned dryer start and the washer's actual end plus the transfer time. */
     private List<Expired> expired(Instant now) {
         return jdbc.query("""
-                SELECT sb.id, sb.branch_id, sb.start_time, t.id transaction_id, t.customer_id, t.total_amount,
+                SELECT sb.id, sb.start_time, t.id transaction_id, t.customer_id, t.total_amount,
                        a.resource_id dryer_id
                 FROM scheduled_bookings sb
                 JOIN transactions t ON t.id = sb.transaction_id
@@ -100,8 +100,7 @@ public class TransferExpiryJob {
                 ORDER BY sb.start_time
                 LIMIT ?
                 FOR UPDATE OF sb SKIP LOCKED
-                """, (rs, row) -> new Expired(rs.getObject("id", UUID.class), rs.getObject("branch_id", UUID.class),
-                rs.getObject("transaction_id", UUID.class), rs.getObject("customer_id", UUID.class),
+                """, (rs, row) -> new Expired(rs.getObject("id", UUID.class), rs.getObject("transaction_id", UUID.class), rs.getObject("customer_id", UUID.class),
                 rs.getObject("dryer_id", UUID.class), rs.getTimestamp("start_time").toInstant(),
                 Money.of(rs.getBigDecimal("total_amount"))), Timestamp.from(now), BATCH);
     }
@@ -112,7 +111,7 @@ public class TransferExpiryJob {
                 """, Boolean.class, dryerId));
     }
 
-    private record Expired(UUID bookingId, UUID branchId, UUID transactionId, UUID customerId, UUID dryerId,
+    private record Expired(UUID bookingId, UUID transactionId, UUID customerId, UUID dryerId,
                            Instant start, Money total) {
     }
 }

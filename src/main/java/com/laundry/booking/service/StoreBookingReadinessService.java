@@ -1,16 +1,16 @@
 package com.laundry.booking.service;
 
+import com.laundry.store.entity.StoreSettings;
+import com.laundry.store.service.StoreService;
+
 import com.laundry.shared.error.ErrorCode;
 
 import com.laundry.shared.error.BusinessException;
 
-import com.laundry.booking.dto.BookingConfigDtos.BranchReadiness;
+import com.laundry.booking.dto.BookingConfigDtos.StoreReadiness;
 import com.laundry.booking.dto.BookingConfigDtos.ResourceCounts;
 import com.laundry.booking.dto.BookingConfigDtos.ServiceReadiness;
 import com.laundry.booking.dto.BookingConfigDtos.ValidationIssue;
-import com.laundry.branch.entity.Branch;
-import com.laundry.branch.entity.BranchStatus;
-import com.laundry.branch.repository.BranchRepository;
 import com.laundry.machine.entity.Machine;
 import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.entity.MachineType;
@@ -29,72 +29,51 @@ import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
-public class BranchBookingReadinessService {
+public class StoreBookingReadinessService {
     private final JdbcTemplate jdbc;
-    private final BranchRepository branchRepository;
+    private final StoreService store;
     private final MachineRepository machineRepository;
 
-    @Transactional(readOnly = true)
-    public List<BranchReadiness> evaluateAll() {
-        return branchRepository.findAll().stream()
-                .sorted(java.util.Comparator.comparing(Branch::getName,
-                        String.CASE_INSENSITIVE_ORDER))
-                .map(branch -> evaluate(branch))
-                .toList();
+    /** Whether customers can book at the store, and what is still missing (BR-28). */
+    @Transactional
+    public StoreReadiness evaluate() {
+        return evaluate(store.settings());
     }
 
-    @Transactional(readOnly = true)
-    public BranchReadiness evaluate(UUID branchId) {
-        Branch branch = branchRepository.findById(branchId)
-                .orElseThrow(() -> BusinessException.of(ErrorCode.NOT_FOUND, "Branch not found"));
-        return evaluate(branch);
-    }
-
-    @Transactional(readOnly = true)
-    public boolean isCustomerEligible(UUID branchId, String serviceCode) {
-        BranchReadiness readiness = evaluate(branchId);
+    @Transactional
+    public boolean isCustomerEligible(String serviceCode) {
+        StoreReadiness readiness = evaluate();
         return readiness.ready() && readiness.services().stream()
                 .anyMatch(service -> service.code().equals(serviceCode)
                         && service.enabled() && service.ready());
     }
 
-    private BranchReadiness evaluate(Branch branch) {
-        UUID branchId = branch.getId();
+    private StoreReadiness evaluate(StoreSettings settings) {
         List<ValidationIssue> issues = new ArrayList<>();
-        if (branch.getStatus() != BranchStatus.ACTIVE) {
-            issues.add(issue("BRANCH_INACTIVE", "Chi nhánh đang ngừng hoạt động.",
-                    "Kích hoạt chi nhánh trong mục Quản lý chi nhánh.", null));
-        }
-
-        List<String> timezones = jdbc.query("""
-                SELECT timezone FROM branch_booking_settings WHERE branch_id = ?
-                """, (rs, row) -> rs.getString(1), branchId);
-        String timezone = timezones.isEmpty() ? null : timezones.getFirst();
+        String timezone = settings.getTimezone();
         boolean settingsValid = timezone != null && isValidTimezone(timezone);
         if (timezone == null) {
             issues.add(issue("BOOKING_SETTINGS_MISSING", "Chưa cấu hình múi giờ đặt lịch.",
-                    "Thiết lập múi giờ cho chi nhánh.", null));
+                    "Thiết lập múi giờ cho cửa hàng.", null));
         } else if (!settingsValid) {
-            issues.add(issue("INVALID_TIMEZONE", "Múi giờ chi nhánh không phải IANA timezone hợp lệ.",
+            issues.add(issue("INVALID_TIMEZONE", "Múi giờ cửa hàng không phải IANA timezone hợp lệ.",
                     "Chọn múi giờ hợp lệ, ví dụ Asia/Ho_Chi_Minh.", null));
         }
 
-        Integer hours = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM branch_booking_hours WHERE branch_id = ?
-                """, Integer.class, branchId);
+        Integer hours = jdbc.queryForObject("SELECT COUNT(*) FROM store_hours", Integer.class);
         boolean hoursValid = hours != null && hours > 0;
         if (!hoursValid) {
             issues.add(issue("BOOKING_HOURS_MISSING", "Chưa thiết lập ngày và giờ hoạt động.",
                     "Cấu hình ít nhất một khoảng giờ hoạt động.", null));
         }
 
-        List<Machine> machines = machineRepository.findByBranchId(branchId);
+        List<Machine> machines = machineRepository.findAll();
         int washers = countMachines(machines, MachineType.WASHER);
         int dryers = countMachines(machines, MachineType.DRYER);
         int onlineWashers = countOperationalMachines(machines, MachineType.WASHER);
         int onlineDryers = countOperationalMachines(machines, MachineType.DRYER);
-        int ironStations = countResources(branchId, "IRON_STATION");
-        int lockers = countResources(branchId, "LOCKER");
+        int ironStations = countResources("IRON_STATION");
+        int lockers = countResources("LOCKER");
         ResourceCounts counts = new ResourceCounts(
                 washers, dryers, onlineWashers, onlineDryers, ironStations, lockers);
 
@@ -105,8 +84,7 @@ public class BranchBookingReadinessService {
                        o.enabled, o.price, o.processing_minutes_override,
                        o.secondary_processing_minutes_override
                 FROM booking_service_definitions d
-                LEFT JOIN branch_service_offerings o
-                  ON o.service_code = d.code AND o.branch_id = ?
+                LEFT JOIN service_offerings o ON o.service_code = d.code
                 WHERE d.active = TRUE
                 ORDER BY CASE d.service_mode WHEN 'SELF_SERVICE' THEN 0 ELSE 1 END, d.name
                 """, (rs, row) -> {
@@ -122,7 +100,7 @@ public class BranchBookingReadinessService {
             String code = rs.getString("code");
             List<ValidationIssue> serviceIssues = new ArrayList<>();
             if (!configured) {
-                serviceIssues.add(issue("SERVICE_NOT_CONFIGURED", "Dịch vụ chưa được cấu hình tại chi nhánh.",
+                serviceIssues.add(issue("SERVICE_NOT_CONFIGURED", "Dịch vụ chưa được cấu hình tại cửa hàng.",
                         "Bật dịch vụ và đặt giá.", code));
             } else if (enabled) {
                 if (price == null || price.signum() <= 0) {
@@ -146,7 +124,7 @@ public class BranchBookingReadinessService {
                             default -> "RESOURCE_MISSING";
                         };
                         serviceIssues.add(issue(issueCode, "Thiếu tài nguyên " + type + " đang bật.",
-                                "Thêm hoặc bật tài nguyên phù hợp cho chi nhánh.", code));
+                                "Thêm hoặc bật tài nguyên phù hợp cho cửa hàng.", code));
                     }
                 }
             }
@@ -156,15 +134,13 @@ public class BranchBookingReadinessService {
                     configured, enabled, price, processing, secondary, rs.getInt("check_in_minutes"),
                     rs.getInt("transfer_minutes"), rs.getInt("checkout_minutes"),
                     serviceReady, serviceIssues);
-        }, branchId);
+        });
 
         int configuredServices = (int) services.stream().filter(ServiceReadiness::configured).count();
         int enabledServices = (int) services.stream().filter(ServiceReadiness::enabled).count();
         boolean hasReadyService = services.stream().anyMatch(ServiceReadiness::ready);
-        boolean ready = branch.getStatus() == BranchStatus.ACTIVE && settingsValid && hoursValid
-                && hasReadyService;
-        return new BranchReadiness(branchId, branch.getName(), branch.getStatus().name(),
-                timezone, settingsValid, hoursValid, configuredServices, enabledServices,
+        boolean ready = settingsValid && hoursValid && hasReadyService;
+        return new StoreReadiness(settings.getName(), timezone, settingsValid, hoursValid, configuredServices, enabledServices,
                 counts, ready, List.copyOf(issues), services);
     }
 
@@ -181,11 +157,10 @@ public class BranchBookingReadinessService {
                 .count();
     }
 
-    private int countResources(UUID branchId, String type) {
+    private int countResources(String type) {
         Integer count = jdbc.queryForObject("""
-                SELECT COUNT(*) FROM branch_service_resources
-                WHERE branch_id = ? AND resource_type = ? AND enabled = TRUE
-                """, Integer.class, branchId, type);
+                SELECT COUNT(*) FROM service_resources WHERE resource_type = ? AND enabled = TRUE
+                """, Integer.class, type);
         return count == null ? 0 : count;
     }
 

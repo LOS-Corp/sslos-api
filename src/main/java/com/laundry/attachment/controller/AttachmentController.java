@@ -49,7 +49,7 @@ public class AttachmentController {
     }
 
     @GetMapping("/{id}")
-    @Operation(summary = "Download a file the caller may see (Owner: all; Staff: own or their branches' refunds; "
+    @Operation(summary = "Download a file the caller may see (Owner: all; Staff: own uploads or refund evidence; "
             + "customer: proofs of their own withdrawals)")
     public ResponseEntity<InputStreamResource> download(@PathVariable UUID id, CurrentUser viewer) {
         AttachmentContent content = attachments.read(id, viewer);

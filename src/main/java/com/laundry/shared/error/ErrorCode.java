@@ -27,7 +27,6 @@ public enum ErrorCode {
     ACCOUNT_LOCKED(HttpStatus.FORBIDDEN, "MSG03"),
     TOO_MANY_ATTEMPTS(HttpStatus.TOO_MANY_REQUESTS, "MSG03"),
     INVALID_TOKEN(HttpStatus.UNAUTHORIZED, null),
-    BRANCH_OUT_OF_SCOPE(HttpStatus.FORBIDDEN, "MSG22"),
 
     // ── Booking (UC-02, BR-04…BR-09) ──────────────────────────────────────────
     HOLD_EXPIRED(HttpStatus.CONFLICT, "MSG06"),
@@ -41,7 +40,6 @@ public enum ErrorCode {
 
     // ── Machine activation & devices (UC-03, UC-18) ───────────────────────────
     MACHINE_NOT_FOUND(HttpStatus.NOT_FOUND, null),
-    BRANCH_NOT_FOUND(HttpStatus.NOT_FOUND, null),
     CHECK_IN_REJECTED(HttpStatus.BAD_REQUEST, "MSG12"),
     STALE_AUTHORIZATION(HttpStatus.CONFLICT, null),
     MACHINE_OFFLINE(HttpStatus.CONFLICT, "MSG13"),

@@ -3,7 +3,6 @@ package com.laundry.websocket;
 import com.laundry.auth.security.JwtService;
 import com.laundry.shared.security.CurrentUser;
 import com.laundry.shared.security.Role;
-import com.laundry.user.service.BranchScopeService;
 import io.jsonwebtoken.Claims;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -23,8 +22,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -32,7 +29,6 @@ import java.util.stream.Collectors;
  * Subscriptions:
  * <ul>
  *   <li>{@code /topic/machines/**} — public machine status, same as {@code GET /api/machines}.</li>
- *   <li>{@code /topic/branches/{id}/**} — Owner/Admin, or Staff assigned to that branch.</li>
  *   <li>{@code /user/queue/**} — any authenticated user (own messages only, routed by Spring).</li>
  * </ul>
  * Everything else, including SEND to {@code /app/**}, is refused.
@@ -42,11 +38,9 @@ import java.util.stream.Collectors;
 @RequiredArgsConstructor
 public class StompAuthChannelInterceptor implements ChannelInterceptor {
 
-    private static final Pattern BRANCH_TOPIC = Pattern.compile("^/topic/branches/([0-9a-fA-F-]{36})(/.*)?$");
     private static final String BEARER = "Bearer ";
 
     private final JwtService jwtService;
-    private final BranchScopeService branchScope;
 
     @Override
     public Message<?> preSend(Message<?> message, MessageChannel channel) {
@@ -93,11 +87,6 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
             return;
         }
         if (destination.startsWith("/user/queue/") && user.isPresent()) {
-            return;
-        }
-        Matcher branch = BRANCH_TOPIC.matcher(destination);
-        if (branch.matches() && user.isPresent()
-                && branchScope.canAccess(user.get(), UUID.fromString(branch.group(1)))) {
             return;
         }
         log.debug("Refused STOMP subscription to {}", destination);

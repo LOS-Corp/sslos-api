@@ -44,7 +44,6 @@ class RefundCapIT {
     @Autowired private WalletService wallet;
     @Autowired private JdbcTemplate jdbc;
 
-    private UUID branchId;
     private UUID customerId;
     private CurrentUser customer;
     private CurrentUser owner;
@@ -52,7 +51,7 @@ class RefundCapIT {
 
     @BeforeEach
     void setUp() {
-        branchId = Fixtures.bookableBranch(jdbc, PRICE);
+        Fixtures.bookableStore(jdbc, PRICE);
         customerId = Fixtures.customer(jdbc);
         customer = CurrentUser.of(customerId, Role.CUSTOMER);
         owner = CurrentUser.of(Fixtures.user(jdbc, "OWNER"), Role.OWNER);
@@ -112,9 +111,9 @@ class RefundCapIT {
     void databaseRefusesOverCap() {
         Paid order = paidOnline(tomorrow);
         assertThatThrownBy(() -> jdbc.update("""
-                INSERT INTO refund_requests (id, payment_id, transaction_id, branch_id, requested_by, amount, reason, status)
-                VALUES (gen_random_uuid(), ?, ?, ?, ?, ?, 'x', 'COMPLETED')
-                """, order.paymentId(), order.transactionId(), branchId, customerId, PRICE + 1))
+                INSERT INTO refund_requests (id, payment_id, transaction_id, requested_by, amount, reason, status)
+                VALUES (gen_random_uuid(), ?, ?, ?, ?, 'x', 'COMPLETED')
+                """, order.paymentId(), order.transactionId(), customerId, PRICE + 1))
                 .isInstanceOf(DataIntegrityViolationException.class);
     }
 
@@ -178,8 +177,8 @@ class RefundCapIT {
     }
 
     private BookingDto hold(Instant start) {
-        return bookings.createHold(customerId, new CreateHoldRequest(branchId, "WASH_ONLY", start,
-                List.of(Fixtures.washer(jdbc, branchId)), "cap-" + UUID.randomUUID(), null, null, null));
+        return bookings.createHold(customerId, new CreateHoldRequest("WASH_ONLY", start,
+                List.of(Fixtures.washer(jdbc)), "cap-" + UUID.randomUUID(), null, null, null));
     }
 
     private String status(UUID bookingId) {

@@ -14,8 +14,7 @@ import java.util.UUID;
  * a single machine.
  *
  * <p>This is the canonical realtime stream the Machine Detail UI listens
- * to via {@code /topic/machines/{machineCode}/runtime} (or the
- * branch-scoped variant). The payload is full-fidelity so the frontend
+ * to via {@code /topic/machines/{machineCode}/runtime}. The payload is full-fidelity so the frontend
  * does NOT need to poll REST endpoints for sensor data.
  *
  * <p>Field semantics match the firmware 3.1.0 contract documented in
@@ -26,7 +25,6 @@ import java.util.UUID;
 public record RuntimeSnapshotMessage(
         @Schema(description = "Backend UUID of the machine (matches Machine.id)") UUID machineId,
         @Schema(description = "Human-readable machine code", example = "WM001") String machineCode,
-        @Schema(description = "Branch UUID") UUID branchId,
         @Schema(description = "Firmware version reported by the device", example = "3.1.0") String firmwareVersion,
         @Schema(description = "true if firmware is in Wokwi / mock mode") Boolean simulation,
         @Schema(description = "Firmware-side telemetry sequence number; out-of-order messages are dropped by the backend") Long seq,
@@ -63,7 +61,6 @@ public record RuntimeSnapshotMessage(
         return new RuntimeSnapshotMessage(
                 m.getId(),
                 m.getMachineCode(),
-                m.getBranchId(),
                 s.getFirmwareVersion(),
                 s.getSimulation(),
                 s.getLastTelemetrySeq(),

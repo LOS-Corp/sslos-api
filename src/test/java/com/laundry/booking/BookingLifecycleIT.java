@@ -46,7 +46,6 @@ class BookingLifecycleIT {
     @Autowired private JdbcTemplate jdbc;
     @MockitoBean private EmailService email;
 
-    private UUID branchId;
     private UUID washerId;
     private UUID dryerId;
     private UUID customerId;
@@ -54,13 +53,13 @@ class BookingLifecycleIT {
 
     @BeforeEach
     void setUp() {
-        branchId = Fixtures.bookableBranch(jdbc, 50_000);
-        Fixtures.offering(jdbc, branchId, "DRY_ONLY", 30_000);
-        Fixtures.offering(jdbc, branchId, "WASH_DRY", COMBO);
-        washerId = Fixtures.washer(jdbc, branchId);
-        dryerId = Fixtures.dryer(jdbc, branchId);
+        Fixtures.bookableStore(jdbc, 50_000);
+        Fixtures.offering(jdbc, "DRY_ONLY", 30_000);
+        Fixtures.offering(jdbc, "WASH_DRY", COMBO);
+        washerId = Fixtures.washer(jdbc);
+        dryerId = Fixtures.dryer(jdbc);
         customerId = Fixtures.customer(jdbc);
-        var hold = bookings.createHold(customerId, new CreateHoldRequest(branchId, "WASH_DRY",
+        var hold = bookings.createHold(customerId, new CreateHoldRequest("WASH_DRY",
                 Instant.now().plus(5, ChronoUnit.MINUTES).truncatedTo(ChronoUnit.MINUTES),
                 List.of(washerId, dryerId), "life-" + UUID.randomUUID(), null, null, null));
         bookingId = hold.bookingId();
@@ -202,7 +201,7 @@ class BookingLifecycleIT {
 
     private void report(UUID machineId, String deviceStatus) {
         String code = jdbc.queryForObject("SELECT machine_code FROM machines WHERE id = ?", String.class, machineId);
-        machineService.processStatus(branchId, code, MachineRuntimeState.builder().status(deviceStatus).build());
+        machineService.processStatus(code, MachineRuntimeState.builder().status(deviceStatus).build());
     }
 
     private void command(UUID machineId, String command, UUID issuedBy) {

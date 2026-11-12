@@ -2,8 +2,6 @@ package com.laundry.booking;
 
 import com.laundry.booking.dto.BookingDtos.CreateHoldRequest;
 import com.laundry.booking.service.ScheduledBookingService;
-import com.laundry.branch.entity.Branch;
-import com.laundry.branch.repository.BranchRepository;
 import com.laundry.machine.entity.Machine;
 import com.laundry.machine.entity.MachineDeploymentStatus;
 import com.laundry.machine.entity.MachineStatus;
@@ -41,27 +39,17 @@ class HoldConcurrencyIT {
     private static final int CUSTOMERS = 20;
 
     @Autowired private ScheduledBookingService bookings;
-    @Autowired private BranchRepository branches;
     @Autowired private MachineRepository machines;
     @Autowired private JdbcTemplate jdbc;
 
-    private UUID branchId;
     private UUID washerId;
     private Instant start;
 
     @BeforeEach
     void setUp() {
-        branchId = branches.save(Branch.builder().name("Hold " + UUID.randomUUID()).build()).getId();
-        jdbc.update("INSERT INTO branch_booking_settings (branch_id, timezone) VALUES (?, ?)", branchId, ZONE.getId());
-        for (int day = 1; day <= 7; day++) {
-            jdbc.update("INSERT INTO branch_booking_hours (branch_id, day_of_week, opens_at, closes_at) VALUES (?, ?, ?, ?)",
-                    branchId, day, LocalTime.of(6, 0), LocalTime.of(22, 0));
-        }
-        jdbc.update("INSERT INTO branch_service_offerings (branch_id, service_code, enabled, price) VALUES (?, 'WASH_ONLY', TRUE, 30000)",
-                branchId);
+        Fixtures.bookableStore(jdbc, 30_000, LocalTime.of(6, 0), LocalTime.of(22, 0));
         washerId = machines.save(Machine.builder()
                 .machineCode("H" + UUID.randomUUID().toString().substring(0, 8).toUpperCase())
-                .branchId(branchId)
                 .type(MachineType.WASHER)
                 .status(MachineStatus.AVAILABLE)
                 .deploymentStatus(MachineDeploymentStatus.ACTIVE)
@@ -135,7 +123,7 @@ class HoldConcurrencyIT {
 
         Instant otherStart = start.plus(2, ChronoUnit.HOURS);
         UUID lateCustomer = Fixtures.customer(jdbc);
-        var late = bookings.createHold(lateCustomer, new CreateHoldRequest(branchId, "WASH_ONLY", otherStart,
+        var late = bookings.createHold(lateCustomer, new CreateHoldRequest("WASH_ONLY", otherStart,
                 List.of(washerId), "pay-late-" + UUID.randomUUID(), null, null, null));
         // The hold lapses (second 310 of a 300 s hold) while the slot is still free.
         jdbc.update("UPDATE scheduled_bookings SET hold_expires_at = NOW() - interval '10 seconds' WHERE id = ?",
@@ -155,7 +143,7 @@ class HoldConcurrencyIT {
     }
 
     private CreateHoldRequest hold(String key) {
-        return new CreateHoldRequest(branchId, "WASH_ONLY", start, List.of(washerId), key + "-" + UUID.randomUUID(),
+        return new CreateHoldRequest("WASH_ONLY", start, List.of(washerId), key + "-" + UUID.randomUUID(),
                 null, null, null);
     }
 }

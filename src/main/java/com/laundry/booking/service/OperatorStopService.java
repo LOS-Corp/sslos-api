@@ -36,7 +36,7 @@ class OperatorStopService {
     /** The running cycle on this machine, if someone other than its customer has just stopped it. */
     Optional<StoppedCycle> stoppedCycle(UUID machineId) {
         List<StoppedCycle> cycles = jdbc.query("""
-                SELECT a.id, a.booking_id, b.branch_id, t.id transaction_id, t.customer_id, t.total_amount,
+                SELECT a.id, a.booking_id, t.id transaction_id, t.customer_id, t.total_amount,
                        EXISTS (SELECT 1 FROM booking_resource_allocations done
                                WHERE done.booking_id = a.booking_id AND done.cycle_state = 'DONE') earlier_stage_done
                 FROM booking_resource_allocations a
@@ -50,7 +50,7 @@ class OperatorStopService {
                         AND c.created_at > NOW() - interval '2 minutes'
                         AND c.issued_by_user_id IS DISTINCT FROM t.customer_id)
                 """, (rs, row) -> new StoppedCycle(rs.getObject("id", UUID.class), rs.getObject("booking_id", UUID.class),
-                rs.getObject("branch_id", UUID.class), rs.getObject("transaction_id", UUID.class),
+                rs.getObject("transaction_id", UUID.class),
                 rs.getObject("customer_id", UUID.class), Money.of(rs.getBigDecimal("total_amount")),
                 rs.getBoolean("earlier_stage_done")), machineId);
         return cycles.stream().findFirst();
@@ -70,20 +70,19 @@ class OperatorStopService {
         Money left = refunds.refundable(cycle.transactionId());
         Money unused = left;
         if (cycle.earlierStageDone()) {
-            Money stage = stageValues.dryerStage(cycle.branchId(), cycle.total());
+            Money stage = stageValues.dryerStage(cycle.total());
             unused = left.compareTo(stage) < 0 ? left : stage;
         }
         Money credited = unused.isPositive()
-                ? refunds.settle(cycle.transactionId(), cycle.branchId(), cycle.customerId(), unused,
+                ? refunds.settle(cycle.transactionId(), cycle.customerId(), unused,
                         WalletEntryType.REFUND_CREDIT, "Hoàn tiền do cửa hàng dừng máy giữa chu trình")
                 : Money.ZERO;
-        audit.record(AuditEntry.of(AuditAction.BOOKING_STOPPED_BY_OPERATOR, "BOOKING", cycle.bookingId(),
-                        cycle.branchId(), null)
+        audit.record(AuditEntry.of(AuditAction.BOOKING_STOPPED_BY_OPERATOR, "BOOKING", cycle.bookingId(), null)
                 .withChange(Map.of("status", "IN_PROGRESS"), Map.of("status", "CANCELLED", "refundVnd", credited.vnd())));
         log.info("[BOOKING] booking {} cancelled: stopped by an operator, {} VND refunded", cycle.bookingId(), credited.vnd());
     }
 
-    record StoppedCycle(UUID allocationId, UUID bookingId, UUID branchId, UUID transactionId, UUID customerId,
+    record StoppedCycle(UUID allocationId, UUID bookingId, UUID transactionId, UUID customerId,
                         Money total, boolean earlierStageDone) {
     }
 }

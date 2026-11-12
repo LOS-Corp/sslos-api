@@ -22,8 +22,7 @@ import java.util.UUID;
 /**
  * Repository for Machine entities.
  *
- * <p>Machine identity is scoped by {@code (branchId, machineCode)} where
- * {@code branchId} is a {@link UUID}. All device lookups use this composite key.
+ * <p>Machine identity is the machine code, unique in the store (V58).
  */
 @Repository
 public interface MachineRepository extends JpaRepository<Machine, UUID> {
@@ -32,9 +31,6 @@ public interface MachineRepository extends JpaRepository<Machine, UUID> {
     Optional<Machine> findByMachineCode(String machineCode);
 
     boolean existsByMachineCode(String machineCode);
-
-    /** Multi-branch lookup by branchId and machineCode. */
-    Optional<Machine> findByBranchIdAndMachineCode(UUID branchId, String machineCode);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT m FROM Machine m WHERE m.id = :id")
@@ -52,9 +48,7 @@ public interface MachineRepository extends JpaRepository<Machine, UUID> {
             """, nativeQuery = true)
     boolean hasActiveBookingAllocation(@Param("machineId") UUID machineId);
 
-    boolean existsByBranchIdAndMachineCode(UUID branchId, String machineCode);
-
-    List<Machine> findByBranchId(UUID branchId);
+    List<Machine> findAll();
 
     List<Machine> findByStatus(MachineStatus status);
 
@@ -155,18 +149,16 @@ public interface MachineRepository extends JpaRepository<Machine, UUID> {
     // ── Admin search ────────────────────────────────────────────────
 
     /**
-     * Admin search: free-text q + status + type + branchId, with paging.
+     * Admin search: free-text q + status + type, with paging.
      */
     @Query("SELECT m FROM Machine m WHERE " +
            "(:q IS NULL OR :q = '' OR " +
            "  LOWER(m.machineCode) LIKE LOWER(CONCAT('%', :q, '%')) OR " +
            "  LOWER(COALESCE(m.displayName, '')) LIKE LOWER(CONCAT('%', :q, '%'))) AND " +
            "(:status IS NULL OR m.status = :status) AND " +
-           "(:type IS NULL OR m.type = :type) AND " +
-           "(:branchId IS NULL OR m.branchId = :branchId)")
+           "(:type IS NULL OR m.type = :type)")
     Page<Machine> searchAdmin(@Param("q") String q,
                              @Param("status") MachineStatus status,
                              @Param("type") MachineType type,
-                             @Param("branchId") UUID branchId,
                              Pageable pageable);
 }

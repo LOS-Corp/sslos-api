@@ -30,8 +30,8 @@ import java.util.UUID;
 
 /**
  * Operator accounts. Each level manages the level below (task/09 §3):
- * the Admin manages Admin and Owner accounts, the Owner manages Staff accounts. Single-store mode:
- * Staff work in the one store, so nobody is assigned to a branch. Customers register themselves and are not managed here. Guards keep at least one
+ * the Admin manages Admin and Owner accounts, the Owner manages Staff accounts.
+ * Customers register themselves and are not managed here. Guards keep at least one
  * active Admin and stop anyone from changing the role of, or locking, their own account.
  */
 @Service
@@ -87,7 +87,7 @@ public class AdminUserService {
         } catch (DataIntegrityViolationException e) {
             throw new DuplicateResourceException("Email hoặc số điện thoại đã được sử dụng");
         }
-        audit.record(AuditEntry.of(AuditAction.ACCOUNT_CREATED, ENTITY, user.getId(), null, actor)
+        audit.record(AuditEntry.of(AuditAction.ACCOUNT_CREATED, ENTITY, user.getId(), actor)
                 .withChange(null, Map.of("role", role.name())));
         return toDto(user);
     }
@@ -112,7 +112,7 @@ public class AdminUserService {
         user.setFullName(request.fullName().trim());
         user.setPhone(phone);
         userRepository.save(user);
-        audit.record(AuditEntry.of(AuditAction.ACCOUNT_UPDATED, ENTITY, user.getId(), null, actor)
+        audit.record(AuditEntry.of(AuditAction.ACCOUNT_UPDATED, ENTITY, user.getId(), actor)
                 .withChange(Map.of("role", oldRole.name()), Map.of("role", newRole.name())));
         return toDto(user);
     }
@@ -130,7 +130,7 @@ public class AdminUserService {
         }
         user.setStatus(status);
         userRepository.save(user);
-        audit.record(AuditEntry.of(AuditAction.ACCOUNT_STATUS_CHANGED, ENTITY, user.getId(), null, actor)
+        audit.record(AuditEntry.of(AuditAction.ACCOUNT_STATUS_CHANGED, ENTITY, user.getId(), actor)
                 .withChange(Map.of("status", before), Map.of("status", status)));
         return toDto(user);
     }
@@ -141,7 +141,7 @@ public class AdminUserService {
         user.changePassword(passwordEncoder.encode(password));
         userRepository.save(user);
         refreshTokenRepository.revokeAllByUser(user);
-        audit.record(AuditEntry.of(AuditAction.ACCOUNT_PASSWORD_RESET, ENTITY, user.getId(), null, actor));
+        audit.record(AuditEntry.of(AuditAction.ACCOUNT_PASSWORD_RESET, ENTITY, user.getId(), actor));
     }
 
     /** The account must exist and hold a role the caller manages. */

@@ -5,7 +5,7 @@ import java.util.Optional;
 
 /**
  * The four roles of SSLOS (BR-01, decision 27/10/2026). There is no MANAGER:
- * the Owner manages every branch and assigns Staff to branches.
+ * the Owner runs the store and manages Staff.
  */
 public enum Role {
     ADMIN,

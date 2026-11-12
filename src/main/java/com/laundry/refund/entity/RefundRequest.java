@@ -42,8 +42,6 @@ public class RefundRequest {
     @Column(name = "transaction_id", nullable = false)
     private UUID transactionId;
 
-    @Column(name = "branch_id", nullable = false)
-    private UUID branchId;
 
     @Column(name = "requested_by", nullable = false)
     private UUID requestedBy;
@@ -80,12 +78,11 @@ public class RefundRequest {
     private OffsetDateTime completedAt;
 
     /** A new exception refund waiting for an Owner decision. */
-    public static RefundRequest raise(UUID paymentId, UUID transactionId, UUID branchId, UUID requestedBy,
+    public static RefundRequest raise(UUID paymentId, UUID transactionId, UUID requestedBy,
                                       BigDecimal amount, String reason, String evidence, OffsetDateTime now) {
         RefundRequest request = new RefundRequest();
         request.paymentId = paymentId;
         request.transactionId = transactionId;
-        request.branchId = branchId;
         request.requestedBy = requestedBy;
         request.amount = amount;
         request.reason = reason;
@@ -97,9 +94,9 @@ public class RefundRequest {
     }
 
     /** A refund decided by a rule, already credited in this transaction (SM-06 R1–R2). */
-    public static RefundRequest settled(UUID paymentId, UUID transactionId, UUID branchId, UUID customerId,
+    public static RefundRequest settled(UUID paymentId, UUID transactionId, UUID customerId,
                                         BigDecimal amount, String reason, OffsetDateTime now) {
-        RefundRequest refund = raise(paymentId, transactionId, branchId, customerId, amount, reason, null, now);
+        RefundRequest refund = raise(paymentId, transactionId, customerId, amount, reason, null, now);
         refund.status = RefundStatus.COMPLETED;
         refund.completedAt = now;
         return refund;

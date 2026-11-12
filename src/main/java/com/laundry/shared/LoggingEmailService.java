@@ -30,7 +30,7 @@ public class LoggingEmailService implements EmailService {
         log.info("========== LAUNDRY COMPLETED EMAIL ==========");
         log.info("To: {} ({})", mail.toEmail(), mail.customerName());
         log.info("Booking {} · {} · {} · machines {}", mail.bookingCode(), mail.serviceName(),
-                mail.branchName(), mail.machineCodes());
+                mail.storeName(), mail.machineCodes());
         log.info("Completed at {}", mail.completedAt());
         log.info("=============================================");
     }

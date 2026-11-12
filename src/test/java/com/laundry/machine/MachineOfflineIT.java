@@ -21,14 +21,13 @@ class MachineOfflineIT {
     @Autowired private MachineService machines;
     @Autowired private JdbcTemplate jdbc;
 
-    private UUID branchId;
     private UUID machineId;
     private String code;
 
     @BeforeEach
     void setUp() {
-        branchId = Fixtures.bookableBranch(jdbc, 50_000);
-        machineId = Fixtures.washer(jdbc, branchId);
+        Fixtures.bookableStore(jdbc, 50_000);
+        machineId = Fixtures.washer(jdbc);
         code = jdbc.queryForObject("SELECT machine_code FROM machines WHERE id = ?", String.class, machineId);
     }
 
@@ -40,7 +39,7 @@ class MachineOfflineIT {
         assertThat(status()).isEqualTo("OFFLINE");
         assertThat(online()).isFalse();
 
-        machines.processHeartbeat(branchId, code, MachineRuntimeState.builder().build());
+        machines.processHeartbeat(code, MachineRuntimeState.builder().build());
 
         assertThat(status()).isEqualTo("AVAILABLE");
         assertThat(online()).isTrue();
@@ -55,7 +54,7 @@ class MachineOfflineIT {
         assertThat(status()).isEqualTo("OUT_OF_SERVICE");
         assertThat(online()).isFalse();
 
-        machines.processHeartbeat(branchId, code, MachineRuntimeState.builder().build());
+        machines.processHeartbeat(code, MachineRuntimeState.builder().build());
 
         assertThat(status()).isEqualTo("OUT_OF_SERVICE");
         assertThat(online()).isTrue();
@@ -69,7 +68,7 @@ class MachineOfflineIT {
         machines.detectOfflineMachines();
         assertThat(status()).isEqualTo("OFFLINE");
 
-        machines.processHeartbeat(branchId, code, MachineRuntimeState.builder().status("RUNNING").build());
+        machines.processHeartbeat(code, MachineRuntimeState.builder().status("RUNNING").build());
         assertThat(status()).isEqualTo("RUNNING");
     }
 
@@ -78,7 +77,7 @@ class MachineOfflineIT {
     void completedAfterNetworkLoss() {
         jdbc.update("UPDATE machines SET status = 'OFFLINE', online = FALSE WHERE id = ?", machineId);
 
-        machines.processStatus(branchId, code, MachineRuntimeState.builder().status("COMPLETED").build());
+        machines.processStatus(code, MachineRuntimeState.builder().status("COMPLETED").build());
 
         assertThat(status()).isEqualTo("COMPLETED");
     }

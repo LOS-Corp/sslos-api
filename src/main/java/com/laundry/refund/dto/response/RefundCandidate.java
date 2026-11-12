@@ -12,8 +12,7 @@ import java.util.UUID;
 public record RefundCandidate(
         UUID bookingId,
         String shortCode,
-        UUID branchId,
-        String branchName,
+        String storeName,
         String serviceName,
         String bookingStatus,
         Instant startTime,

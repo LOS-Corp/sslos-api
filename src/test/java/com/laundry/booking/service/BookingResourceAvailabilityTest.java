@@ -79,7 +79,7 @@ class BookingResourceAvailabilityTest {
     void washDryPlanStartsDryerOnlyAfterTransferAndReservesBothResourcesSeparately() {
         SlotPlanner.ServiceConfig config = new SlotPlanner.ServiceConfig(
                 "WASH_DRY", "Wash and dry", "SELF_SERVICE", "", 35, 45,
-                5, 5, 10, 0, BigDecimal.ONE, UUID.randomUUID(), "UTC",
+                5, 5, 10, 0, BigDecimal.ONE, "UTC",
                 LocalTime.MIN, LocalTime.MAX, List.of("WASHER", "DRYER"), 0);
 
         SlotPlanner.SlotPlan plan = SlotPlanner.buildPlan(config, START);
@@ -95,7 +95,7 @@ class BookingResourceAvailabilityTest {
     void washOnlyPlanKeepsBackendConfiguredDurationAtMinutePrecision() {
         SlotPlanner.ServiceConfig config = new SlotPlanner.ServiceConfig(
                 "WASH_ONLY", "Wash", "SELF_SERVICE", "", 35, 0,
-                5, 5, 0, 0, BigDecimal.ONE, UUID.randomUUID(), "UTC",
+                5, 5, 0, 0, BigDecimal.ONE, "UTC",
                 LocalTime.MIN, LocalTime.MAX, List.of("WASHER"), 0);
 
         SlotPlanner.SlotPlan plan = SlotPlanner.buildPlan(config, START);
@@ -135,7 +135,7 @@ class BookingResourceAvailabilityTest {
     }
 
     @Test
-    void branchLocalDayIntervalsRespectDaylightSavingTransitions() {
+    void storeLocalDayIntervalsRespectDaylightSavingTransitions() {
         ZoneId newYork = ZoneId.of("America/New_York");
         Instant springStart = LocalDate.of(2026, 3, 8).atStartOfDay(newYork).toInstant();
         Instant springEnd = LocalDate.of(2026, 3, 9).atStartOfDay(newYork).toInstant();

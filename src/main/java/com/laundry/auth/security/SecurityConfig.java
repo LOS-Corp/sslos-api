@@ -27,7 +27,7 @@ import java.util.List;
 
 /**
  * Stateless JWT security. URL rules mirror the permission matrix in
- * {@code task/09_PHAN_QUYEN_4_VAI_TRO.md}; finer rules (ownership, branch scope of Staff,
+ * {@code task/09_PHAN_QUYEN_4_VAI_TRO.md}; finer rules (ownership,
  * per-command roles) are enforced in the services. Anything not listed is denied (NFR-13).
  */
 @Configuration
@@ -91,7 +91,7 @@ public class SecurityConfig {
                         // Signed by payOS (HMAC) / by the device (HMAC challenge-response), not by JWT.
                         .requestMatchers(HttpMethod.POST, "/api/payments/payos/webhook").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/devices/activate", "/api/devices/activate/challenge").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/store", "/api/branches", "/api/branches/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/store", "/api/store/offerings").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/services", "/api/services/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/bookings/timeline-availability",
                                 "/api/bookings/recommendations", "/api/bookings/machine-search").permitAll()

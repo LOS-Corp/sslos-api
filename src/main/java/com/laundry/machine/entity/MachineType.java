@@ -7,6 +7,6 @@ package com.laundry.machine.entity;
 public enum MachineType {
     WASHER,
     DRYER,
-    /** Smart locker cabinet; its compartments are LOCKER rows in branch_service_resources. */
+    /** Smart locker cabinet; its compartments are LOCKER rows in service_resources. */
     LOCKER
 }

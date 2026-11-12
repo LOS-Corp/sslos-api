@@ -42,7 +42,6 @@ public class AuditService {
                 .action(entry.action().name())
                 .entityType(entry.entityType())
                 .entityId(entry.entityId() == null ? null : entry.entityId().toString())
-                .branchId(entry.branchId())
                 .reason(entry.reason())
                 .beforeState(json(entry.before()))
                 .afterState(json(entry.after()))
@@ -60,39 +59,35 @@ public class AuditService {
         }
     }
 
-    /** UC-10: newest first; {@code branchId} narrows the list to one branch. */
+    /** UC-10: newest first. */
     @Transactional(readOnly = true)
-    public Page<AuditLogView> list(UUID branchId, int page, int size) {
+    public Page<AuditLogView> list(int page, int size) {
         Pageable pageable = PageRequest.of(page, size);
-        Page<AuditLog> logs = branchId == null
-                ? repository.findAllByOrderByOccurredAtDesc(pageable)
-                : repository.findByBranchIdOrderByOccurredAtDesc(branchId, pageable);
+        Page<AuditLog> logs = repository.findAllByOrderByOccurredAtDesc(pageable);
         return logs.map(log -> new AuditLogView(log.getId(), log.getOccurredAt(), log.getActorId(), log.getActorRole(),
-                log.getAction(), log.getEntityType(), log.getEntityId(), log.getBranchId(), log.getReason(),
+                log.getAction(), log.getEntityType(), log.getEntityId(), log.getReason(),
                 log.getBeforeState(), log.getAfterState()));
     }
 
     /** One audit entry; {@code before} and {@code after} are the stored JSON states. */
     public record AuditLogView(Long id, OffsetDateTime occurredAt, UUID actorId, String actorRole, String action,
-                               String entityType, String entityId, UUID branchId, String reason, String before,
+                               String entityType, String entityId, String reason, String before,
                                String after) {
     }
 
     /** What happened, to which entity, by whom (null actor = system job). */
-    public record AuditEntry(AuditAction action, String entityType, Object entityId, UUID branchId,
-                             CurrentUser actor, String reason, Map<String, ?> before, Map<String, ?> after) {
+    public record AuditEntry(AuditAction action, String entityType, Object entityId, CurrentUser actor, String reason, Map<String, ?> before, Map<String, ?> after) {
 
-        public static AuditEntry of(AuditAction action, String entityType, Object entityId, UUID branchId,
-                                    CurrentUser actor) {
-            return new AuditEntry(action, entityType, entityId, branchId, actor, null, null, null);
+        public static AuditEntry of(AuditAction action, String entityType, Object entityId, CurrentUser actor) {
+            return new AuditEntry(action, entityType, entityId, actor, null, null, null);
         }
 
         public AuditEntry withReason(String value) {
-            return new AuditEntry(action, entityType, entityId, branchId, actor, value, before, after);
+            return new AuditEntry(action, entityType, entityId, actor, value, before, after);
         }
 
         public AuditEntry withChange(Map<String, ?> beforeState, Map<String, ?> afterState) {
-            return new AuditEntry(action, entityType, entityId, branchId, actor, reason, beforeState, afterState);
+            return new AuditEntry(action, entityType, entityId, actor, reason, beforeState, afterState);
         }
     }
 }

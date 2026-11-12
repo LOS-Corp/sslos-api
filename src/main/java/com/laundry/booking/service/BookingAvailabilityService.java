@@ -1,13 +1,13 @@
 package com.laundry.booking.service;
 
+import com.laundry.store.entity.StoreSettings;
+import com.laundry.store.service.StoreService;
+
 import com.laundry.shared.error.ErrorCode;
 
 import com.laundry.shared.error.BusinessException;
 
 import com.laundry.booking.dto.BookingDtos;
-import com.laundry.branch.entity.Branch;
-import com.laundry.branch.entity.BranchStatus;
-import com.laundry.branch.repository.BranchRepository;
 import com.laundry.machine.entity.Machine;
 import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.entity.MachineType;
@@ -36,7 +36,7 @@ import com.laundry.booking.domain.SlotPlanner.*;
 import static com.laundry.booking.domain.SlotPlanner.*;
 
 /**
- * Customer-facing availability (UC-16): service catalog, bookable branches, the free-time timeline,
+ * Customer-facing availability (UC-16): service catalog, what the store offers, the free-time timeline,
  * recommendations and the machine search. Read-only snapshots — the hold re-checks under locks.
  */
 @Service
@@ -44,9 +44,9 @@ import static com.laundry.booking.domain.SlotPlanner.*;
 @Slf4j
 public class BookingAvailabilityService {
     private final JdbcTemplate jdbc;
-    private final BranchRepository branchRepository;
+    private final StoreService store;
     private final MachineRepository machineRepository;
-    private final BranchBookingReadinessService readinessService;
+    private final StoreBookingReadinessService readinessService;
     private final BookingResourceQueries queries;
     private final com.laundry.config.BookingProperties props;
 
@@ -63,7 +63,7 @@ public class BookingAvailabilityService {
                 SELECT code, name, service_mode, description, processing_minutes,
                        secondary_processing_minutes, check_in_minutes, transfer_minutes,
                        checkout_minutes, pickup_deadline_hours,
-                       (SELECT MIN(price) FROM branch_service_offerings
+                       (SELECT MIN(price) FROM service_offerings
                         WHERE service_code = booking_service_definitions.code AND enabled = TRUE) starting_price
                 FROM booking_service_definitions
                 WHERE active = TRUE
@@ -94,42 +94,45 @@ public class BookingAvailabilityService {
                 .toList();
     }
 
-    @Transactional(readOnly = true)
-    public List<BranchServiceDto> listBranches(String serviceCode) {
-        ServiceConfig config = queries.serviceDefinition(serviceCode);
-        List<Branch> branches = branchRepository.findByStatusOrderByNameAsc(BranchStatus.ACTIVE);
-        List<BranchServiceDto> result = new ArrayList<>();
-        for (Branch branch : branches) {
-            ServiceConfig offered = queries.customerOffering(branch.getId(), serviceCode, null, null);
-            if (offered == null || !readinessService.isCustomerEligible(branch.getId(), serviceCode)) {
+    /** Services customers can book at the store right now, with price, durations and opening hours. */
+    @Transactional
+    public List<StoreOfferingDto> listOfferings() {
+        var readiness = readinessService.evaluate();
+        if (!readiness.ready()) {
+            return List.of();
+        }
+        StoreSettings settings = store.settings();
+        var hours = queries.openingHours();
+        List<StoreOfferingDto> result = new ArrayList<>();
+        for (var service : readiness.services()) {
+            if (!service.enabled() || !service.ready()) {
                 continue;
             }
-            List<String> resources = new ArrayList<>();
-            for (String requirement : config.requirements()) {
-                resources.add(requirement);
+            ServiceConfig offered = queries.customerOffering(service.code(), null, null);
+            if (offered == null) {
+                continue;
             }
-            result.add(new BranchServiceDto(
-                    branch.getId(), branch.getName(), branch.getAddress(), branch.getPhone(),
-                    offered.timezone(), offered.price(), offered.processingMinutes(),
+            result.add(new StoreOfferingDto(service.code(), settings.getName(), settings.getAddress(),
+                    settings.getPhone(), offered.timezone(), offered.price(), offered.processingMinutes(),
                     offered.secondaryProcessingMinutes(), offered.checkInMinutes(),
-                    offered.transferMinutes(), offered.checkoutMinutes(),
-                    queries.openingHours(branch.getId()), resources));
+                    offered.transferMinutes(), offered.checkoutMinutes(), hours,
+                    List.copyOf(offered.requirements())));
         }
         return result;
     }
 
     @Transactional(readOnly = true)
-    public TimelineAvailabilityResponse timelineAvailability(UUID branchId, String serviceCode, LocalDate date,
+    public TimelineAvailabilityResponse timelineAvailability(String serviceCode, LocalDate date,
                                                              String washProgram, String dryProgram) {
-        ServiceConfig config = queries.customerOffering(branchId, serviceCode, washProgram, dryProgram);
+        ServiceConfig config = queries.customerOffering(serviceCode, washProgram, dryProgram);
         if (config == null) {
-            throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not configured for the selected branch");
+            throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not offered at the store");
         }
         ZoneId zone;
         try {
             zone = ZoneId.of(config.timezone());
         } catch (RuntimeException e) {
-            throw BusinessException.of(ErrorCode.CONFIG_CONFLICT, "Branch timezone is invalid");
+            throw BusinessException.of(ErrorCode.CONFIG_CONFLICT, "Store timezone is invalid");
         }
         LocalDate today = LocalDate.now(zone);
         // BR-05: a booking starts at most 48 h ahead, so only today and the days that horizon reaches are shown.
@@ -145,18 +148,17 @@ public class BookingAvailabilityService {
                 .map(AllocationPlan::until)
                 .max(Comparator.naturalOrder())
                 .orElse(dayEnd);
-        Map<DayOfWeek, ScheduleHours> weeklyHours = queries.scheduleHours(branchId);
+        Map<DayOfWeek, ScheduleHours> weeklyHours = queries.scheduleHours();
         List<AvailabilityInterval> operatingIntervals =
                 operatingIntervals(weeklyHours, zone, dayStart, dayEnd);
         List<String> requirements = config.requirements();
         Map<String, List<Resource>> resourcesByType =
-                queries.resourcesByType(branchId, requirements, machineRepository.findByBranchId(branchId));
+                queries.resourcesByType(requirements, machineRepository.findAll());
         Map<UUID, Resource> resourcesById = byId(resourcesByType);
 
         Map<UUID, List<OccupiedInterval>> occupiedByResource =
-                queries.occupiedIntervals(branchId, dayStart, queryEnd, resourcesById, config.bufferMinutes());
-        List<AvailabilityInterval> unavailableIntervals = unavailableIntervals(
-                branchId, config, dayStart, dayEnd, occupiedByResource, resourcesById);
+                queries.occupiedIntervals(dayStart, queryEnd, resourcesById, config.bufferMinutes());
+        List<AvailabilityInterval> unavailableIntervals = unavailableIntervals(config, dayStart, dayEnd, occupiedByResource, resourcesById);
         Map<UUID, BookingDtos.TimelineResource> timelineResources = new java.util.LinkedHashMap<>();
         requirements.forEach(requirement -> resourcesByType.getOrDefault(requirement, List.of())
                 .forEach(resource -> timelineResources.put(resource.id(),
@@ -202,15 +204,15 @@ public class BookingAvailabilityService {
     }
 
     @Transactional(readOnly = true)
-    public RecommendationsResponse recommendations(UUID branchId, String serviceCode,
+    public RecommendationsResponse recommendations(String serviceCode,
                                                     Instant desiredStartTime, Instant preferredEndTime,
                                                     String washProgram, String dryProgram) {
         if (!isMinuteAligned(desiredStartTime)) {
             throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Start time must be aligned to a whole minute");
         }
-        ServiceConfig config = queries.customerOffering(branchId, serviceCode, washProgram, dryProgram);
+        ServiceConfig config = queries.customerOffering(serviceCode, washProgram, dryProgram);
         if (config == null) {
-            throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not configured for the selected branch");
+            throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not offered at the store");
         }
         SlotPlan plan = buildPlan(config, desiredStartTime);
         boolean preferredEndSatisfied = preferredEndTime == null
@@ -218,8 +220,8 @@ public class BookingAvailabilityService {
         List<RecommendationDto> recommendations = new ArrayList<>();
         if (preferredEndSatisfied && queries.isWithinOpeningHours(config, desiredStartTime, plan)) {
             List<List<Resource>> candidates = new ArrayList<>();
-            Map<String, List<Resource>> resourcesByType = queries.resourcesByType(config.branchId(),
-                    config.requirements(), machineRepository.findByBranchId(config.branchId()));
+            Map<String, List<Resource>> resourcesByType = queries.resourcesByType(
+                    config.requirements(), machineRepository.findAll());
             for (int i = 0; i < config.requirements().size(); i++) {
                 AllocationPlan allocation = plan.allocationPlans().get(i);
                 List<Resource> ofType = resourcesByType.get(config.requirements().get(i));
@@ -243,7 +245,7 @@ public class BookingAvailabilityService {
      * minute in [{@code from}, {@code to}] at which the whole service (plus the
      * turnover buffer) fits: machine bookable (online, commissioned, not in
      * ERROR / OUT_OF_SERVICE), no live booking, active hold, legacy reservation
-     * or running session overlapping, and inside branch opening hours (which
+     * or running session overlapping, and inside the store opening hours (which
      * may span midnight or be 24/7). Combo services pair the machine with the
      * first free companion resource. Results: earliestStart ASC, then price.
      *
@@ -251,17 +253,17 @@ public class BookingAvailabilityService {
      * start and resources under row locks before reserving anything.
      */
     @Transactional(readOnly = true)
-    public MachineSearchResponse machineSearch(UUID branchId, String serviceCode, Instant from, Instant to,
+    public MachineSearchResponse machineSearch(String serviceCode, Instant from, Instant to,
                                                String washProgram, String dryProgram, BigDecimal declaredLoadKg) {
-        ServiceConfig config = queries.customerOffering(branchId, serviceCode, washProgram, dryProgram);
+        ServiceConfig config = queries.customerOffering(serviceCode, washProgram, dryProgram);
         if (config == null) {
-            throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not configured for the selected branch");
+            throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not offered at the store");
         }
         ZoneId zone;
         try {
             zone = ZoneId.of(config.timezone());
         } catch (RuntimeException e) {
-            throw BusinessException.of(ErrorCode.CONFIG_CONFLICT, "Branch timezone is invalid");
+            throw BusinessException.of(ErrorCode.CONFIG_CONFLICT, "Store timezone is invalid");
         }
         if (to.isBefore(from)) {
             throw BusinessException.of(ErrorCode.INVALID_REQUEST, "The search window must end after it starts");
@@ -280,12 +282,12 @@ public class BookingAvailabilityService {
         }
 
         List<String> requirements = config.requirements();
-        List<Machine> branchMachines = machineRepository.findByBranchId(branchId);
+        List<Machine> machinesInStore = machineRepository.findAll();
         Map<String, List<Resource>> resourcesByType = new java.util.LinkedHashMap<>(
-                queries.resourcesByType(branchId, requirements, branchMachines));
+                queries.resourcesByType(requirements, machinesInStore));
         Map<UUID, Resource> resourcesById = byId(resourcesByType);
         Map<UUID, Machine> machines = new java.util.HashMap<>();
-        branchMachines.forEach(machine -> machines.put(machine.getId(), machine));
+        machinesInStore.forEach(machine -> machines.put(machine.getId(), machine));
 
         // BR-26 / SC-42: machines smaller than the declared load are never offered.
         List<UnavailableMachineDto> tooSmall = new ArrayList<>();
@@ -305,12 +307,11 @@ public class BookingAvailabilityService {
                 .map(AllocationPlan::until)
                 .max(Comparator.naturalOrder())
                 .orElse(lastStart);
-        Map<UUID, List<OccupiedInterval>> occupied = queries.occupiedIntervals(
-                branchId, firstStart, queryEnd, resourcesById, config.bufferMinutes());
+        Map<UUID, List<OccupiedInterval>> occupied = queries.occupiedIntervals(firstStart, queryEnd, resourcesById, config.bufferMinutes());
 
         // Every whole minute in the window whose service fits the opening hours.
         boolean locker = "ASSISTED_LOCKER".equals(config.mode());
-        Map<DayOfWeek, ScheduleHours> weeklyHours = queries.scheduleHours(branchId);
+        Map<DayOfWeek, ScheduleHours> weeklyHours = queries.scheduleHours();
         List<SlotPlan> plans = new ArrayList<>();
         for (Instant start = firstStart; !start.isAfter(lastStart); start = start.plusSeconds(60)) {
             SlotPlan plan = buildPlan(config, start);
@@ -355,12 +356,12 @@ public class BookingAvailabilityService {
                             unavailableReason(machine))));
         } else {
             jdbc.query("""
-                    SELECT id, resource_code, display_name FROM branch_service_resources
-                    WHERE branch_id = ? AND resource_type = ? AND enabled = FALSE
+                    SELECT id, resource_code, display_name FROM service_resources
+                    WHERE resource_type = ? AND enabled = FALSE
                     """, rs -> {
                 unavailable.add(new UnavailableMachineDto(rs.getObject("id", UUID.class), primaryType,
                         rs.getString("resource_code"), rs.getString("display_name"), null, "DISABLED"));
-            }, branchId, primaryType);
+            }, primaryType);
         }
 
         options.sort(Comparator.comparing(MachineSearchOptionDto::earliestStart)
@@ -368,7 +369,7 @@ public class BookingAvailabilityService {
                 .thenComparing(option -> option.resources().getFirst().resourceCode()));
         unavailable.sort(Comparator.comparing(UnavailableMachineDto::resourceCode));
         int durationMinutes = offsetMinutes(buildPlan(config, Instant.EPOCH).expectedEnd());
-        return new MachineSearchResponse(branchId, config.code(), zone.getId(), from, to, firstStart,
+        return new MachineSearchResponse(config.code(), zone.getId(), from, to, firstStart,
                 durationMinutes, config.bufferMinutes(), options, unavailable);
     }
 
@@ -451,7 +452,7 @@ public class BookingAvailabilityService {
                 if (interval[1].isAfter(end)) end = interval[1];
             } else {
                 if (start != null) {
-                    result.add(new AvailabilityInterval(start, end, "OPERATING", "Chi nhánh mở cửa",
+                    result.add(new AvailabilityInterval(start, end, "OPERATING", "Cửa hàng mở cửa",
                             null, null, null));
                 }
                 start = interval[0];
@@ -459,13 +460,13 @@ public class BookingAvailabilityService {
             }
         }
         if (start != null) {
-            result.add(new AvailabilityInterval(start, end, "OPERATING", "Chi nhánh mở cửa",
+            result.add(new AvailabilityInterval(start, end, "OPERATING", "Cửa hàng mở cửa",
                     null, null, null));
         }
         return result;
     }
 
-    private List<AvailabilityInterval> unavailableIntervals(UUID branchId,
+    private List<AvailabilityInterval> unavailableIntervals(
                                                             ServiceConfig config,
                                                             Instant dayStart,
                                                             Instant dayEnd,
@@ -473,7 +474,7 @@ public class BookingAvailabilityService {
                                                             Map<UUID, Resource> resourcesById) {
         List<AvailabilityInterval> result = new ArrayList<>();
         Set<String> requiredTypes = Set.copyOf(config.requirements());
-        for (Machine machine : machineRepository.findByBranchId(branchId)) {
+        for (Machine machine : machineRepository.findAll()) {
             String type = machine.getType().name();
             // A locker cabinet is not booked itself; its compartments are (filtered in resourcesFor).
             if (machine.getType() == MachineType.LOCKER) continue;
@@ -486,14 +487,14 @@ public class BookingAvailabilityService {
         for (String type : requiredTypes) {
             if ("WASHER".equals(type) || "DRYER".equals(type)) continue;
             jdbc.query("""
-                    SELECT id, resource_code FROM branch_service_resources
-                    WHERE branch_id = ? AND resource_type = ? AND enabled = FALSE
+                    SELECT id, resource_code FROM service_resources
+                    WHERE resource_type = ? AND enabled = FALSE
                     """, rs -> {
                 UUID resourceId = rs.getObject("id", UUID.class);
                 String code = rs.getString("resource_code");
                 result.add(new AvailabilityInterval(dayStart, dayEnd, "UNAVAILABLE",
                         "Tài nguyên không khả dụng: " + code, type, code, resourceId));
-            }, branchId, type);
+            }, type);
         }
 
         occupied.forEach((resourceId, intervals) -> {

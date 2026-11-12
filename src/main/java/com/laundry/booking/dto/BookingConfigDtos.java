@@ -41,10 +41,8 @@ public final class BookingConfigDtos {
             List<ValidationIssue> issues
     ) {}
 
-    public record BranchReadiness(
-            UUID branchId,
-            String branchName,
-            String branchStatus,
+    public record StoreReadiness(
+            String storeName,
             String timezone,
             boolean bookingSettingsValid,
             boolean bookingHoursValid,
@@ -57,7 +55,7 @@ public final class BookingConfigDtos {
     ) {}
 
     /** {@code turnoverBufferMinutes}: idle time kept after every booking before the next one may start. */
-    public record BookingSettingsDto(UUID branchId, String timezone, int turnoverBufferMinutes) {}
+    public record BookingSettingsDto(String timezone, int turnoverBufferMinutes) {}
 
     public record BookingSettingsUpdate(
             @NotBlank @Size(max = 80) String timezone,

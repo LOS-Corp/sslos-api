@@ -49,7 +49,7 @@ public class AutomaticRefundService {
      * when earlier refunds already used the rest of the cap.
      */
     @Transactional(propagation = Propagation.MANDATORY)
-    public Money settle(UUID transactionId, UUID branchId, UUID customerId, Money amount, WalletEntryType type,
+    public Money settle(UUID transactionId, UUID customerId, Money amount, WalletEntryType type,
                         String reason) {
         Money credited = Money.ZERO;
         for (Payment listed : paidPayments(transactionId)) {
@@ -63,7 +63,7 @@ public class AutomaticRefundService {
             if (!part.isPositive()) {
                 continue;
             }
-            RefundRequest refund = refunds.save(RefundRequest.settled(payment.getId(), transactionId, branchId,
+            RefundRequest refund = refunds.save(RefundRequest.settled(payment.getId(), transactionId,
                     customerId, BigDecimal.valueOf(part.vnd()), reason, OffsetDateTime.now(clock)));
             wallet.credit(customerId, part, type, "refund:" + refund.getId(), reason);
             credited = credited.plus(part);

@@ -31,9 +31,10 @@ public final class BookingDtos {
             List<String> requiredResources
     ) {}
 
-    public record BranchServiceDto(
-            UUID branchId,
-            String branchName,
+    /** One service the store offers, with what a customer needs to book it (GET /api/store/offerings). */
+    public record StoreOfferingDto(
+            String serviceCode,
+            String storeName,
             String address,
             String phone,
             String timezone,
@@ -43,11 +44,11 @@ public final class BookingDtos {
             int checkInMinutes,
             int transferMinutes,
             int checkoutMinutes,
-            List<BranchHoursDto> openingHours,
+            List<OpeningHoursDto> openingHours,
             List<String> availableResources
     ) {}
 
-    public record BranchHoursDto(String dayOfWeek, LocalTime opensAt, LocalTime closesAt) {}
+    public record OpeningHoursDto(String dayOfWeek, LocalTime opensAt, LocalTime closesAt) {}
 
     public record RecommendedResourceDto(
             UUID resourceId,
@@ -109,7 +110,6 @@ public final class BookingDtos {
     ) {}
 
     public record MachineSearchResponse(
-            UUID branchId,
             String serviceCode,
             String timezone,
             Instant windowStart,
@@ -186,8 +186,6 @@ public final class BookingDtos {
     public record AvailableStartRange(Instant startTime, Instant endExclusive) {}
 
     public record CreateHoldRequest(
-            /* Single-store mode: optional, null = the store. */
-            UUID branchId,
             @NotBlank String serviceCode,
             @NotNull Instant startTime,
             @NotNull List<UUID> resourceIds,
@@ -197,13 +195,7 @@ public final class BookingDtos {
             String dryProgram,
             /* Laundry the customer brings (kg); never booked on a smaller machine (BR-26). Optional. */
             @DecimalMin(value = "0.1") BigDecimal declaredLoadKg
-    ) {
-        /** This request with the store filled in when the client sent no branch. */
-        public CreateHoldRequest inStore(UUID storeId) {
-            return branchId != null ? this : new CreateHoldRequest(storeId, serviceCode, startTime, resourceIds,
-                    idempotencyKey, washProgram, dryProgram, declaredLoadKg);
-        }
-    }
+    ) {}
 
     public record BookingDto(
             UUID transactionId,
@@ -213,10 +205,9 @@ public final class BookingDtos {
             String serviceMode,
             String status,
             String transactionStatus,
-            UUID branchId,
-            String branchName,
-            String branchAddress,
-            String branchPhone,
+            String storeName,
+            String storeAddress,
+            String storePhone,
             Instant startTime,
             Instant expectedEndTime,
             Instant holdExpiresAt,
@@ -245,7 +236,7 @@ public final class BookingDtos {
             @NotNull LocalTime closesAt
     ) {}
 
-    public record BranchOfferingRequest(
+    public record ServiceOfferingRequest(
             boolean enabled,
             @NotNull @DecimalMin(value = "0.01") BigDecimal price,
             @Positive Integer processingMinutes,
@@ -260,7 +251,6 @@ public final class BookingDtos {
 
     public record ResourceDto(
             UUID id,
-            UUID branchId,
             String resourceType,
             String resourceCode,
             String displayName,

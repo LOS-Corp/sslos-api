@@ -64,7 +64,7 @@ class DeviceRegistryServiceTest {
             return device;
         });
 
-        machine = Machine.builder().id(UUID.randomUUID()).machineCode("WM01").branchId(UUID.randomUUID())
+        machine = Machine.builder().id(UUID.randomUUID()).machineCode("WM01")
                 .type(MachineType.WASHER).deploymentStatus(MachineDeploymentStatus.UNASSIGNED).build();
         machineRepository = mock(MachineRepository.class);
         when(machineRepository.findById(machine.getId())).thenReturn(Optional.of(machine));
@@ -185,6 +185,6 @@ class DeviceRegistryServiceTest {
 
         service.onDisconnected(DEVICE);
 
-        verify(machineService).markOfflineFromDevice(machine.getBranchId(), "WM01", "OFFLINE", null);
+        verify(machineService).markOfflineFromDevice("WM01", "OFFLINE", null);
     }
 }

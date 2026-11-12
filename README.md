@@ -171,7 +171,7 @@ Invoke-RestMethod -Uri "http://localhost:8080/api/machines/WM001/commands" `
   -ContentType "application/json" `
   -Body '{"command":"START","bookingId":"your-booking-uuid"}'
 
-# Operator override (Staff of the branch, Owner or Admin): a reason is mandatory (BR-25)
+# Operator override (Staff, Owner or Admin): a reason is mandatory (BR-25)
 Invoke-RestMethod -Uri "http://localhost:8080/api/machines/WM001/commands" `
   -Method POST `
   -Headers @{Authorization="Bearer $token"} `
@@ -229,42 +229,6 @@ client.activate();
 
 ---
 
-## Manual Testing with MQTTX
-
-> MQTTX is for debugging only — not used in production.
-
-> Replace `00000000-0000-0000-0000-000000000001` with the actual branchId UUID of your machine.
-
-### Subscribe to WM001 topics:
-- `laundry/washer/00000000-0000-0000-0000-000000000001/WM001/status`
-- `laundry/washer/00000000-0000-0000-0000-000000000001/WM001/telemetry`
-- `laundry/washer/00000000-0000-0000-0000-000000000001/WM001/heartbeat`
-- `laundry/washer/00000000-0000-0000-0000-000000000001/WM001/event`
-
-### Publish a simulated STATUS:
-```json
-Topic: laundry/washer/00000000-0000-0000-0000-000000000001/WM001/status
-Payload:
-{
-  "machineId": "WM001",
-  "status": "AVAILABLE",
-  "weight": 0.00,
-  "waterLevel": 0.0,
-  "doorClosed": true,
-  "leak": false,
-  "error": ""
-}
-```
-
-### Publish a simulated HEARTBEAT:
-```json
-Topic: laundry/washer/00000000-0000-0000-0000-000000000001/WM001/heartbeat
-Payload:
-{"machineId": "WM001", "online": true, "uptimeMs": 12345}
-```
-
----
-
 ## API Reference
 
 ### Swagger UI
@@ -286,20 +250,23 @@ Payload:
 
 ### Admin Booking Configuration
 
-The management web exposes booking readiness and branch configuration at
-`/admin/booking-config`. Its backend API is restricted to `ADMIN` and `OWNER`:
+The management web exposes the store's booking readiness and configuration at
+`/admin/booking-config`. Its backend API is restricted to the `OWNER`:
 
 | Method | URL | Description |
 |--------|-----|-------------|
-| `GET` | `/api/admin/booking-config/branches` | Read readiness overview for all branches |
-| `GET` | `/api/admin/booking-config/branches/{branchId}` | Read branch configuration and readiness |
-| `GET` / `PUT` | `/api/admin/booking-config/branches/{branchId}/settings` | Read or update booking settings |
-| `GET` / `PUT` | `/api/admin/booking-config/branches/{branchId}/hours` | Read or update weekly opening hours |
-| `GET` | `/api/admin/booking-config/branches/{branchId}/services` | List branch service offerings |
-| `PUT` | `/api/admin/booking-config/branches/{branchId}/services/{serviceCode}` | Configure a service offering |
-| `GET` | `/api/admin/booking-config/branches/{branchId}/machines` | List branch machines |
-| `GET` / `POST` | `/api/admin/booking-config/branches/{branchId}/resources` | List or create locker/ironing resources |
-| `PUT` | `/api/admin/booking-config/branches/{branchId}/resources/{resourceId}` | Update a locker/ironing resource |
+| `GET` | `/api/admin/booking-config` | Store configuration and whether customers can book |
+| `GET` / `PUT` | `/api/admin/booking-config/settings` | Read or update booking settings (timezone, turnover buffer) |
+| `GET` / `PUT` | `/api/admin/booking-config/hours` | Read or update weekly opening hours |
+| `GET` | `/api/admin/booking-config/services` | List the store's service offerings |
+| `PUT` | `/api/admin/booking-config/services/{serviceCode}` | Configure a service offering |
+| `GET` | `/api/admin/booking-config/machines` | List the store's machines |
+| `GET` / `POST` | `/api/admin/booking-config/resources` | List or create locker/ironing resources |
+| `PUT` | `/api/admin/booking-config/resources/{resourceId}` | Update a locker/ironing resource |
+
+The store itself: `GET /api/store` (public), `GET /api/store/offerings` (public, what customers can book),
+`GET` / `PUT /api/admin/store` (Owner edits name, address, phone, map). V58 turned the old `branches` table
+into the one-row `store_settings` and dropped every `branch_id`: the server runs inside one store.
 
 Booking configuration uses the existing schema (including migration V30); no
 additional migration is required. The current hours schema allows one opening
@@ -370,14 +337,14 @@ When ready to add reliable command delivery:
 
 ## Security Notes
 
-- Four roles: ADMIN, OWNER, STAFF, CUSTOMER (no MANAGER). The Owner manages every branch; Staff only
-  the branches in `branch_assignments`. Matrix: `task/09_PHAN_QUYEN_4_VAI_TRO.md` (repo root).
+- Four roles: ADMIN, OWNER, STAFF, CUSTOMER (no MANAGER). One store: the Owner edits it, Staff work across
+  all of it. Matrix: `task/09_PHAN_QUYEN_4_VAI_TRO.md` (repo root).
 - `SecurityConfig` denies every endpoint that is not listed (`anyRequest().denyAll()`).
 - Identity always comes from the JWT; no request body carries a user or approver id.
 - JWT tokens expire in 15 minutes (refresh tokens: 7 days, rotated). Five wrong passwords in 15 minutes lock
   the login for 15 minutes (429).
-- Machine status reads are public (kiosk display). Event and command history need Staff (own branch), Owner or Admin.
+- Machine status reads are public (kiosk display). Event and command history need Staff, Owner or Admin.
 - Customers may only STOP/PAUSE/RESUME their own running session; operator overrides need a reason and are audited.
-- STOMP `/ws`: anonymous viewers may watch `/topic/machines/**`; branch topics need a JWT in scope.
+- STOMP `/ws`: anonymous viewers may watch `/topic/machines/**`; `/user/queue/**` needs a JWT.
 - MQTT credentials are **never** exposed to frontend clients; each ESP32 has its own EMQX account.
 - `prod` profile refuses development secrets, the mock payment gateway and disables Swagger.

@@ -22,7 +22,6 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.LocalDate;
-import com.laundry.branch.service.StoreService;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -40,15 +39,13 @@ public class CustomerBookingController {
     private final BookingAvailabilityService availabilityService;
     private final BookingCancellationService cancellationService;
     private final PaymentService paymentService;
-    private final StoreService store;
 
     @GetMapping("/timeline-availability")
-    public TimelineAvailabilityResponse timelineAvailability(@RequestParam(required = false) UUID branchId,
-                                                               @RequestParam String serviceCode,
+    public TimelineAvailabilityResponse timelineAvailability(@RequestParam String serviceCode,
                                                                @RequestParam LocalDate date,
                                                                @RequestParam(required = false) String washProgram,
                                                                @RequestParam(required = false) String dryProgram) {
-        return availabilityService.timelineAvailability(store.idOr(branchId), serviceCode, date, washProgram, dryProgram);
+        return availabilityService.timelineAvailability(serviceCode, date, washProgram, dryProgram);
     }
 
     /**
@@ -57,32 +54,30 @@ public class CustomerBookingController {
      * window may cross midnight; it is capped at 48 hours.
      */
     @GetMapping("/machine-search")
-    public MachineSearchResponse machineSearch(@RequestParam(required = false) UUID branchId,
-                                               @RequestParam String serviceCode,
+    public MachineSearchResponse machineSearch(@RequestParam String serviceCode,
                                                @RequestParam Instant from,
                                                @RequestParam Instant to,
                                                @RequestParam(required = false) String washProgram,
                                                @RequestParam(required = false) String dryProgram,
                                                @RequestParam(required = false) BigDecimal declaredLoadKg) {
-        return availabilityService.machineSearch(store.idOr(branchId), serviceCode, from, to, washProgram, dryProgram,
+        return availabilityService.machineSearch(serviceCode, from, to, washProgram, dryProgram,
                 declaredLoadKg);
     }
 
     @GetMapping("/recommendations")
-    public RecommendationsResponse recommendations(@RequestParam(required = false) UUID branchId,
-                                                    @RequestParam String serviceCode,
+    public RecommendationsResponse recommendations(@RequestParam String serviceCode,
                                                     @RequestParam Instant desiredStartTime,
                                                     @RequestParam(required = false) Instant preferredEndTime,
                                                     @RequestParam(required = false) String washProgram,
                                                     @RequestParam(required = false) String dryProgram) {
-        return availabilityService.recommendations(store.idOr(branchId), serviceCode, desiredStartTime, preferredEndTime,
+        return availabilityService.recommendations(serviceCode, desiredStartTime, preferredEndTime,
                 washProgram, dryProgram);
     }
 
     @PostMapping("/holds")
     public BookingDto createHold(@Valid @RequestBody CreateHoldRequest request,
                                  CurrentUser customer) {
-        return bookingService.createHold(customer.id(), request.inStore(store.id()));
+        return bookingService.createHold(customer.id(), request);
     }
 
     @PostMapping("/{bookingId}/checkout")

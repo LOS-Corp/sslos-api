@@ -105,7 +105,6 @@ public class MachineRuntimeStateService {
     public void applyTelemetry(Machine machine, MachineRuntimeState snapshot) {
         if (machine == null || snapshot == null) return;
         snapshot.setMachineId(machine.getId());
-        snapshot.setBranchId(machine.getBranchId());
         snapshot.setMachineCode(machine.getMachineCode());
         if (snapshot.getLastSeen() == null) snapshot.setLastSeen(OffsetDateTime.now());
         // Default online to true when telemetry is received but firmware didn't say.
@@ -140,7 +139,6 @@ public class MachineRuntimeStateService {
             // No telemetry yet — start fresh.
             merged = snapshot;
             merged.setMachineId(machine.getId());
-            merged.setBranchId(machine.getBranchId());
             merged.setMachineCode(machine.getMachineCode());
         }
         if (merged.getLastSeen() == null) merged.setLastSeen(OffsetDateTime.now());
@@ -161,7 +159,6 @@ public class MachineRuntimeStateService {
         if (next == null) {
             next = snapshot;
             next.setMachineId(machine.getId());
-            next.setBranchId(machine.getBranchId());
             next.setMachineCode(machine.getMachineCode());
         }
         next.setOnline(true);
@@ -183,7 +180,6 @@ public class MachineRuntimeStateService {
         if (next == null) {
             next = snapshot;
             next.setMachineId(machine.getId());
-            next.setBranchId(machine.getBranchId());
             next.setMachineCode(machine.getMachineCode());
         }
         next.setLastSeen(OffsetDateTime.now());
@@ -208,7 +204,6 @@ public class MachineRuntimeStateService {
         if (next == null && machine != null) {
             next = MachineRuntimeState.builder()
                     .machineId(machine.getId())
-                    .branchId(machine.getBranchId())
                     .machineCode(machine.getMachineCode())
                     .online(false)
                     .status(MachineStatus.OFFLINE.name())
@@ -221,11 +216,11 @@ public class MachineRuntimeStateService {
 
     /**
      * Lookup helper that returns a defensive copy of the latest snapshot for
-     * a (branchId, machineCode) tuple, looking up the Machine entity on miss.
+     * a machine code, looking up the Machine entity on miss.
      * Returns {@code null} if the machine is unknown.
      */
-    public MachineRuntimeState getOrLoad(UUID branchId, String machineCode) {
-        Optional<Machine> mOpt = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
+    public MachineRuntimeState getOrLoad(String machineCode) {
+        Optional<Machine> mOpt = machineRepository.findByMachineCode(machineCode);
         if (mOpt.isEmpty()) return null;
         UUID id = mOpt.get().getId();
         MachineRuntimeState s = states.get(id);
@@ -459,7 +454,6 @@ public class MachineRuntimeStateService {
     private MachineRuntimeState copyOf(MachineRuntimeState in) {
         return MachineRuntimeState.builder()
                 .machineId(in.getMachineId())
-                .branchId(in.getBranchId())
                 .machineCode(in.getMachineCode())
                 .online(in.getOnline())
                 .linkConnected(in.getLinkConnected())

@@ -1,19 +1,14 @@
 package com.laundry.security;
 
 import com.laundry.audit.repository.AuditLogRepository;
-import com.laundry.branch.entity.Branch;
-import com.laundry.branch.repository.BranchRepository;
 import com.laundry.machine.entity.Machine;
 import com.laundry.machine.entity.MachineDeploymentStatus;
 import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.entity.MachineType;
 import com.laundry.machine.repository.MachineRepository;
-import com.laundry.branch.service.StoreService;
 import com.laundry.shared.security.Role;
 import com.laundry.support.IntegrationTest;
-import com.laundry.user.entity.BranchAssignment;
 import com.laundry.user.entity.User;
-import com.laundry.user.repository.BranchAssignmentRepository;
 import com.laundry.user.repository.RoleRepository;
 import com.laundry.user.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -42,32 +37,27 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 /**
  * The permission matrix of task/09 exercised through the real security filter chain:
- * URL rules, method security, ownership and Staff branch scope.
+ * URL rules, method security and ownership.
  */
 @IntegrationTest
 @AutoConfigureMockMvc
 class SecurityMatrixIT {
 
     @Autowired private MockMvc mvc;
-    @Autowired private BranchRepository branches;
     @Autowired private MachineRepository machines;
     @Autowired private UserRepository users;
     @Autowired private RoleRepository roles;
-    @Autowired private BranchAssignmentRepository assignments;
     @Autowired private AuditLogRepository auditLogs;
 
-    private UUID branchA;
     private String machineA;
     private UUID staffOfA;
     private UUID staffOfB;
 
     @BeforeEach
     void setUp() {
-        branchA = branch();
-        UUID branchB = branch();
-        machineA = machine(branchA);
-        staffOfA = staff(branchA);
-        staffOfB = staff(branchB);
+        machineA = machine();
+        staffOfA = staff();
+        staffOfB = staff();
     }
 
     @Test
@@ -107,12 +97,13 @@ class SecurityMatrixIT {
     @Test
     @DisplayName("Public reads stay public; operational history needs an operator")
     void publicAndOperationalReads() throws Exception {
-        mvc.perform(get("/api/branches")).andExpect(status().isOk());
+        mvc.perform(get("/api/store")).andExpect(status().isOk());
+        mvc.perform(get("/api/store/offerings")).andExpect(status().isOk());
         mvc.perform(get("/api/machines/" + machineA + "/events")).andExpect(status().isUnauthorized());
         mvc.perform(get("/api/machines/" + machineA + "/commands").with(as(Role.CUSTOMER)))
                 .andExpect(status().isForbidden());
         mvc.perform(get("/api/machines/" + machineA + "/commands").with(as(staffOfB, Role.STAFF)))
-                .andExpect(status().isOk());   // single store: every Staff works on every machine
+                .andExpect(status().isOk());   // every Staff works on every machine of the store
         mvc.perform(get("/api/machines/" + machineA + "/commands").with(as(staffOfA, Role.STAFF)))
                 .andExpect(status().isOk());
     }
@@ -120,9 +111,9 @@ class SecurityMatrixIT {
     @Test
     @DisplayName("BR-01: every Staff of the store lists the lockers; the Admin does not")
     void staffLockerScope() throws Exception {
-        mvc.perform(get("/api/staff/lockers").param("branchId", branchA.toString()).with(as(staffOfB, Role.STAFF)))
+        mvc.perform(get("/api/staff/lockers").with(as(staffOfB, Role.STAFF)))
                 .andExpect(status().isOk());
-        mvc.perform(get("/api/staff/lockers").param("branchId", branchA.toString()).with(as(staffOfA, Role.STAFF)))
+        mvc.perform(get("/api/staff/lockers").with(as(staffOfA, Role.STAFF)))
                 .andExpect(status().isOk());
         mvc.perform(get("/api/staff/lockers").with(as(Role.ADMIN))).andExpect(status().isForbidden());
     }
@@ -185,7 +176,7 @@ class SecurityMatrixIT {
         mvc.perform(get("/api/admin/audit-logs").with(as(Role.ADMIN))).andExpect(status().isOk());
 
         mvc.perform(command(machineA, "STOP", "Audit me").with(as(Role.OWNER))).andExpect(status().isAccepted());
-        mvc.perform(get("/api/admin/audit-logs").param("branchId", branchA.toString()).with(as(Role.OWNER)))
+        mvc.perform(get("/api/admin/audit-logs").with(as(Role.OWNER)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.content[0].action").value("REMOTE_COMMAND"))
                 .andExpect(jsonPath("$.content[0].reason").value("Audit me"));
@@ -194,27 +185,22 @@ class SecurityMatrixIT {
     }
 
     @Test
-    @DisplayName("Single store: the branch list holds only the store, and only once customers can book there")
-    void branchListIsTheStore() throws Exception {
-        String store = StoreService.SEEDED_STORE_ID.toString();
-        mvc.perform(get("/api/store")).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(store));
-        mvc.perform(get("/api/branches").with(as(Role.OWNER)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.length()").value(1))
-                .andExpect(jsonPath("$[0].id").value(store));
-        mvc.perform(get("/api/branches").with(as(Role.CUSTOMER)))
-                .andExpect(jsonPath("$[?(@.id == '" + branchA + "')]").isEmpty());
+    @DisplayName("The store is public, the branch API is gone; customers see no offering before the store is ready")
+    void theStoreIsPublic() throws Exception {
+        mvc.perform(get("/api/store")).andExpect(status().isOk()).andExpect(jsonPath("$.name").isNotEmpty());
+        mvc.perform(get("/api/branches")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/api/branches").with(as(Role.OWNER))).andExpect(status().isForbidden());
     }
 
     @Test
-    @DisplayName("SC-16 / SC-22: Staff cannot approve refunds; Admin cannot touch prices, branches or refunds")
+    @DisplayName("SC-16 / SC-22: Staff cannot approve refunds; Admin cannot touch prices, the store or refunds")
     void roleBoundaries() throws Exception {
         String anyRefund = "/api/refunds/" + UUID.randomUUID();
         mvc.perform(post(anyRefund + "/approve").with(as(Role.STAFF))).andExpect(status().isForbidden());
         mvc.perform(post(anyRefund + "/approve").with(as(Role.ADMIN))).andExpect(status().isForbidden());
 
-        mvc.perform(get("/api/admin/booking-config/branches").with(as(Role.ADMIN))).andExpect(status().isForbidden());
-        mvc.perform(get("/api/admin/booking-config/branches").with(as(Role.OWNER))).andExpect(status().isOk());
+        mvc.perform(get("/api/admin/booking-config").with(as(Role.ADMIN))).andExpect(status().isForbidden());
+        mvc.perform(get("/api/admin/booking-config").with(as(Role.OWNER))).andExpect(status().isOk());
         mvc.perform(put("/api/admin/store").with(as(Role.ADMIN))
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isForbidden());
@@ -253,15 +239,10 @@ class SecurityMatrixIT {
                 List.of(new SimpleGrantedAuthority(role.authority()))));
     }
 
-    private UUID branch() {
-        return branches.save(Branch.builder().name("Matrix " + UUID.randomUUID()).build()).getId();
-    }
-
-    private String machine(UUID branchId) {
+    private String machine() {
         String code = "M" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         machines.save(Machine.builder()
                 .machineCode(code)
-                .branchId(branchId)
                 .type(MachineType.WASHER)
                 .status(MachineStatus.AVAILABLE)
                 .deploymentStatus(MachineDeploymentStatus.ACTIVE)
@@ -270,12 +251,11 @@ class SecurityMatrixIT {
         return code;
     }
 
-    private UUID staff(UUID branchId) {
+    private UUID staff() {
         User user = new User("Staff", UUID.randomUUID() + "@test.vn",
                 "+849" + String.format("%08d", (long) (Math.random() * 100_000_000)), "x");
         user.addRole(roles.findByName("STAFF").orElseThrow());
         UUID id = users.saveAndFlush(user).getId();
-        assignments.save(new BranchAssignment(id, branchId, null, OffsetDateTime.now()));
         return id;
     }
 }

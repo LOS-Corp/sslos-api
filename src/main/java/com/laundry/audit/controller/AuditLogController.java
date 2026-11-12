@@ -24,10 +24,9 @@ public class AuditLogController {
     private final AuditService audit;
 
     @GetMapping
-    @Operation(summary = "Audit entries, newest first; branchId narrows the list to one branch")
-    public Page<AuditLogView> list(@RequestParam(required = false) UUID branchId,
-                                   @RequestParam(defaultValue = "0") @Min(0) int page,
+    @Operation(summary = "Audit entries, newest first")
+    public Page<AuditLogView> list(@RequestParam(defaultValue = "0") @Min(0) int page,
                                    @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
-        return audit.list(branchId, page, size);
+        return audit.list(page, size);
     }
 }

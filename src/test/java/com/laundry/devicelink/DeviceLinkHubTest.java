@@ -23,7 +23,6 @@ import static org.mockito.Mockito.when;
 class DeviceLinkHubTest {
 
     private static final String DEVICE = "ESP-24A1B2C3D4E5";
-    private static final UUID BRANCH = UUID.fromString("00000000-0000-0000-0000-000000000001");
     private static final String HELLO = "@hello {\"deviceId\":\"" + DEVICE + "\",\"firmwareVersion\":\"2.0\",\"deviceType\":\"WASHER\"}";
 
     private final DeviceRegistryService registry = mock(DeviceRegistryService.class);
@@ -82,14 +81,14 @@ class DeviceLinkHubTest {
         FakeConnection com3 = connect("COM3", LinkState.of(LinkState.State.VERIFIED, DEVICE));
 
         hub.lineReceived(com3, "@heartbeat {\"status\":\"AVAILABLE\"}");
-        verify(router, never()).route(any(), any(), any(), any());
+        verify(router, never()).route(any(), any(), any());
 
-        when(registry.linkState(DEVICE)).thenReturn(LinkState.bound(DEVICE, BRANCH, "WM001", "WASHER"));
+        when(registry.linkState(DEVICE)).thenReturn(LinkState.bound(DEVICE, "WM001", "WASHER"));
         hub.onLinkChanged(new DeviceLinkChanged(DEVICE));
         assertThat(com3.last()).contains("\"state\":\"BOUND\"").contains("WM001");
 
         hub.lineReceived(com3, "@heartbeat {\"status\":\"AVAILABLE\"}");
-        verify(router).route(BRANCH, "WM001", DeviceChannel.HEARTBEAT, "{\"status\":\"AVAILABLE\"}");
+        verify(router).route("WM001", DeviceChannel.HEARTBEAT, "{\"status\":\"AVAILABLE\"}");
     }
 
     @Test
@@ -101,12 +100,12 @@ class DeviceLinkHubTest {
         hub.lineReceived(com3, "@status {\"status\":\"AVAILABLE\"}");
 
         assertThat(com3.last()).contains("HELLO_REQUIRED");
-        verify(router, never()).route(any(), any(), any(), any());
+        verify(router, never()).route(any(), any(), any());
     }
 
     @Test
     void theSameBoardOnASecondPortIsRefused() {
-        connect("COM3", LinkState.bound(DEVICE, BRANCH, "WM001", "WASHER"));
+        connect("COM3", LinkState.bound(DEVICE, "WM001", "WASHER"));
         FakeConnection com4 = new FakeConnection("COM4");
         hub.connected(com4);
 
@@ -115,13 +114,13 @@ class DeviceLinkHubTest {
         assertThat(com4.last()).contains("DUPLICATE");
         assertThat(hub.portOf(DEVICE)).isEqualTo("COM3");
         hub.lineReceived(com4, "@status {\"status\":\"RUNNING\"}");
-        verify(router, never()).route(any(), any(), any(), any());
+        verify(router, never()).route(any(), any(), any());
     }
 
     @Test
     void commandsGoToTheBoundBoardsPort() {
-        FakeConnection com3 = connect("COM3", LinkState.bound(DEVICE, BRANCH, "WM001", "WASHER"));
-        Machine machine = Machine.builder().machineCode("WM001").branchId(BRANCH).deviceId(DEVICE).build();
+        FakeConnection com3 = connect("COM3", LinkState.bound(DEVICE, "WM001", "WASHER"));
+        Machine machine = Machine.builder().machineCode("WM001").deviceId(DEVICE).build();
 
         hub.send(machine, "{\"type\":\"STOP\"}");
 
@@ -130,15 +129,15 @@ class DeviceLinkHubTest {
 
     @Test
     void sendingToAnUnpluggedBoardFailsAndUnplugMarksItOffline() {
-        FakeConnection com3 = connect("COM3", LinkState.bound(DEVICE, BRANCH, "WM001", "WASHER"));
-        Machine machine = Machine.builder().machineCode("WM001").branchId(BRANCH).deviceId(DEVICE).build();
+        FakeConnection com3 = connect("COM3", LinkState.bound(DEVICE, "WM001", "WASHER"));
+        Machine machine = Machine.builder().machineCode("WM001").deviceId(DEVICE).build();
 
         hub.disconnected(com3);
 
         verify(registry).onDisconnected(DEVICE);
         assertThat(hub.isConnected(DEVICE)).isFalse();
         assertThatThrownBy(() -> hub.send(machine, "{}")).isInstanceOf(DeviceNotConnectedException.class);
-        Machine unbound = Machine.builder().machineCode("WM002").branchId(BRANCH).build();
+        Machine unbound = Machine.builder().machineCode("WM002").build();
         assertThatThrownBy(() -> hub.send(unbound, "{}")).isInstanceOf(DeviceNotConnectedException.class);
     }
 

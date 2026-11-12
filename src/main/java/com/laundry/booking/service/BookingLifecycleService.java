@@ -217,15 +217,15 @@ public class BookingLifecycleService {
     private void sendCompletionEmail(UUID bookingId) {
         try {
             List<LaundryCompletedEmail> mails = jdbc.query("""
-                    SELECT u.email, u.full_name, d.name AS service_name, br.name AS branch_name,
-                           br.address AS branch_address, b.start_time, b.updated_at, t.total_amount,
+                    SELECT u.email, u.full_name, d.name AS service_name, st.name AS store_name,
+                           st.address AS store_address, b.start_time, b.updated_at, t.total_amount,
                            (SELECT string_agg(m.machine_code, ' + ' ORDER BY m.machine_code)
                               FROM booking_resource_allocations a JOIN machines m ON m.id = a.resource_id
                              WHERE a.booking_id = b.id) AS machine_codes
                     FROM scheduled_bookings b
                     JOIN transactions t ON t.id = b.transaction_id
                     JOIN users u ON u.id = t.customer_id
-                    JOIN branches br ON br.id = b.branch_id
+                    CROSS JOIN store_settings st
                     JOIN booking_service_definitions d ON d.code = b.service_code
                     WHERE b.id = ?
                     """, (rs, row) -> new LaundryCompletedEmail(
@@ -233,8 +233,8 @@ public class BookingLifecycleService {
                     rs.getString("full_name"),
                     bookingId.toString().substring(0, 8).toUpperCase(),
                     rs.getString("service_name"),
-                    rs.getString("branch_name"),
-                    rs.getString("branch_address"),
+                    rs.getString("store_name"),
+                    rs.getString("store_address"),
                     rs.getString("machine_codes"),
                     toInstant(rs.getTimestamp("start_time")),
                     toInstant(rs.getTimestamp("updated_at")),

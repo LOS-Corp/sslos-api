@@ -94,8 +94,7 @@ public class DeviceCommandService {
                 .timeoutAt(now.plusSeconds(commandTimeoutSeconds))
                 .build());
 
-        auditService.record(AuditEntry.of(AuditAction.REMOTE_COMMAND, "MACHINE", machineCode,
-                        machine.getBranchId(), actor)
+        auditService.record(AuditEntry.of(AuditAction.REMOTE_COMMAND, "MACHINE", machineCode, actor)
                 .withReason(request.getReason())
                 .withChange(Map.of("status", String.valueOf(machine.getStatus())),
                         Map.of("command", cmd, "commandId", commandId)));
@@ -107,7 +106,7 @@ public class DeviceCommandService {
 
     private DeviceCommandRequested.Payload mqttTopicPayload(Machine machine, String cmd, String commandId,
                                                             UUID bookingId, OffsetDateTime issuedAt) {
-        return new DeviceCommandRequested.Payload(machine.getBranchId(), machine.getMachineCode(),
+        return new DeviceCommandRequested.Payload(machine.getMachineCode(),
                 buildCommandPayload(cmd, commandId, bookingId, issuedAt));
     }
 

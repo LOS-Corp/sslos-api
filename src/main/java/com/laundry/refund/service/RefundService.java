@@ -17,7 +17,6 @@ import com.laundry.refund.repository.RefundRequestRepository;
 import com.laundry.shared.error.BusinessException;
 import com.laundry.shared.error.ErrorCode;
 import com.laundry.shared.security.CurrentUser;
-import com.laundry.user.service.BranchScopeService;
 import com.laundry.shared.money.Money;
 import com.laundry.transaction.entity.Transaction;
 import com.laundry.transaction.repository.TransactionRepository;
@@ -43,7 +42,7 @@ import java.util.regex.Pattern;
 /**
  * Exception refunds (UC-08 alt 4a, FR-REF-05). Staff or an Owner raise a request with evidence;
  * an Owner who did not raise it approves or rejects it; an approved refund is credited to the
- * customer's wallet in the same transaction and becomes COMPLETED (BR-15). Identity and branch always come from the
+ * customer's wallet in the same transaction and becomes COMPLETED (BR-15). Identity always comes from the
  * token and the payment, never from the request body (BR-01, SC-23). The sum of refunds of a payment
  * never exceeds the amount paid (BR-14, FR-PAY-03), checked under a lock on the payment row.
  */
@@ -62,7 +61,6 @@ public class RefundService {
     private final PaymentRepository payments;
     private final TransactionRepository transactions;
     private final WalletService wallet;
-    private final BranchScopeService branchScope;
     private final AuditService audit;
     private final Clock clock;
     private final JdbcTemplate jdbc;
@@ -75,16 +73,14 @@ public class RefundService {
         if (payment.getStatus() != PaymentStatus.PAID) {
             throw BusinessException.of(ErrorCode.REFUND_REJECTED, "Only a paid payment can be refunded");
         }
-        UUID branchId = refunds.findBranchOfTransaction(payment.getTransactionId())
-                .orElseThrow(() -> BusinessException.of(ErrorCode.REFUND_REJECTED,
-                        "The payment is not linked to a branch booking"));
-        branchScope.require(requester, branchId);
+        if (!refunds.isBookingTransaction(payment.getTransactionId())) {
+            throw BusinessException.of(ErrorCode.REFUND_REJECTED, "The payment is not linked to a booking");
+        }
         requireWithinCap(payment, request.amount());
         attachments.requireReferencesValid(request.evidence(), Purpose.REFUND_EVIDENCE);
 
-        RefundRequest refund = refunds.save(RefundRequest.raise(payment.getId(), payment.getTransactionId(),
-                branchId, requester.id(), request.amount(), request.reason().trim(), request.evidence(), now()));
-        audit.record(AuditEntry.of(AuditAction.REFUND_REQUESTED, ENTITY, refund.getId(), branchId, requester)
+        RefundRequest refund = refunds.save(RefundRequest.raise(payment.getId(), payment.getTransactionId(), requester.id(), request.amount(), request.reason().trim(), request.evidence(), now()));
+        audit.record(AuditEntry.of(AuditAction.REFUND_REQUESTED, ENTITY, refund.getId(), requester)
                 .withReason(refund.getReason())
                 .withChange(null, Map.of("amount", refund.getAmount(), "paymentId", payment.getId())));
         log.info("Refund request {} raised for payment {} by {}", refund.getId(), payment.getId(), requester.id());
@@ -110,7 +106,7 @@ public class RefundService {
                     "refund:" + refund.getId(), "Hoàn tiền ngoại lệ được chủ cửa hàng duyệt");
             refund.complete(now());
         }
-        audit.record(AuditEntry.of(AuditAction.REFUND_APPROVED, ENTITY, refund.getId(), refund.getBranchId(), owner)
+        audit.record(AuditEntry.of(AuditAction.REFUND_APPROVED, ENTITY, refund.getId(), owner)
                 .withReason(note)
                 .withChange(Map.of("status", "PENDING_APPROVAL"), Map.of("status", refund.getStatus().name())));
         return RefundResponse.from(refund);
@@ -123,7 +119,7 @@ public class RefundService {
         }
         RefundRequest refund = lockedRefund(refundId);
         refund.reject(owner.id(), reason.trim(), now());
-        audit.record(AuditEntry.of(AuditAction.REFUND_REJECTED, ENTITY, refund.getId(), refund.getBranchId(), owner)
+        audit.record(AuditEntry.of(AuditAction.REFUND_REJECTED, ENTITY, refund.getId(), owner)
                 .withReason(reason.trim())
                 .withChange(Map.of("status", "PENDING_APPROVAL"), Map.of("status", refund.getStatus().name())));
         return RefundResponse.from(refund);
@@ -133,27 +129,18 @@ public class RefundService {
     public RefundResponse get(UUID refundId, CurrentUser viewer) {
         RefundRequest refund = refunds.findById(refundId)
                 .orElseThrow(() -> BusinessException.notFound("Refund request not found"));
-        branchScope.require(viewer, refund.getBranchId());
         return RefundResponse.from(refund);
     }
 
-    /** Pending requests the viewer may see; {@code branchId} narrows the list. */
+    /** Pending requests of the store (operators only, checked by the controller). */
     @Transactional(readOnly = true)
-    public List<RefundResponse> pending(UUID branchId, CurrentUser viewer) {
-        if (branchId != null) {
-            branchScope.require(viewer, branchId);
-            return refunds.findPendingByBranches(Set.of(branchId)).stream().map(RefundResponse::from).toList();
-        }
-        Optional<Set<UUID>> visible = branchScope.visibleBranches(viewer);
-        List<RefundRequest> result = visible.isEmpty()
-                ? refunds.findPending()
-                : visible.get().isEmpty() ? List.of() : refunds.findPendingByBranches(visible.get());
-        return result.stream().map(RefundResponse::from).toList();
+    public List<RefundResponse> pending(CurrentUser viewer) {
+        return refunds.findPending().stream().map(RefundResponse::from).toList();
     }
 
     /**
      * Finds orders by short code (or full booking id) so Staff can raise an exception refund from the
-     * customer's order card. Only orders in branches the caller may see are returned (BR-01).
+     * customer's order card.
      */
     @Transactional(readOnly = true)
     public List<RefundCandidate> lookup(String code, CurrentUser viewer) {
@@ -164,10 +151,10 @@ public class RefundService {
                     "Enter the 8-character order code shown on the customer's order");
         }
         List<RefundCandidate> found = jdbc.query("""
-                SELECT sb.id, sb.branch_id, br.name AS branch_name, d.name AS service_name, sb.status, sb.start_time,
+                SELECT sb.id, st.name AS store_name, d.name AS service_name, sb.status, sb.start_time,
                        sb.transaction_id, u.full_name, u.phone
                 FROM scheduled_bookings sb
-                JOIN branches br ON br.id = sb.branch_id
+                CROSS JOIN store_settings st
                 LEFT JOIN booking_service_definitions d ON d.code = sb.service_code
                 LEFT JOIN transactions t ON t.id = sb.transaction_id
                 LEFT JOIN users u ON u.id = t.customer_id
@@ -177,11 +164,11 @@ public class RefundService {
                 """, (rs, row) -> {
             UUID bookingId = rs.getObject("id", UUID.class);
             return new RefundCandidate(bookingId, bookingId.toString().substring(0, 8).toUpperCase(Locale.ROOT),
-                    rs.getObject("branch_id", UUID.class), rs.getString("branch_name"), rs.getString("service_name"),
+                    rs.getString("store_name"), rs.getString("service_name"),
                     rs.getString("status"), rs.getTimestamp("start_time").toInstant(), rs.getString("full_name"),
                     rs.getString("phone"), refundablePayments(rs.getObject("transaction_id", UUID.class)));
         }, full ? normalized : normalized + "%", LOOKUP_LIMIT);
-        return found.stream().filter(candidate -> branchScope.canAccess(viewer, candidate.branchId())).toList();
+        return found;
     }
 
     private List<RefundablePayment> refundablePayments(UUID transactionId) {

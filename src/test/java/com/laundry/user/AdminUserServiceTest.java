@@ -14,7 +14,6 @@ import com.laundry.user.entity.User;
 import com.laundry.user.repository.RoleRepository;
 import com.laundry.user.repository.UserRepository;
 import com.laundry.user.service.AdminUserService;
-import com.laundry.user.service.BranchScopeService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -26,14 +25,13 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Each level manages the level below: Admin → Admin/Owner, Owner → Staff (task/09). Single store: no branch assignment. */
+/** Each level manages the level below: Admin → Admin/Owner, Owner → Staff (task/09). Staff work across the store. */
 @IntegrationTest
 @Transactional
 class AdminUserServiceTest {
     private static final String PASSWORD = "Secret#123";
 
     @Autowired private AdminUserService service;
-    @Autowired private BranchScopeService branchScope;
     @Autowired private UserRepository userRepository;
     @Autowired private RoleRepository roleRepository;
     @Autowired private AuditLogRepository auditLogs;
@@ -54,10 +52,8 @@ class AdminUserServiceTest {
 
         assertThat(staff.role()).isEqualTo("STAFF");
         CurrentUser staffUser = CurrentUser.of(staff.id(), Role.STAFF);
-        assertThat(branchScope.canAccess(staffUser, UUID.randomUUID())).isTrue();
-        assertThat(branchScope.visibleBranches(staffUser)).isEmpty();
-        CurrentUser customer = CurrentUser.of(UUID.randomUUID(), Role.CUSTOMER);
-        assertThat(branchScope.canAccess(customer, UUID.randomUUID())).isFalse();
+        assertThat(staffUser.isOperator()).isTrue();
+        assertThat(CurrentUser.of(UUID.randomUUID(), Role.CUSTOMER).isOperator()).isFalse();
         assertThat(service.list("STAFF", "nhân viên", owner)).extracting(AdminUserDto::id).contains(staff.id());
         assertThat(auditLogs.findByEntityTypeAndEntityIdOrderByOccurredAtAsc("USER", staff.id().toString()))
                 .extracting(entry -> entry.getAction()).containsExactly("ACCOUNT_CREATED");

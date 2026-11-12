@@ -16,7 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
 
-/** Wash / dry program catalogue, shared by all branches. */
+/** Wash / dry program catalogue, of the store. */
 @RestController
 @RequestMapping("/api/admin/booking-config/programs")
 @RequiredArgsConstructor

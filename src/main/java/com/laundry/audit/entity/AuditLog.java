@@ -47,9 +47,6 @@ public class AuditLog {
     @Column(name = "entity_id", length = 80)
     private String entityId;
 
-    @Column(name = "branch_id")
-    private UUID branchId;
-
     @Column(length = 500)
     private String reason;
 
@@ -63,14 +60,13 @@ public class AuditLog {
 
     @Builder
     private AuditLog(OffsetDateTime occurredAt, UUID actorId, String actorRole, String action, String entityType,
-                     String entityId, UUID branchId, String reason, String beforeState, String afterState) {
+                     String entityId, String reason, String beforeState, String afterState) {
         this.occurredAt = occurredAt;
         this.actorId = actorId;
         this.actorRole = actorRole;
         this.action = action;
         this.entityType = entityType;
         this.entityId = entityId;
-        this.branchId = branchId;
         this.reason = reason;
         this.beforeState = beforeState;
         this.afterState = afterState;

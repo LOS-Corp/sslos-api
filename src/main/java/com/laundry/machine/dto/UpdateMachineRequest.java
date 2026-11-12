@@ -35,7 +35,6 @@ public class UpdateMachineRequest {
 
     private MachineStatus status;
 
-    private UUID branchId;
 
     @Size(max = 100, message = "displayName must be at most 100 characters")
     private String displayName;

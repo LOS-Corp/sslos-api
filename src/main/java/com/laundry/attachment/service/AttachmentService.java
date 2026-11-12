@@ -5,7 +5,6 @@ import com.laundry.shared.error.BusinessException;
 import com.laundry.shared.error.ErrorCode;
 import com.laundry.shared.security.CurrentUser;
 import com.laundry.shared.security.Role;
-import com.laundry.user.service.BranchScopeService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -33,8 +32,7 @@ import java.util.regex.Pattern;
  *   <li>Only JPEG, PNG and PDF up to 5 MB; the type is read from the file's signature, not trusted from the client.</li>
  *   <li>The index row is append-only (V50 trigger) and keeps a SHA-256, so evidence cannot change after the fact.</li>
  *   <li>Business rows refer to a file as {@code attachment:<id>} in their existing text column.</li>
- *   <li>Reading: the Owner reads any file; Staff read what they uploaded or the evidence of refunds in their
- *       branches; a customer reads only the proof of their own withdrawals. Anyone else gets 404.</li>
+ *   <li>Reading: the Owner reads any file; Staff read what they uploaded or the evidence of any refund; a customer reads only the proof of their own withdrawals. Anyone else gets 404.</li>
  * </ul>
  */
 @Slf4j
@@ -57,7 +55,6 @@ public class AttachmentService {
 
     private final FileStorage storage;
     private final JdbcTemplate jdbc;
-    private final BranchScopeService branchScope;
     private final Clock clock;
 
     @Transactional
@@ -137,8 +134,9 @@ public class AttachmentService {
             if (row.uploadedBy().equals(viewer.id())) {
                 return true;
             }
-            return jdbc.queryForList("SELECT branch_id FROM refund_requests WHERE evidence LIKE ?", UUID.class, reference)
-                    .stream().anyMatch(branch -> branchScope.canAccess(viewer, branch));
+            Integer refunds = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM refund_requests WHERE evidence LIKE ?", Integer.class, reference);
+            return refunds != null && refunds > 0;
         }
         if (viewer.has(Role.CUSTOMER)) {
             Integer own = jdbc.queryForObject(

@@ -16,7 +16,7 @@ import java.util.UUID;
  * Aggregate DTO returned by Machine Detail / list endpoints.
  *
  * <p>This is the single API payload the frontend needs to display a
- * machine: static registry info (machineCode, branch, type, displayName, …)
+ * machine: static registry info (machineCode, type, displayName, …)
  * <strong>merged</strong> with the latest runtime snapshot (online, status,
  * phase, weightKg, vibrationG, cycle progress, WiFi RSSI, …).
  *
@@ -34,7 +34,6 @@ import java.util.UUID;
 public class MachineDto {
     private UUID id;
     private String machineCode;
-    private UUID branchId;
     private MachineType type;
     private MachineStatus status;
     /** Commissioning lifecycle; only ACTIVE machines are bookable. */

@@ -14,7 +14,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import com.laundry.shared.security.CurrentUser;
-import com.laundry.user.service.BranchScopeService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -44,7 +43,6 @@ public class MachineController {
     private final DeviceCommandService deviceCommandService;
     private final MachineCatalogService machineCatalogService;
     private final MachineStartAuthorizationService startAuthorizationService;
-    private final BranchScopeService branchScope;
 
     private static final int MAX_PAGE_SIZE = 100;
 
@@ -179,7 +177,7 @@ public class MachineController {
         int pageSize = Math.clamp(size, 1, MAX_PAGE_SIZE);
         return machineRepository.findByMachineCode(machineCode)
                 .map(machine -> {
-                    branchScope.require(viewer, machine.getBranchId());
+                    requireOperator(viewer);
                     Page<DeviceEvent> events = deviceEventRepository
                             .findByMachineIdOrderByCreatedAtDesc(machine.getId(),
                                     PageRequest.of(Math.max(page, 0), pageSize, Sort.by("createdAt").descending()));
@@ -201,7 +199,7 @@ public class MachineController {
         int pageSize = Math.clamp(size, 1, MAX_PAGE_SIZE);
         return machineRepository.findByMachineCode(machineCode)
                 .map(machine -> {
-                    branchScope.require(viewer, machine.getBranchId());
+                    requireOperator(viewer);
                     Page<DeviceCommand> commands = deviceCommandRepository
                             .findByMachineIdOrderByCreatedAtDesc(machine.getId(),
                                     PageRequest.of(Math.max(page, 0), pageSize));
@@ -259,5 +257,11 @@ public class MachineController {
                 .timeoutAt(c.getTimeoutAt())
                 .createdAt(c.getCreatedAt())
                 .build();
+    }
+
+    private static void requireOperator(CurrentUser viewer) {
+        if (!viewer.isOperator()) {
+            throw com.laundry.shared.error.BusinessException.forbidden("You do not have permission for this machine");
+        }
     }
 }

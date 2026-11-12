@@ -69,7 +69,6 @@ public final class LockerDtos {
             UUID machineId,
             String machineCode,
             String displayName,
-            UUID branchId,
             boolean online,
             boolean commissioned,
             String status,

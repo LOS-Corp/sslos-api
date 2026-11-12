@@ -53,7 +53,7 @@ public class WithdrawalService {
         // The debit re-checks the balance under the wallet row lock; a concurrent spend fails here.
         wallet.debit(customer.id(), amount, WalletEntryType.WITHDRAWAL_HOLD, "withdrawal:" + withdrawal.getId(),
                 "Giữ tiền chờ chuyển khoản");
-        audit.record(AuditEntry.of(AuditAction.WITHDRAWAL_REQUESTED, ENTITY, withdrawal.getId(), null, customer)
+        audit.record(AuditEntry.of(AuditAction.WITHDRAWAL_REQUESTED, ENTITY, withdrawal.getId(), customer)
                 .withChange(null, Map.of("amountVnd", amount.vnd())));
         return WithdrawalDto.from(withdrawal);
     }
@@ -63,7 +63,7 @@ public class WithdrawalService {
         attachments.requireReferencesValid(proof, Purpose.WITHDRAWAL_PROOF);
         WalletWithdrawal withdrawal = locked(withdrawalId);
         withdrawal.complete(owner.id(), proof, OffsetDateTime.now(clock));
-        audit.record(AuditEntry.of(AuditAction.WITHDRAWAL_COMPLETED, ENTITY, withdrawal.getId(), null, owner)
+        audit.record(AuditEntry.of(AuditAction.WITHDRAWAL_COMPLETED, ENTITY, withdrawal.getId(), owner)
                 .withReason(withdrawal.getProofReference())
                 .withChange(Map.of("status", "PROCESSING"), Map.of("status", "COMPLETED")));
         return WithdrawalDto.from(withdrawal);
@@ -75,7 +75,7 @@ public class WithdrawalService {
         withdrawal.reject(owner.id(), reason, OffsetDateTime.now(clock));
         wallet.credit(withdrawal.getCustomerId(), Money.vnd(withdrawal.getAmountVnd()),
                 WalletEntryType.WITHDRAWAL_RELEASE, "withdrawal:" + withdrawal.getId(), "Hoàn tiền giữ do từ chối rút");
-        audit.record(AuditEntry.of(AuditAction.WITHDRAWAL_REJECTED, ENTITY, withdrawal.getId(), null, owner)
+        audit.record(AuditEntry.of(AuditAction.WITHDRAWAL_REJECTED, ENTITY, withdrawal.getId(), owner)
                 .withReason(withdrawal.getRejectionReason())
                 .withChange(Map.of("status", "PROCESSING"), Map.of("status", "REJECTED")));
         return WithdrawalDto.from(withdrawal);

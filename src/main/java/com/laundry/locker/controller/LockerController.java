@@ -36,8 +36,8 @@ public class LockerController {
 
     @GetMapping("/api/staff/lockers")
     @Operation(summary = "Locker cabinets with compartments, door state and the booking in each")
-    public List<LockerCabinetDto> cabinets(@RequestParam(required = false) UUID branchId, CurrentUser viewer) {
-        return lockerService.cabinets(branchId, viewer);
+    public List<LockerCabinetDto> cabinets(CurrentUser viewer) {
+        return lockerService.cabinets(viewer);
     }
 
     @PostMapping("/api/staff/lockers/{machineId}/compartments/{no}/open")

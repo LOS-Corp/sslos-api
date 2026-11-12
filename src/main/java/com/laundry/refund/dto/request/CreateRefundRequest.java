@@ -10,7 +10,7 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 /**
- * Exception refund raised by Staff or the Owner. The transaction and branch are derived from the
+ * Exception refund raised by Staff or the Owner. The transaction is derived from the
  * payment, and the requester from the token — the body cannot choose them (BR-01).
  */
 public record CreateRefundRequest(

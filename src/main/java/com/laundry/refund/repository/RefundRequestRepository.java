@@ -33,12 +33,8 @@ public interface RefundRequestRepository extends JpaRepository<RefundRequest, UU
     @Query("select r from RefundRequest r where r.status in ('CREATED', 'PENDING_APPROVAL') order by r.createdAt")
     List<RefundRequest> findPending();
 
-    @Query("select r from RefundRequest r where r.branchId in :branchIds "
-            + "and r.status in ('CREATED', 'PENDING_APPROVAL') order by r.createdAt")
-    List<RefundRequest> findPendingByBranches(@Param("branchIds") Collection<UUID> branchIds);
-
-    /** Branch of the booking paid by a transaction (scheduled bookings carry the branch). */
-    @Query(value = "select sb.branch_id from scheduled_bookings sb where sb.transaction_id = :transactionId",
+    /** Whether a transaction paid for a booking (exception refunds are raised against bookings only). */
+    @Query(value = "select exists (select 1 from scheduled_bookings sb where sb.transaction_id = :transactionId)",
             nativeQuery = true)
-    Optional<UUID> findBranchOfTransaction(@Param("transactionId") UUID transactionId);
+    boolean isBookingTransaction(@Param("transactionId") UUID transactionId);
 }

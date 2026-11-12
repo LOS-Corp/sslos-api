@@ -19,21 +19,18 @@ import java.util.UUID;
  * <p>High-frequency sensor telemetry (weight, water level, vibration, remaining seconds, etc.)
  * is NOT persisted into PostgreSQL. It is streamed directly via USB serial → Spring Boot → WebSocket/STOMP.
  *
- * <p>Device traffic is keyed by {@code (branchId-UUID, machineCode)} — every device
- * publishes to a topic that includes the {@link UUID} of the branch it is installed in.
+ * <p>Device traffic is keyed by {@code machineCode}, unique in the store (V58).
  */
 @Entity
 @Table(
     name = "machines",
     indexes = {
-        @Index(name = "idx_machine_branch_code", columnList = "branch_id, machine_code", unique = true),
         @Index(name = "idx_machine_code", columnList = "machine_code"),
         @Index(name = "idx_machine_status", columnList = "status"),
-        @Index(name = "idx_machine_heartbeat", columnList = "last_heartbeat_at"),
-        @Index(name = "idx_machine_branch", columnList = "branch_id")
+        @Index(name = "idx_machine_heartbeat", columnList = "last_heartbeat_at")
     },
     uniqueConstraints = {
-        @UniqueConstraint(name = "uq_machines_branch_machine", columnNames = {"branch_id", "machine_code"})
+        @UniqueConstraint(name = "uq_machines_machine_code", columnNames = {"machine_code"})
     }
 )
 @Getter
@@ -52,16 +49,10 @@ public class Machine {
 
     /**
      * Machine identifier used in device frames (e.g., "WM001").
-     * Unique within each branch.
+     * Unique in the store.
      */
     @Column(name = "machine_code", nullable = false, length = 50)
     private String machineCode;
-
-    /**
-     * Branch/store this machine belongs to. Required.
-     */
-    @Column(name = "branch_id", nullable = false)
-    private UUID branchId;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
@@ -72,7 +63,7 @@ public class Machine {
     @Column(name = "display_name", length = 100)
     private String displayName;
 
-    /** Physical location or description within the branch. */
+    /** Physical location or description within the store. */
     @Column(name = "location_description", length = 200)
     private String locationDescription;
 

@@ -12,7 +12,6 @@ public record RefundResponse(
         UUID paymentId,
         UUID orderId,
         UUID transactionId,
-        UUID branchId,
         UUID requestedBy,
         UUID approvedBy,
         BigDecimal amount,
@@ -27,7 +26,7 @@ public record RefundResponse(
 
     public static RefundResponse from(RefundRequest r) {
         return new RefundResponse(r.getId(), r.getPaymentId(), r.getOrderId(), r.getTransactionId(),
-                r.getBranchId(), r.getRequestedBy(), r.getDecidedBy(), r.getAmount(), r.getReason(),
+                r.getRequestedBy(), r.getDecidedBy(), r.getAmount(), r.getReason(),
                 r.getEvidence(), r.getStatus(), r.getRejectionReason(), r.getCreatedAt(), r.getUpdatedAt(),
                 r.getDecidedAt(), r.getCompletedAt());
     }

@@ -15,7 +15,7 @@ import java.util.UUID;
  * scan the machine itself instead of a printed label.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public record LinkState(State state, String deviceId, UUID branchId, String machineCode, String machineType,
+public record LinkState(State state, String deviceId, String machineCode, String machineType,
                         String qrUrl) {
 
     public enum State {
@@ -34,19 +34,19 @@ public record LinkState(State state, String deviceId, UUID branchId, String mach
     }
 
     public static LinkState of(State state, String deviceId) {
-        return new LinkState(state, deviceId, null, null, null, null);
+        return new LinkState(state, deviceId, null, null, null);
     }
 
-    public static LinkState bound(String deviceId, UUID branchId, String machineCode, String machineType) {
-        return bound(deviceId, branchId, machineCode, machineType, null);
+    public static LinkState bound(String deviceId, String machineCode, String machineType) {
+        return bound(deviceId, machineCode, machineType, null);
     }
 
-    public static LinkState bound(String deviceId, UUID branchId, String machineCode, String machineType,
+    public static LinkState bound(String deviceId, String machineCode, String machineType,
                                   String qrUrl) {
-        return new LinkState(State.BOUND, deviceId, branchId, machineCode, machineType, qrUrl);
+        return new LinkState(State.BOUND, deviceId, machineCode, machineType, qrUrl);
     }
 
     public boolean isBound() {
-        return state == State.BOUND && branchId != null && machineCode != null;
+        return state == State.BOUND && machineCode != null;
     }
 }

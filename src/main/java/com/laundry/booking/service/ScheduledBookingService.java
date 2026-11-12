@@ -3,9 +3,6 @@ package com.laundry.booking.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.laundry.booking.dto.MachineProgramDtos.MachineProgramDto;
-import com.laundry.branch.entity.Branch;
-import com.laundry.branch.entity.BranchStatus;
-import com.laundry.branch.repository.BranchRepository;
 import com.laundry.machine.repository.MachineRepository;
 import com.laundry.transaction.entity.ServiceType;
 import com.laundry.transaction.entity.Transaction;
@@ -51,7 +48,6 @@ import static com.laundry.booking.domain.SlotPlanner.*;
 public class ScheduledBookingService {
     private final JdbcTemplate jdbc;
     private final ObjectMapper objectMapper;
-    private final BranchRepository branchRepository;
     private final MachineRepository machineRepository;
     private final TransactionRepository transactionRepository;
     private final MachineProgramService programService;
@@ -82,17 +78,14 @@ public class ScheduledBookingService {
             return getBooking(customerId, existingBooking);
         }
 
-        queries.lockBranchConfiguration(request.branchId());
-        ServiceConfig offered = queries.offering(request.branchId(), request.serviceCode());
+        queries.lockStoreConfiguration();
+        ServiceConfig offered = queries.offering(request.serviceCode());
         if (offered == null) {
-            throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not configured for the selected branch");
+            throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not offered at the store");
         }
         List<MachineProgramDto> programs = programService.resolve(
                 offered.requirements(), request.washProgram(), request.dryProgram());
         ServiceConfig config = withPrograms(offered, programs);
-        Branch branch = branchRepository.findById(request.branchId())
-                .filter(candidate -> candidate.getStatus() == BranchStatus.ACTIVE)
-                .orElseThrow(() -> BusinessException.of(ErrorCode.NOT_FOUND, "Branch not found"));
         SlotPlan plan = buildPlan(config, request.startTime());
         if (request.resourceIds().size() != config.requirements().size()
                 || request.resourceIds().stream().distinct().count() != request.resourceIds().size()) {
@@ -102,7 +95,7 @@ public class ScheduledBookingService {
         for (int i = 0; i < config.requirements().size(); i++) {
             String requiredType = config.requirements().get(i);
             UUID selectedId = request.resourceIds().get(i);
-            Resource selectedResource = queries.resourcesFor(config.branchId(), requiredType).stream()
+            Resource selectedResource = queries.resourcesFor(requiredType).stream()
                     .filter(resource -> resource.id().equals(selectedId))
                     .findFirst().orElse(null);
             if (selectedResource == null) {
@@ -112,11 +105,11 @@ public class ScheduledBookingService {
         }
         requireCapacity(resources, request.declaredLoadKg());
         if (!queries.isWithinOpeningHours(config, request.startTime(), plan)) {
-            throw BusinessException.of(ErrorCode.OUTSIDE_OPENING_HOURS, "The requested time is outside branch opening hours");
+            throw BusinessException.of(ErrorCode.OUTSIDE_OPENING_HOURS, "The requested time is outside the store opening hours");
         }
         lockResources(resources);
         expireStaleHolds(resources);
-        validateSelectedResources(request.branchId(), resources);
+        validateSelectedResources(resources);
         for (int i = 0; i < resources.size(); i++) {
             if (queries.resourceBusy(resources.get(i), plan.allocationPlans().get(i), config.bufferMinutes())) {
                 throw BusinessException.of(ErrorCode.SLOT_TAKEN, "The selected time was just booked. Please choose another slot.");
@@ -148,11 +141,11 @@ public class ScheduledBookingService {
         }
         jdbc.update("""
                 INSERT INTO scheduled_bookings
-                  (id, transaction_id, branch_id, service_code, status, start_time,
+                  (id, transaction_id, service_code, status, start_time,
                    expected_end_time, hold_expires_at, timeline, idempotency_key, programs,
                    advance_booking, declared_load_kg)
-                VALUES (?, ?, ?, ?, 'HELD', ?, ?, ?, CAST(? AS JSONB), ?, CAST(? AS JSONB), ?, ?)
-                """, bookingId, transaction.getId(), branch.getId(), config.code(),
+                VALUES (?, ?, ?, 'HELD', ?, ?, ?, CAST(? AS JSONB), ?, CAST(? AS JSONB), ?, ?)
+                """, bookingId, transaction.getId(), config.code(),
                 OffsetDateTime.ofInstant(plan.start(), ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(plan.expectedEnd(), ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(holdExpiresAt, ZoneOffset.UTC),
@@ -181,8 +174,8 @@ public class ScheduledBookingService {
         List<BookingDto> bookings = jdbc.query("""
                 SELECT sb.id booking_id, t.id transaction_id, sd.code service_code,
                        sd.name service_name, sd.service_mode, sb.status booking_status,
-                       t.status transaction_status, sb.branch_id, b.name branch_name,
-                       b.address branch_address, b.phone branch_phone, sb.start_time,
+                       t.status transaction_status, st.name store_name,
+                       st.address store_address, st.phone store_phone, sb.start_time,
                        sb.expected_end_time, sb.hold_expires_at, t.total_amount,
                        sb.timeline::text timeline, sb.programs::text programs,
                        p.payment_id, p.status payment_status, p.checkout_url payment_url, p.qr_code,
@@ -190,7 +183,7 @@ public class ScheduledBookingService {
                 FROM scheduled_bookings sb
                 JOIN transactions t ON t.id = sb.transaction_id
                 JOIN booking_service_definitions sd ON sd.code = sb.service_code
-                JOIN branches b ON b.id = sb.branch_id
+                CROSS JOIN store_settings st
                 LEFT JOIN LATERAL (
                     SELECT id payment_id, status, checkout_url, qr_code
                     FROM payments WHERE transaction_id = t.id
@@ -207,7 +200,7 @@ public class ScheduledBookingService {
                     ) ORDER BY a.resource_type), '[]'::jsonb)::text booking_resources
                     FROM booking_resource_allocations a
                     LEFT JOIN machines m ON m.id = a.resource_id
-                    LEFT JOIN branch_service_resources r ON r.id = a.resource_id
+                    LEFT JOIN service_resources r ON r.id = a.resource_id
                     WHERE a.booking_id = sb.id
                 ) allocated ON TRUE
                 WHERE sb.id = ? AND t.customer_id = ?
@@ -223,8 +216,8 @@ public class ScheduledBookingService {
         return jdbc.query("""
                 SELECT sb.id booking_id, t.id transaction_id, sd.code service_code,
                        sd.name service_name, sd.service_mode, sb.status booking_status,
-                       t.status transaction_status, sb.branch_id, b.name branch_name,
-                       b.address branch_address, b.phone branch_phone, sb.start_time,
+                       t.status transaction_status, st.name store_name,
+                       st.address store_address, st.phone store_phone, sb.start_time,
                        sb.expected_end_time, sb.hold_expires_at, t.total_amount,
                        sb.timeline::text timeline, sb.programs::text programs,
                        p.payment_id, p.status payment_status, p.checkout_url payment_url, p.qr_code,
@@ -232,7 +225,7 @@ public class ScheduledBookingService {
                 FROM scheduled_bookings sb
                 JOIN transactions t ON t.id = sb.transaction_id
                 JOIN booking_service_definitions sd ON sd.code = sb.service_code
-                JOIN branches b ON b.id = sb.branch_id
+                CROSS JOIN store_settings st
                 LEFT JOIN LATERAL (
                     SELECT id payment_id, status, checkout_url, qr_code
                     FROM payments WHERE transaction_id = t.id
@@ -249,7 +242,7 @@ public class ScheduledBookingService {
                     ) ORDER BY a.resource_type), '[]'::jsonb)::text booking_resources
                     FROM booking_resource_allocations a
                     LEFT JOIN machines m ON m.id = a.resource_id
-                    LEFT JOIN branch_service_resources r ON r.id = a.resource_id
+                    LEFT JOIN service_resources r ON r.id = a.resource_id
                     WHERE a.booking_id = sb.id
                 ) allocated ON TRUE
                 WHERE t.customer_id = ?
@@ -352,17 +345,16 @@ public class ScheduledBookingService {
         transaction.setStatus(TransactionStatus.PAID);
         transaction.setPaidAt(OffsetDateTime.now(ZoneOffset.UTC));
         transactionRepository.save(transaction);
-        UUID branchId = jdbc.queryForObject("""
+        jdbc.update("""
                 UPDATE scheduled_bookings SET status = 'PAYMENT_REVIEW_REQUIRED', reconciliation_reason = ?,
                     updated_at = NOW()
                 WHERE id = ?
-                RETURNING branch_id
-                """, UUID.class, reason, bookingId);
+                """, reason, bookingId);
         log.warn("Paid booking {} went to payment review: {}", bookingId, reason);
         walletPayments.reverse(List.of(transaction.getId()), "Hoàn phần ví: thanh toán đến sau khi đơn đã đóng");
         Money paid = refunds.refundable(transaction.getId());
         if (transaction.getCustomerId() != null && paid.isPositive()) {
-            refunds.settle(transaction.getId(), branchId, transaction.getCustomerId(), paid,
+            refunds.settle(transaction.getId(), transaction.getCustomerId(), paid,
                     WalletEntryType.LATE_PAYMENT_CREDIT, "Thanh toán đến sau khi đơn đã đóng");
         }
     }
@@ -397,7 +389,7 @@ public class ScheduledBookingService {
             BigDecimal capacity = machineRepository.findById(resource.id()).map(Machine::getCapacityKg).orElse(null);
             if (capacity != null && capacity.compareTo(declaredLoadKg) < 0) {
                 throw BusinessException.of(ErrorCode.MACHINE_TOO_SMALL, ("Machine %s holds %s kg, less than the "
-                        + "declared %s kg. Choose two machines in the same slot, another slot, another branch "
+                        + "declared %s kg. Choose two machines in the same slot, another slot "
                         + "or assisted laundry.").formatted(resource.code(),
                         capacity.stripTrailingZeros().toPlainString(), declaredLoadKg.stripTrailingZeros().toPlainString()));
             }
@@ -406,7 +398,7 @@ public class ScheduledBookingService {
 
     /**
      * BR-27 / SC-47: book-later orders may take at most {@code app.booking.advance-quota-percent} of a slot's usable
-     * machines of each type (at least one, so a one-machine branch can still take bookings); the rest
+     * machines of each type (at least one, so a one-machine store can still take bookings); the rest
      * is kept for use-now customers. Runs under the resource locks of the hold.
      */
     private void requireAdvanceQuota(ServiceConfig config, SlotPlan plan) {
@@ -415,17 +407,17 @@ public class ScheduledBookingService {
             if (!"WASHER".equals(type) && !"DRYER".equals(type)) {
                 continue;
             }
-            int usable = queries.resourcesFor(config.branchId(), type).size();
+            int usable = queries.resourcesFor(type).size();
             int quota = Math.max(1, usable * props.advanceQuotaPercent() / 100);
             Integer taken = jdbc.queryForObject("""
                     SELECT COUNT(DISTINCT b.id)
                     FROM booking_resource_allocations a
                     JOIN scheduled_bookings b ON b.id = a.booking_id
-                    WHERE b.branch_id = ? AND b.advance_booking AND a.active
+                    WHERE b.advance_booking AND a.active
                       AND a.resource_type = ?
                       AND (b.status <> 'HELD' OR b.hold_expires_at > NOW())
                       AND a.occupied_from < ? AND a.occupied_until > ?
-                    """, Integer.class, config.branchId(), type,
+                    """, Integer.class, type,
                     OffsetDateTime.ofInstant(allocation.until(), ZoneOffset.UTC),
                     OffsetDateTime.ofInstant(allocation.from(), ZoneOffset.UTC));
             if (taken != null && taken >= quota) {
@@ -500,9 +492,8 @@ public class ScheduledBookingService {
                 rs.getObject("booking_id", UUID.class),
                 rs.getString("service_code"), rs.getString("service_name"),
                 rs.getString("service_mode"), rs.getString("booking_status"),
-                rs.getString("transaction_status"), rs.getObject("branch_id", UUID.class),
-                rs.getString("branch_name"), rs.getString("branch_address"),
-                rs.getString("branch_phone"), start.value(), end.value(), holdExpires.value(),
+                rs.getString("transaction_status"), rs.getString("store_name"), rs.getString("store_address"),
+                rs.getString("store_phone"), start.value(), end.value(), holdExpires.value(),
                 rs.getBigDecimal("total_amount"), "VND", timeline, resources,
                 programService.fromJson(rs.getString("programs")),
                 rs.getObject("payment_id", UUID.class), rs.getString("payment_status"),
@@ -511,18 +502,18 @@ public class ScheduledBookingService {
 
     private record TimestampValue(Instant value) {}
 
-    private void validateSelectedResources(UUID branchId, List<Resource> resources) {
+    private void validateSelectedResources(List<Resource> resources) {
         for (Resource resource : resources) {
             if (!"WASHER".equals(resource.type()) && !"DRYER".equals(resource.type())) continue;
             List<Boolean> valid = jdbc.query("""
-                    SELECT branch_id = ? AND type = ? AND online = TRUE
+                    SELECT type = ? AND online = TRUE
                            AND deployment_status = 'ACTIVE'
                            AND status IN ('AVAILABLE', 'RESERVED', 'WAITING_START',
                                           'RUNNING', 'PAUSED', 'COMPLETED')
                     FROM machines WHERE id = ? FOR UPDATE
-                    """, (rs, row) -> rs.getBoolean(1), branchId, resource.type(), resource.id());
+                    """, (rs, row) -> rs.getBoolean(1), resource.type(), resource.id());
             if (valid.isEmpty() || !valid.getFirst()) {
-                throw BusinessException.of(ErrorCode.SLOT_TAKEN, "A selected machine is no longer available for this branch or service");
+                throw BusinessException.of(ErrorCode.SLOT_TAKEN, "A selected machine is no longer available for this service");
             }
         }
     }
@@ -536,7 +527,7 @@ public class ScheduledBookingService {
                                 .orElseThrow(() -> BusinessException.of(ErrorCode.SLOT_TAKEN, "A selected machine is no longer available"));
                     } else {
                         List<UUID> locked = jdbc.query("""
-                                SELECT id FROM branch_service_resources
+                                SELECT id FROM service_resources
                                 WHERE id = ? AND enabled = TRUE FOR UPDATE
                                 """, (rs, row) -> rs.getObject(1, UUID.class), resource.id());
                         if (locked.isEmpty()) {

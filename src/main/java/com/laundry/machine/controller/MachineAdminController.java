@@ -1,6 +1,5 @@
 package com.laundry.machine.controller;
 
-import com.laundry.branch.service.StoreService;
 import com.laundry.iot.service.DeviceRegistryService;
 import com.laundry.machine.dto.CreateMachineRequest;
 import com.laundry.machine.dto.MachineDto;
@@ -54,7 +53,6 @@ public class MachineAdminController {
     private final MachineCatalogService machineCatalogService;
     private final DeviceRegistryService registryService;
     private final MachineStartAuthorizationService startAuthorizationService;
-    private final StoreService store;
 
     @Value("${app.machine.qr-base-url:}")
     private String qrBaseUrl;
@@ -63,9 +61,6 @@ public class MachineAdminController {
     @Operation(summary = "Create a new machine; with `device` (an approved board's deviceId) it is paired in the same step")
     public ResponseEntity<MachineDto> createMachine(@Valid @RequestBody CreateMachineRequest request,
                                                     Authentication authentication) {
-        if (request.getBranchId() == null) {
-            request.setBranchId(store.id());   // single-store mode
-        }
         MachineDto created = machineCatalogService.createMachine(request, userId(authentication));
         return ResponseEntity.status(201).body(created);
     }
@@ -76,7 +71,6 @@ public class MachineAdminController {
             @RequestParam(required = false) String q,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String type,
-            @RequestParam(required = false) UUID branchId,
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int pageSize) {
 
@@ -91,7 +85,7 @@ public class MachineAdminController {
                 Sort.by(Sort.Direction.DESC, "createdAt"));
 
         Page<Machine> result = machineCatalogService.searchMachines(
-                q, statusFilter, typeFilter, branchId, pageable);
+                q, statusFilter, typeFilter, pageable);
 
         List<MachineDto> content = result.getContent().stream()
                 .map(machineCatalogService::toDto)

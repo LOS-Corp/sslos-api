@@ -37,14 +37,13 @@ class WalletCheckoutIT {
     @Autowired private TransactionTemplate tx;
     @Autowired private JdbcTemplate jdbc;
 
-    private UUID branchId;
     private UUID washerId;
     private UUID customerId;
 
     @BeforeEach
     void setUp() {
-        branchId = Fixtures.bookableBranch(jdbc, PRICE);
-        washerId = Fixtures.washer(jdbc, branchId);
+        Fixtures.bookableStore(jdbc, PRICE);
+        washerId = Fixtures.washer(jdbc);
         customerId = Fixtures.customer(jdbc);
     }
 
@@ -130,7 +129,7 @@ class WalletCheckoutIT {
     // ── helpers ───────────────────────────────────────────────────────────────
 
     private Hold hold() {
-        var dto = bookings.createHold(customerId, new CreateHoldRequest(branchId, "WASH_ONLY",
+        var dto = bookings.createHold(customerId, new CreateHoldRequest("WASH_ONLY",
                 LocalDate.now(Fixtures.ZONE).plusDays(1).atTime(9, 0).atZone(Fixtures.ZONE).toInstant(),
                 List.of(washerId), "wallet-" + UUID.randomUUID(), null, null, null));
         return new Hold(dto.bookingId(), dto.transactionId());

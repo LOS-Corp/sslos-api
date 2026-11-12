@@ -8,7 +8,6 @@ import com.laundry.shared.error.BusinessException;
 import com.laundry.shared.error.ErrorCode;
 import com.laundry.shared.security.CurrentUser;
 import com.laundry.shared.security.Role;
-import com.laundry.user.service.BranchScopeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -19,7 +18,7 @@ import java.util.Set;
  * Who may send which command to a machine (FR-ACT-06, FR-ACT-11, BR-25, SC-20, SC-45).
  * <ul>
  *   <li>Customer: STOP / STATUS on the machine's latest session, and only if it is theirs.</li>
- *   <li>Staff (assigned branch), Owner, Admin: any known command; every command except STATUS needs a reason.</li>
+ *   <li>Staff, Owner, Admin: any known command; every command except STATUS needs a reason.</li>
  * </ul>
  * Customers start machines through QR check-in, never through this endpoint.
  */
@@ -38,14 +37,12 @@ public class RemoteCommandAuthorizer {
             MachineStartAuthorizationStatus.CONSUMED);
 
     private final MachineStartAuthorizationRepository authorizations;
-    private final BranchScopeService branchScope;
 
     public void check(CurrentUser actor, Machine machine, String command, String reason) {
         if (!KNOWN_COMMANDS.contains(command)) {
             throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Unknown command: " + command);
         }
-        if (actor.has(Role.STAFF) || actor.isChainWide()) {
-            branchScope.require(actor, machine.getBranchId());
+        if (actor.isOperator()) {
             if (!READ_ONLY_COMMAND.equals(command) && (reason == null || reason.isBlank())) {
                 throw BusinessException.of(ErrorCode.REASON_REQUIRED, "Please enter a reason for this action");
             }

@@ -5,7 +5,6 @@ import com.laundry.shared.error.ErrorCode;
 
 import com.laundry.shared.error.BusinessException;
 
-import com.laundry.branch.repository.BranchRepository;
 import com.laundry.iot.service.DeviceRegistryService;
 import com.laundry.machine.dto.CreateMachineRequest;
 import com.laundry.machine.dto.MachineDto;
@@ -42,7 +41,6 @@ import lombok.RequiredArgsConstructor;
 public class MachineCatalogService {
 
     private final MachineRepository machineRepository;
-    private final BranchRepository branchRepository;
     private final MachineRuntimeStateService runtimeStateService;
     private final MachineStateService machineStateService;
     private final MachineWebSocketBroadcaster broadcaster;
@@ -53,7 +51,7 @@ public class MachineCatalogService {
 
     /**
      * Create a new machine. Throws {@link DuplicateResourceException} if the
-     * machineCode is already taken within the same branch.
+     * machineCode is already taken.
      *
      * <p>A new machine is {@code AVAILABLE} with {@code online = false} and
      * {@code deploymentStatus = UNASSIGNED}; it cannot be booked until it is
@@ -65,24 +63,13 @@ public class MachineCatalogService {
     public MachineDto createMachine(CreateMachineRequest request, UUID adminId) {
         String code = request.getMachineCode().trim().toUpperCase();
 
-        if (request.getBranchId() == null) {
-            throw new IllegalArgumentException("branchId is required");
-        }
-        UUID branchId = request.getBranchId();
-
-        if (branchRepository != null && !branchRepository.existsById(branchId)) {
-            throw new IllegalArgumentException("Branch not found with ID: " + branchId);
-        }
-
-        if (machineRepository.existsByBranchIdAndMachineCode(branchId, code)) {
-            throw new DuplicateResourceException(
-                    "Machine code already exists for branch " + branchId + ": " + code);
+        if (machineRepository.existsByMachineCode(code)) {
+            throw new DuplicateResourceException("Machine code already exists: " + code);
         }
 
         Machine machine = Machine.builder()
                 .machineCode(code)
                 .type(request.getType())
-                .branchId(branchId)
                 .displayName(request.getDisplayName())
                 .locationDescription(request.getLocationDescription())
                 .capacityKg(request.getCapacityKg())
@@ -94,11 +81,11 @@ public class MachineCatalogService {
         machine = machineRepository.save(machine);
 
         persistEvent(machine, DeviceEventType.MACHINE_REGISTERED,
-                "Machine registered by admin: " + branchId + "/" + code, null);
+                "Machine registered by admin: " + code, null);
         if (request.getDevice() != null) {
             registryService.pair(machine, request.getDevice(), adminId);
         }
-        log.info("[{}/{}] Machine created{}", branchId, code,
+        log.info("[{}] Machine created{}", code,
                 request.getDevice() == null ? "" : " and attached to " + request.getDevice().deviceId());
         return toDto(machine);
     }
@@ -118,14 +105,12 @@ public class MachineCatalogService {
         Machine machine = machineRepository.findByMachineCode(machineCode)
                 .orElseThrow(() -> MachineNotFoundException.byCode(machineCode));
 
-        boolean movesMachine = request.getBranchId() != null
-                && !request.getBranchId().equals(machine.getBranchId());
         boolean changesType = request.getType() != null && request.getType() != machine.getType();
-        if (movesMachine || changesType) {
+        if (changesType) {
             machine = machineRepository.findByIdForReservation(machine.getId())
                     .orElseThrow(() -> MachineNotFoundException.byCode(machineCode));
             if (machineRepository.hasActiveBookingAllocation(machine.getId())) {
-                throw BusinessException.of(ErrorCode.CONFIG_CONFLICT, "Cannot reassign or change the type of a machine with active or future bookings");
+                throw BusinessException.of(ErrorCode.CONFIG_CONFLICT, "Cannot change the type of a machine with active or future bookings");
             }
         }
 
@@ -133,13 +118,6 @@ public class MachineCatalogService {
 
         if (request.getType() != null && request.getType() != machine.getType()) {
             machine.setType(request.getType());
-            changed = true;
-        }
-        if (request.getBranchId() != null && !request.getBranchId().equals(machine.getBranchId())) {
-            if (branchRepository != null && !branchRepository.existsById(request.getBranchId())) {
-                throw new IllegalArgumentException("Branch not found with ID: " + request.getBranchId());
-            }
-            machine.setBranchId(request.getBranchId());
             changed = true;
         }
         if (request.getDisplayName() != null && !request.getDisplayName().equals(machine.getDisplayName())) {
@@ -197,19 +175,19 @@ public class MachineCatalogService {
      */
     @Transactional(readOnly = true)
     public Page<Machine> searchMachines(String q, MachineStatus status, MachineType type,
-                                        UUID branchId, Pageable pageable) {
+                                        Pageable pageable) {
         String trimmedQ = (q == null || q.isBlank()) ? null : q.trim();
         Pageable sorted = PageRequest.of(
                 pageable.getPageNumber(),
                 pageable.getPageSize(),
                 Sort.by(Sort.Direction.DESC, "createdAt"));
-        return machineRepository.searchAdmin(trimmedQ, status, type, branchId, sorted);
+        return machineRepository.searchAdmin(trimmedQ, status, type, sorted);
     }
 
-/** Machines of one branch with their live runtime snapshot (booking configuration screen). */
+/** Every machine with its live runtime snapshot (booking configuration screen). */
     @Transactional(readOnly = true)
-    public List<MachineDto> listByBranch(UUID branchId) {
-        return machineRepository.findByBranchId(branchId).stream().map(this::toDto).toList();
+    public List<MachineDto> listAll() {
+        return machineRepository.findAll().stream().map(this::toDto).toList();
     }
 
 /**
@@ -227,7 +205,6 @@ public class MachineCatalogService {
         MachineDto dto = MachineDto.builder()
                 .id(m.getId())
                 .machineCode(m.getMachineCode())
-                .branchId(m.getBranchId())
                 .type(m.getType())
                 .status(m.getStatus())
                 .deploymentStatus(m.getDeploymentStatus())

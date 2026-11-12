@@ -38,7 +38,6 @@ public final class SlotPlanner {
             int transferMinutes,
             int pickupDeadlineHours,
             BigDecimal price,
-            UUID branchId,
             String timezone,
             LocalTime opensAt,
             LocalTime closesAt,
@@ -140,7 +139,7 @@ public final class SlotPlanner {
         }
         return new ServiceConfig(config.code(), config.name(), config.mode(), config.description(),
                 primary, secondary, config.checkInMinutes(), config.checkoutMinutes(), config.transferMinutes(),
-                config.pickupDeadlineHours(), price, config.branchId(), config.timezone(), config.opensAt(),
+                config.pickupDeadlineHours(), price, config.timezone(), config.opensAt(),
                 config.closesAt(), config.requirements(), config.bufferMinutes());
     }
 

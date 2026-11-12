@@ -25,7 +25,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 import java.util.UUID;
 
-/** Operator accounts: Admin → Admin/Owner, Owner → Staff and their branches (task/09). */
+/** Operator accounts: Admin → Admin/Owner, Owner → Staff (task/09). */
 @RestController
 @RequestMapping("/api/admin/users")
 @RequiredArgsConstructor

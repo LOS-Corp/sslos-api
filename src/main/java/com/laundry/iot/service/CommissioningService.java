@@ -119,7 +119,6 @@ public class CommissioningService {
         payload.put("type", "SELF_TEST");
         payload.put("command", "SELF_TEST");
         payload.put("commandId", commandId);
-        payload.put("branchId", machine.getBranchId().toString());
         payload.put("machineId", machine.getMachineCode());
         payload.put("buttonTimeoutSeconds", properties.getSelfTestButtonTimeoutSeconds());
         try {
@@ -152,11 +151,11 @@ public class CommissioningService {
      * Ignores results that do not match the outstanding command.
      */
     @Transactional
-    public void handleSelfTestResult(UUID branchId, String machineCode, String commandId,
+    public void handleSelfTestResult(String machineCode, String commandId,
                                      boolean passed, String detailJson) {
-        Machine machine = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode).orElse(null);
+        Machine machine = machineRepository.findByMachineCode(machineCode).orElse(null);
         if (machine == null || machine.getDeviceId() == null) {
-            log.warn("[IOT] SELF_TEST_RESULT for unknown/unpaired machine {}/{}", branchId, machineCode);
+            log.warn("[IOT] SELF_TEST_RESULT for unknown/unpaired machine {}", machineCode);
             return;
         }
         if (machine.getDeploymentStatus() != MachineDeploymentStatus.TESTING) {

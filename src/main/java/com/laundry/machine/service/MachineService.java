@@ -43,7 +43,7 @@ import java.util.stream.Collectors;
  *     <li>Triggers WebSocket broadcasts (status updates + telemetry stream).</li>
  * </ul>
  *
- * <p>Device traffic is keyed by {@code (branchId-UUID, machineCode)}. Each
+ * <p>Device traffic is keyed by {@code machineCode}. Each
  * incoming message resolves the {@link Machine} entity exactly once per
  * handler call.
  */
@@ -93,16 +93,16 @@ public class MachineService {
     private int commandTimeoutBatchSize;
 
     
-    public Optional<Machine> findByBranchIdAndMachineCode(UUID branchId, String machineCode) {
-        return machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
+    public Optional<Machine> findByMachineCode(String machineCode) {
+        return machineRepository.findByMachineCode(machineCode);
     }
 
-    public Machine requireMachine(UUID branchId, String machineCode) {
-        return machineRepository.findByBranchIdAndMachineCode(branchId, machineCode)
+    public Machine requireMachine(String machineCode) {
+        return machineRepository.findByMachineCode(machineCode)
                 .orElseThrow(() -> {
-                    log.warn("Unknown device machine: branchId={} machineId={}", branchId, machineCode);
+                    log.warn("Unknown device machine: machineId={}", machineCode);
                     return new MachineNotFoundException(
-                            String.format("Unknown device machine: branchId=%s machineId=%s", branchId, machineCode));
+                            String.format("Unknown device machine: machineId=%s", machineCode));
                 });
     }
 
@@ -116,12 +116,12 @@ public class MachineService {
      * Sensor fields live in the runtime snapshot, never on the entity.
      */
     @Transactional
-    public void processStatus(UUID branchId, String machineCode, MachineRuntimeState snapshot) {
+    public void processStatus(String machineCode, MachineRuntimeState snapshot) {
         if (snapshot == null) return;
 
-        Optional<Machine> machineOpt = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
+        Optional<Machine> machineOpt = machineRepository.findByMachineCode(machineCode);
         if (machineOpt.isEmpty()) {
-            log.warn("Unknown device machine: branchId={} machineId={}", branchId, machineCode);
+            log.warn("Unknown device machine: machineId={}", machineCode);
             return;
         }
         Machine machine = machineOpt.get();
@@ -183,9 +183,9 @@ public class MachineService {
      * telemetry carries a meaningful business status (e.g. {@code "WASHING"}).
      */
     @Transactional
-    public void processStatusFromRuntime(UUID branchId, String machineCode, MachineRuntimeState snapshot) {
+    public void processStatusFromRuntime(String machineCode, MachineRuntimeState snapshot) {
         if (snapshot == null || snapshot.getStatus() == null || snapshot.getStatus().isBlank()) return;
-        processStatus(branchId, machineCode, snapshot);
+        processStatus(machineCode, snapshot);
     }
 
     /**
@@ -196,8 +196,8 @@ public class MachineService {
      * snapshot to {@code online=false} and updates {@code machines.online}.
      */
     @Transactional
-    public void markOfflineFromDevice(UUID branchId, String machineCode, String status, String errorMessage) {
-        Optional<Machine> machineOpt = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
+    public void markOfflineFromDevice(String machineCode, String status, String errorMessage) {
+        Optional<Machine> machineOpt = machineRepository.findByMachineCode(machineCode);
         if (machineOpt.isEmpty()) return;
         Machine machine = machineOpt.get();
 
@@ -237,7 +237,7 @@ public class MachineService {
      * already updated by {@link MachineRuntimeStateService#applyTelemetry};
      * here we just bridge it to STOMP.
      */
-    public void broadcastTelemetry(UUID branchId, String machineCode, MachineRuntimeState snapshot) {
+    public void broadcastTelemetry(String machineCode, MachineRuntimeState snapshot) {
         if (snapshot == null) return;
         broadcaster.broadcastTelemetry(
                 machineCode,
@@ -255,10 +255,10 @@ public class MachineService {
      * (was offline), we additionally flip the entity and broadcast.
      */
     @Transactional
-    public void processHeartbeat(UUID branchId, String machineCode, MachineRuntimeState snapshot) {
-        Optional<Machine> machineOpt = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
+    public void processHeartbeat(String machineCode, MachineRuntimeState snapshot) {
+        Optional<Machine> machineOpt = machineRepository.findByMachineCode(machineCode);
         if (machineOpt.isEmpty()) {
-            log.warn("Unknown device machine: branchId={} machineId={}", branchId, machineCode);
+            log.warn("Unknown device machine: machineId={}", machineCode);
             return;
         }
         Machine machine = machineOpt.get();
@@ -283,7 +283,7 @@ public class MachineService {
             persistEvent(machine, DeviceEventType.CONNECTION_RECOVERED,
                     "Machine came back online", null);
             broadcaster.broadcastMachineUpdate(machine);
-            log.info("[{}/{}] Machine came back online", branchId, machineCode);
+            log.info("[{}] Machine came back online", machineCode);
             if (machine.getDeploymentStatus() == MachineDeploymentStatus.PROVISIONED) {
                 // A freshly activated board just came online over USB: the IoT module starts its self-test after commit.
                 events.publishEvent(new MachineCameOnline(machine.getId(), machine.getMachineCode()));
@@ -302,12 +302,12 @@ public class MachineService {
      * VIBRATION) become error events with {@code errorMessage} attached.
      */
     @Transactional
-    public void processDeviceEvent(UUID branchId, String machineCode,
+    public void processDeviceEvent(String machineCode,
                                    MachineRuntimeState snapshot,
                                    String rawEventType, String detail, String bookingIdStr) {
-        Optional<Machine> machineOpt = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
+        Optional<Machine> machineOpt = machineRepository.findByMachineCode(machineCode);
         if (machineOpt.isEmpty()) {
-            log.warn("Unknown device machine: branchId={} machineId={}", branchId, machineCode);
+            log.warn("Unknown device machine: machineId={}", machineCode);
             return;
         }
         Machine machine = machineOpt.get();
@@ -320,7 +320,7 @@ public class MachineService {
             try {
                 bookingId = UUID.fromString(bookingIdStr);
             } catch (IllegalArgumentException e) {
-                log.warn("[{}/{}] Invalid bookingId in event payload: '{}'", branchId, machineCode, bookingIdStr);
+                log.warn("[{}] Invalid bookingId in event payload: '{}'", machineCode, bookingIdStr);
             }
         }
 
@@ -349,7 +349,7 @@ public class MachineService {
         }
 
         persistEvent(machine, type, detail, bookingId);
-        log.info("[{}/{}] Device event: {} — {}", branchId, machineCode, type, detail);
+        log.info("[{}] Device event: {} — {}", machineCode, type, detail);
     }
 
     // ── /command/ack — match by commandId/requestId ────────────────────────
@@ -361,19 +361,19 @@ public class MachineService {
      * Either is accepted.
      */
     @Transactional
-    public void processCommandAck(UUID branchId, String machineCode,
+    public void processCommandAck(String machineCode,
                                   String correlationId, boolean accepted,
                                   String result, String message, String reason) {
         if (correlationId == null || correlationId.isBlank()) {
-            log.warn("[{}/{}] Command ACK received without commandId/requestId — ignoring",
-                    branchId, machineCode);
+            log.warn("[{}] Command ACK received without commandId/requestId — ignoring",
+                    machineCode);
             return;
         }
 
         Optional<DeviceCommand> cmdOpt = deviceCommandRepository.findByCommandId(correlationId);
         if (cmdOpt.isEmpty()) {
-            log.warn("[{}/{}] No command found with commandId/requestId '{}' — may be stale ACK",
-                    branchId, machineCode, correlationId);
+            log.warn("[{}] No command found with commandId/requestId '{}' — may be stale ACK",
+                    machineCode, correlationId);
             return;
         }
 
@@ -389,13 +389,13 @@ public class MachineService {
         final String detail = "Command: " + cmd.getCommand()
                 + ", result: " + cmd.getAckResult()
                 + (cmd.getAckReason() != null ? ", reason: " + cmd.getAckReason() : "");
-        machineRepository.findByBranchIdAndMachineCode(branchId, machineCode)
+        machineRepository.findByMachineCode(machineCode)
                 .ifPresent(machine -> persistEvent(machine,
                         accepted ? DeviceEventType.COMMAND_ACKNOWLEDGED : DeviceEventType.COMMAND_REJECTED,
                         detail, cmd.getBookingId()));
 
-        log.info("[{}/{}] Command ACK processed: commandId={}, accepted={}, status={}",
-                branchId, machineCode, correlationId, accepted, cmd.getStatus());
+        log.info("[{}] Command ACK processed: commandId={}, accepted={}, status={}",
+                machineCode, correlationId, accepted, cmd.getStatus());
     }
 
     // ── Offline detector scheduler ────────────────────────────────────────

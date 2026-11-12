@@ -63,14 +63,14 @@ public class AuthChannelHandler {
     ) {
     }
 
-    public void handle(UUID branchId, String machineCode, String payload) {
+    public void handle(String machineCode, String payload) {
         AuthMessage message = parse(payload);
         if (message == null) {
             return;
         }
-        Optional<Machine> machine = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
+        Optional<Machine> machine = machineRepository.findByMachineCode(machineCode);
         if (machine.isEmpty()) {
-            log.warn("Auth message for unknown machine branchId={} machineId={}", branchId, machineCode);
+            log.warn("Auth message for unknown machine machineId={}", machineCode);
             return;
         }
         dispatch(machine.get(), message);

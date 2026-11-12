@@ -137,14 +137,14 @@ class MachineSearchLogicTest {
     private static SlotPlanner.ServiceConfig washOnly(int bufferMinutes) {
         return new SlotPlanner.ServiceConfig(
                 "WASH_ONLY", "Wash", "SELF_SERVICE", "", 35, 0,
-                5, 5, 0, 0, BigDecimal.TEN, UUID.randomUUID(), "Asia/Ho_Chi_Minh",
+                5, 5, 0, 0, BigDecimal.TEN, "Asia/Ho_Chi_Minh",
                 LocalTime.MIN, LocalTime.MAX, List.of("WASHER"), bufferMinutes);
     }
 
     private static SlotPlanner.ServiceConfig washDry(int bufferMinutes) {
         return new SlotPlanner.ServiceConfig(
                 "WASH_DRY", "Wash and dry", "SELF_SERVICE", "", 35, 45,
-                5, 5, 10, 0, BigDecimal.TEN, UUID.randomUUID(), "Asia/Ho_Chi_Minh",
+                5, 5, 10, 0, BigDecimal.TEN, "Asia/Ho_Chi_Minh",
                 LocalTime.MIN, LocalTime.MAX, List.of("WASHER", "DRYER"), bufferMinutes);
     }
 }

@@ -47,7 +47,6 @@ class MoneyFlowIT {
     @Autowired private JdbcTemplate jdbc;
     @Autowired private MachineStartAuthorizationService startAuthorizations;
 
-    private UUID branchId;
     private UUID washerId;
     private UUID customerId;
     private CurrentUser customer;
@@ -55,8 +54,8 @@ class MoneyFlowIT {
 
     @BeforeEach
     void setUp() {
-        branchId = Fixtures.bookableBranch(jdbc, PRICE);
-        washerId = Fixtures.washer(jdbc, branchId);
+        Fixtures.bookableStore(jdbc, PRICE);
+        washerId = Fixtures.washer(jdbc);
         customerId = Fixtures.customer(jdbc);
         customer = CurrentUser.of(customerId, Role.CUSTOMER);
         tomorrow = LocalDate.now(Fixtures.ZONE).plusDays(1).atTime(8, 0).atZone(Fixtures.ZONE).toInstant();
@@ -80,7 +79,7 @@ class MoneyFlowIT {
     void secondLateCancellation() {
         UUID first = paidBooking(soon(30));
         // Use-now (within 15 min): outside the BR-27 advance quota, still a late cancellation (inside T−60).
-        UUID second = paidBooking(soon(10), Fixtures.washer(jdbc, branchId));
+        UUID second = paidBooking(soon(10), Fixtures.washer(jdbc));
 
         CancellationPreview firstResult = cancellations.cancel(customer, first);
         assertThat(firstResult.violation()).isEqualTo("LATE_CANCELLATION");
@@ -99,7 +98,7 @@ class MoneyFlowIT {
     void exceptionRefund() {
         UUID booking = paidBooking(tomorrow);
         UUID paymentId = paymentOf(booking);
-        CurrentUser staff = staffOf(branchId);
+        CurrentUser staff = staff();
         CurrentUser owner = CurrentUser.of(Fixtures.user(jdbc, "OWNER"), Role.OWNER);
 
         RefundResponse raised = refunds.raise(new CreateRefundRequest(paymentId, BigDecimal.valueOf(20_000),
@@ -139,17 +138,17 @@ class MoneyFlowIT {
     @DisplayName("Owner rejects with a reason; every Staff of the store sees the pending request")
     void rejectAndVisibility() {
         UUID paymentId = paymentOf(paidBooking(tomorrow));
-        CurrentUser staff = staffOf(branchId);
-        CurrentUser otherStaff = staffOf(Fixtures.bookableBranch(jdbc, PRICE));
+        CurrentUser staff = staff();
+        CurrentUser otherStaff = staff();
         CurrentUser owner = CurrentUser.of(Fixtures.user(jdbc, "OWNER"), Role.OWNER);
         RefundResponse raised = refunds.raise(new CreateRefundRequest(paymentId, BigDecimal.valueOf(5_000),
                 "Khách phàn nàn", null), staff);
 
-        assertThat(refunds.pending(null, staff)).extracting(RefundResponse::id).contains(raised.id());
-        assertThat(refunds.pending(null, otherStaff)).extracting(RefundResponse::id).contains(raised.id());
-        assertThat(refunds.pending(branchId, owner)).extracting(RefundResponse::id).contains(raised.id());
+        assertThat(refunds.pending(staff)).extracting(RefundResponse::id).contains(raised.id());
+        assertThat(refunds.pending(otherStaff)).extracting(RefundResponse::id).contains(raised.id());
+        assertThat(refunds.pending(owner)).extracting(RefundResponse::id).contains(raised.id());
         assertThat(refunds.get(raised.id(), staff).id()).isEqualTo(raised.id());
-        assertThat(refunds.get(raised.id(), otherStaff).id()).as("single store: no branch scope").isEqualTo(raised.id());
+        assertThat(refunds.get(raised.id(), otherStaff).id()).as("every Staff of the store sees it").isEqualTo(raised.id());
 
         assertThatThrownBy(() -> refunds.reject(raised.id(), " ", owner))
                 .isInstanceOf(BusinessException.class)
@@ -158,7 +157,7 @@ class MoneyFlowIT {
         assertThat(rejected.status()).isEqualTo(RefundStatus.REJECTED);
         assertThat(rejected.rejectionReason()).isEqualTo("Không đủ bằng chứng");
         assertThat(wallet.balanceOf(customerId).vnd()).isZero();
-        assertThat(refunds.pending(branchId, owner)).extracting(RefundResponse::id).doesNotContain(raised.id());
+        assertThat(refunds.pending(owner)).extracting(RefundResponse::id).doesNotContain(raised.id());
     }
 
     @Test
@@ -181,7 +180,7 @@ class MoneyFlowIT {
     void lookupByShortCode() {
         UUID booking = paidBooking(tomorrow);
         String shortCode = booking.toString().substring(0, 8).toUpperCase();
-        CurrentUser staff = staffOf(branchId);
+        CurrentUser staff = staff();
 
         List<RefundCandidate> found = refunds.lookup(" " + shortCode + " ", staff);
         assertThat(found).singleElement().satisfies(candidate -> {
@@ -224,7 +223,7 @@ class MoneyFlowIT {
     }
 
     private UUID paidBooking(Instant start, UUID washer) {
-        var hold = bookings.createHold(customerId, new CreateHoldRequest(branchId, "WASH_ONLY",
+        var hold = bookings.createHold(customerId, new CreateHoldRequest("WASH_ONLY",
                 start.truncatedTo(ChronoUnit.MINUTES), List.of(washer), "money-" + UUID.randomUUID(), null, null, null));
         jdbc.update("""
                 INSERT INTO payments (id, transaction_id, amount, payment_method, status, paid_at, created_at, updated_at)
@@ -235,7 +234,7 @@ class MoneyFlowIT {
         return hold.bookingId();
     }
 
-    /** A start {@code minutes} from now — inside T−60, so cancelling it is late (the test branch is open 24/7). */
+    /** A start {@code minutes} from now — inside T−60, so cancelling it is late (the test store is open 24/7). */
     private Instant soon(int minutes) {
         return Instant.now().plus(minutes, ChronoUnit.MINUTES).truncatedTo(ChronoUnit.MINUTES);
     }
@@ -247,10 +246,8 @@ class MoneyFlowIT {
                 """, UUID.class, bookingId);
     }
 
-    private CurrentUser staffOf(UUID branch) {
-        UUID staff = Fixtures.user(jdbc, "STAFF");
-        jdbc.update("INSERT INTO branch_assignments (user_id, branch_id) VALUES (?, ?)", staff, branch);
-        return CurrentUser.of(staff, Role.STAFF);
+    private CurrentUser staff() {
+        return CurrentUser.of(Fixtures.user(jdbc, "STAFF"), Role.STAFF);
     }
 
     private String status(UUID bookingId) {

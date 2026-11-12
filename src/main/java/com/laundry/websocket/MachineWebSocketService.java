@@ -26,7 +26,6 @@ import java.util.UUID;
  *     <li>{@code /topic/machines}               — all machine updates (broadcast)</li>
  *     <li>{@code /topic/machines/{machineCode}}  — specific machine updates</li>
  *     <li>{@code /topic/machines/{machineCode}/runtime}    — full realtime runtime snapshot</li>
- *     <li>{@code /topic/branches/{branchId}/machines/{machineCode}/runtime} — branch-scoped</li>
  * </ul>
  */
 @Service("machineWebSocketService")
@@ -70,14 +69,6 @@ public class MachineWebSocketService implements MachineWebSocketBroadcaster {
         String machineTopic = "/topic/machines/" + machine.getMachineCode() + "/runtime";
         messagingTemplate.convertAndSend(machineTopic, msg);
 
-        // Branch-scoped topic so a kiosk / dashboard for branch X never
-        // sees branch Y.
-        if (machine.getBranchId() != null) {
-            String branchTopic = "/topic/branches/" + machine.getBranchId()
-                    + "/machines/" + machine.getMachineCode() + "/runtime";
-            messagingTemplate.convertAndSend(branchTopic, msg);
-        }
-
         // Compact global fan-out for the machines list view.
         messagingTemplate.convertAndSend("/topic/machines", msg);
 
@@ -114,7 +105,6 @@ public class MachineWebSocketService implements MachineWebSocketBroadcaster {
     public record MachineStatusMessage(
             UUID machineId,
             String machineCode,
-            UUID branchId,
             String status,
             String phase,
             Boolean running,
@@ -171,7 +161,6 @@ public class MachineWebSocketService implements MachineWebSocketBroadcaster {
         return new MachineStatusMessage(
                 m.getId(),
                 m.getMachineCode(),
-                m.getBranchId(),
                 displayStatus(m, runtime),
                 runtime != null ? runtime.getPhase() : null,
                 runtime != null ? runtime.getRunning() : null,

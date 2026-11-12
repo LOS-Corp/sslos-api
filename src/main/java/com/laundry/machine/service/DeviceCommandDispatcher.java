@@ -35,7 +35,7 @@ public class DeviceCommandDispatcher {
         commands.findById(event.commandId()).ifPresent(command -> {
             DeviceCommandRequested.Payload payload = event.payload();
             try {
-                Machine machine = machines.findByBranchIdAndMachineCode(payload.branchId(), payload.machineCode())
+                Machine machine = machines.findByMachineCode(payload.machineCode())
                         .orElseThrow(() -> new IllegalStateException("Machine " + payload.machineCode() + " not found"));
                 deviceLink.send(machine, payload.json());
                 command.setStatus(DeviceCommandStatus.SENT);

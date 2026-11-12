@@ -34,7 +34,6 @@ public interface MachineWebSocketBroadcaster {
      * <p>Destinations:
      * <ul>
      *   <li>{@code /topic/machines/{machineCode}/runtime} — machine-scoped</li>
-     *   <li>{@code /topic/branches/{branchId}/machines/{machineCode}/runtime} — branch-scoped</li>
      *   <li>{@code /topic/machines} — global fan-out (compact view)</li>
      * </ul>
      */

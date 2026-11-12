@@ -91,7 +91,7 @@ public class SmtpEmailService implements EmailService {
         <tr><td style="padding:8px 0;color:#6b7d78;width:42%%">Mã đặt chỗ</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
         <tr><td style="padding:8px 0;color:#6b7d78">Dịch vụ</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
         <tr><td style="padding:8px 0;color:#6b7d78">Máy</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
-        <tr><td style="padding:8px 0;color:#6b7d78">Chi nhánh</td><td style="padding:8px 0;font-weight:600">%s<br><span style="font-weight:400;color:#6b7d78">%s</span></td></tr>
+        <tr><td style="padding:8px 0;color:#6b7d78">Cửa hàng</td><td style="padding:8px 0;font-weight:600">%s<br><span style="font-weight:400;color:#6b7d78">%s</span></td></tr>
         <tr><td style="padding:8px 0;color:#6b7d78">Bắt đầu</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
         <tr><td style="padding:8px 0;color:#6b7d78">Hoàn tất</td><td style="padding:8px 0;font-weight:600">%s</td></tr>
         <tr><td style="padding:8px 0;color:#6b7d78;border-top:1px dashed #e2ebe6">Đã thanh toán</td><td style="padding:8px 0;font-weight:700;border-top:1px dashed #e2ebe6">%s</td></tr>
@@ -106,7 +106,7 @@ public class SmtpEmailService implements EmailService {
 """.formatted(
                 escape(mail.customerName()), escape(mail.bookingCode()), escape(mail.serviceName()),
                 escape(mail.machineCodes() == null ? "—" : mail.machineCodes()),
-                escape(mail.branchName()), escape(mail.branchAddress() == null ? "" : mail.branchAddress()),
+                escape(mail.storeName()), escape(mail.storeAddress() == null ? "" : mail.storeAddress()),
                 mail.startedAt() == null ? "—" : VN_TIME.format(mail.startedAt()),
                 mail.completedAt() == null ? "—" : VN_TIME.format(mail.completedAt()),
                 total);

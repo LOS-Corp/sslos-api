@@ -30,19 +30,18 @@ class NoShowIT {
     @Autowired private WalletService wallet;
     @Autowired private JdbcTemplate jdbc;
 
-    private UUID branchId;
     private UUID customerId;
 
     @BeforeEach
     void setUp() {
-        branchId = Fixtures.bookableBranch(jdbc, PRICE);
+        Fixtures.bookableStore(jdbc, PRICE);
         customerId = Fixtures.customer(jdbc);
     }
 
     @Test
     @DisplayName("First no-show → NO_SHOW, slot released, violation recorded, 100 %; second → 70 %")
     void customerNoShows() {
-        UUID first = confirmedBookingThatStarted(30, Fixtures.washer(jdbc, branchId));
+        UUID first = confirmedBookingThatStarted(30, Fixtures.washer(jdbc));
         noShowJob.sweep();
 
         assertThat(status(first)).isEqualTo("NO_SHOW");
@@ -51,7 +50,7 @@ class NoShowIT {
         assertThat(violations()).isEqualTo(1);
         assertThat(wallet.balanceOf(customerId).vnd()).isEqualTo(PRICE);
 
-        UUID second = confirmedBookingThatStarted(25, Fixtures.washer(jdbc, branchId));
+        UUID second = confirmedBookingThatStarted(25, Fixtures.washer(jdbc));
         noShowJob.sweep();
 
         assertThat(status(second)).isEqualTo("NO_SHOW");
@@ -65,7 +64,7 @@ class NoShowIT {
     @Test
     @DisplayName("BR-13: the booked machine was offline → system failure, 100 % and no violation")
     void machineFailureIsNotTheCustomersFault() {
-        UUID washer = Fixtures.washer(jdbc, branchId);
+        UUID washer = Fixtures.washer(jdbc);
         UUID booking = confirmedBookingThatStarted(30, washer);
         jdbc.update("UPDATE machines SET online = FALSE, status = 'OFFLINE' WHERE id = ?", washer);
 
@@ -79,7 +78,7 @@ class NoShowIT {
     @Test
     @DisplayName("A booking still inside its check-in window is left alone")
     void openWindowIsUntouched() {
-        UUID booking = confirmedBookingThatStarted(5, Fixtures.washer(jdbc, branchId));
+        UUID booking = confirmedBookingThatStarted(5, Fixtures.washer(jdbc));
         noShowJob.sweep();
         assertThat(status(booking)).isEqualTo("CONFIRMED");
     }
@@ -87,7 +86,7 @@ class NoShowIT {
     @Test
     @DisplayName("BR-17: assisted laundry never dropped off → NO_SHOW after T+60, compartment released, violation")
     void assistedDropOffMissed() {
-        Fixtures.Locker locker = Fixtures.lockerCompartment(jdbc, branchId, PRICE);
+        Fixtures.Locker locker = Fixtures.lockerCompartment(jdbc, PRICE);
         UUID inWindow = confirmedBookingThatStarted(45, "ASSISTED_LOCKER", locker.compartmentId());
         noShowJob.sweep();
         assertThat(status(inWindow)).as("drop-off still allowed until T+60").isEqualTo("CONFIRMED");
@@ -105,7 +104,7 @@ class NoShowIT {
     @Test
     @DisplayName("BR-17: laundry already in the locker (CHECKED_IN) is never a no-show")
     void assistedDroppedOffIsUntouched() {
-        Fixtures.Locker locker = Fixtures.lockerCompartment(jdbc, branchId, PRICE);
+        Fixtures.Locker locker = Fixtures.lockerCompartment(jdbc, PRICE);
         UUID booking = confirmedBookingThatStarted(90, "ASSISTED_LOCKER", locker.compartmentId());
         jdbc.update("UPDATE scheduled_bookings SET status = 'CHECKED_IN' WHERE id = ?", booking);
 
@@ -118,7 +117,7 @@ class NoShowIT {
     @Test
     @DisplayName("BR-13: the locker cabinet was offline → system failure, 100 % and no violation")
     void lockerOfflineIsNotTheCustomersFault() {
-        Fixtures.Locker locker = Fixtures.lockerCompartment(jdbc, branchId, PRICE);
+        Fixtures.Locker locker = Fixtures.lockerCompartment(jdbc, PRICE);
         UUID booking = confirmedBookingThatStarted(61, "ASSISTED_LOCKER", locker.compartmentId());
         jdbc.update("UPDATE machines SET online = FALSE, status = 'OFFLINE' WHERE id = ?", locker.cabinetId());
 
@@ -136,7 +135,7 @@ class NoShowIT {
     /** A paid, confirmed booking whose start was {@code minutesAgo} minutes ago. */
     private UUID confirmedBookingThatStarted(int minutesAgo, String service, UUID resource) {
         Instant start = Instant.now().plus(2, ChronoUnit.MINUTES).truncatedTo(ChronoUnit.MINUTES);
-        var hold = bookings.createHold(customerId, new CreateHoldRequest(branchId, service, start, List.of(resource),
+        var hold = bookings.createHold(customerId, new CreateHoldRequest(service, start, List.of(resource),
                 "noshow-" + UUID.randomUUID(), null, null, null));
         Fixtures.paidPayment(jdbc, hold.transactionId(), hold.totalAmount().longValue());
         bookings.confirmPayment(hold.transactionId());

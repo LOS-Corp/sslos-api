@@ -27,6 +27,11 @@ public record CurrentUser(UUID id, Set<Role> roles) {
         return has(Role.OWNER) || has(Role.ADMIN);
     }
 
+    /** Admin, Owner or Staff: people who run the store. */
+    public boolean isOperator() {
+        return isChainWide() || has(Role.STAFF);
+    }
+
     /** Role reported in audit entries: the highest one the account holds. */
     public Role primaryRole() {
         for (Role role : Role.values()) {

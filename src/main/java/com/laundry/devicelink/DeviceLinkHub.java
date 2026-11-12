@@ -100,7 +100,7 @@ public class DeviceLinkHub implements DeviceLink {
             log.debug("[LINK] {} is not bound to a machine; dropping {}", session.deviceId, channel);
             return;
         }
-        router.getObject().route(link.branchId(), link.machineCode(), deviceChannel.get(), frame.get().payload());
+        router.getObject().route(link.machineCode(), deviceChannel.get(), frame.get().payload());
     }
 
     // ── DeviceLink ─────────────────────────────────────────────────────────
