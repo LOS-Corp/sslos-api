@@ -1,8 +1,6 @@
 package com.laundry.user;
 
 import com.laundry.audit.repository.AuditLogRepository;
-import com.laundry.branch.entity.Branch;
-import com.laundry.branch.repository.BranchRepository;
 import com.laundry.shared.error.BusinessException;
 import com.laundry.shared.error.ErrorCode;
 import com.laundry.shared.exception.DuplicateResourceException;
@@ -23,13 +21,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Each level manages the level below: Admin → Admin/Owner, Owner → Staff and branches (task/09). */
+/** Each level manages the level below: Admin → Admin/Owner, Owner → Staff (task/09). Single store: no branch assignment. */
 @IntegrationTest
 @Transactional
 class AdminUserServiceTest {
@@ -39,45 +36,31 @@ class AdminUserServiceTest {
     @Autowired private BranchScopeService branchScope;
     @Autowired private UserRepository userRepository;
     @Autowired private RoleRepository roleRepository;
-    @Autowired private BranchRepository branchRepository;
     @Autowired private AuditLogRepository auditLogs;
 
     private CurrentUser admin;
     private CurrentUser owner;
-    private UUID branchA;
-    private UUID branchB;
 
     @BeforeEach
     void setUp() {
         admin = CurrentUser.of(account("Admin", "ADMIN").getId(), Role.ADMIN);
         owner = CurrentUser.of(account("Owner", "OWNER").getId(), Role.OWNER);
-        branchA = branch("A");
-        branchB = branch("B");
     }
 
     @Test
-    @DisplayName("Owner creates Staff assigned to a branch; Staff scope follows the assignment")
-    void ownerCreatesStaffWithBranchScope() {
-        AdminUserDto staff = service.create(staffRequest("Nhân viên A", List.of(branchA)), owner);
+    @DisplayName("Owner creates Staff, who then work across the whole store")
+    void ownerCreatesStaffForTheStore() {
+        AdminUserDto staff = service.create(staffRequest("Nhân viên A"), owner);
 
         assertThat(staff.role()).isEqualTo("STAFF");
-        assertThat(staff.branchIds()).containsExactly(branchA);
         CurrentUser staffUser = CurrentUser.of(staff.id(), Role.STAFF);
-        assertThat(branchScope.canAccess(staffUser, branchA)).isTrue();
-        assertThat(branchScope.canAccess(staffUser, branchB)).isFalse();
-        assertThat(branchScope.canAccess(owner, branchB)).as("Owner manages every branch").isTrue();
+        assertThat(branchScope.canAccess(staffUser, UUID.randomUUID())).isTrue();
+        assertThat(branchScope.visibleBranches(staffUser)).isEmpty();
+        CurrentUser customer = CurrentUser.of(UUID.randomUUID(), Role.CUSTOMER);
+        assertThat(branchScope.canAccess(customer, UUID.randomUUID())).isFalse();
         assertThat(service.list("STAFF", "nhân viên", owner)).extracting(AdminUserDto::id).contains(staff.id());
         assertThat(auditLogs.findByEntityTypeAndEntityIdOrderByOccurredAtAsc("USER", staff.id().toString()))
                 .extracting(entry -> entry.getAction()).containsExactly("ACCOUNT_CREATED");
-    }
-
-    @Test
-    @DisplayName("Staff without a branch, or with an unknown branch, is rejected")
-    void staffNeedsAnActiveBranch() {
-        assertThatThrownBy(() -> service.create(staffRequest("Không chi nhánh", List.of()), owner))
-                .isInstanceOf(BusinessException.class);
-        assertThatThrownBy(() -> service.create(staffRequest("Sai chi nhánh", List.of(UUID.randomUUID())), owner))
-                .isInstanceOf(BusinessException.class);
     }
 
     @Test
@@ -87,7 +70,7 @@ class AdminUserServiceTest {
         assertThat(service.manageableRoles(owner)).containsExactly(Role.STAFF);
 
         assertThat(service.create(request("Owner 2", "OWNER"), admin).role()).isEqualTo("OWNER");
-        assertForbidden(() -> service.create(staffRequest("Staff by admin", List.of(branchA)), admin));
+        assertForbidden(() -> service.create(staffRequest("Staff by admin"), admin));
         assertForbidden(() -> service.create(request("Owner by owner", "OWNER"), owner));
         assertThatThrownBy(() -> service.create(request("Khách", "CUSTOMER"), admin))
                 .isInstanceOf(BusinessException.class);
@@ -97,13 +80,13 @@ class AdminUserServiceTest {
     }
 
     @Test
-    @DisplayName("Owner reassigns Staff branches and locks the account")
-    void ownerReassignsAndLocksStaff() {
-        AdminUserDto staff = service.create(staffRequest("Nhân viên B", List.of(branchA)), owner);
+    @DisplayName("Owner edits and locks Staff")
+    void ownerEditsAndLocksStaff() {
+        AdminUserDto staff = service.create(staffRequest("Nhân viên B"), owner);
 
-        AdminUserDto moved = service.update(staff.id(),
-                new UpdateUserRequest("Nhân viên B", staff.phone(), "STAFF", List.of(branchB)), owner);
-        assertThat(moved.branchIds()).containsExactly(branchB);
+        AdminUserDto renamed = service.update(staff.id(),
+                new UpdateUserRequest("Nhân viên B2", staff.phone(), "STAFF"), owner);
+        assertThat(renamed.fullName()).isEqualTo("Nhân viên B2");
         assertThat(service.setStatus(staff.id(), "LOCKED", owner).status()).isEqualTo("LOCKED");
     }
 
@@ -113,18 +96,18 @@ class AdminUserServiceTest {
         CreateUserRequest first = request("Owner 3", "OWNER");
         service.create(first, admin);
         assertThatThrownBy(() -> service.create(
-                new CreateUserRequest("Khác", first.email(), phone(), "OWNER", PASSWORD, List.of()), admin))
+                new CreateUserRequest("Khác", first.email(), phone(), "OWNER", PASSWORD), admin))
                 .isInstanceOf(DuplicateResourceException.class);
 
         assertThatThrownBy(() -> service.setStatus(admin.id(), "LOCKED", admin)).isInstanceOf(BusinessException.class);
         User self = userRepository.findById(admin.id()).orElseThrow();
         assertThatThrownBy(() -> service.update(admin.id(),
-                new UpdateUserRequest("Admin", self.getPhone(), "OWNER", List.of()), admin))
+                new UpdateUserRequest("Admin", self.getPhone(), "OWNER"), admin))
                 .isInstanceOf(BusinessException.class);
 
         AdminUserDto second = service.create(request("Admin 2", "ADMIN"), admin);
         assertThat(service.update(second.id(),
-                new UpdateUserRequest("Admin 2", second.phone(), "OWNER", List.of()), admin).role()).isEqualTo("OWNER");
+                new UpdateUserRequest("Admin 2", second.phone(), "OWNER"), admin).role()).isEqualTo("OWNER");
     }
 
     private static void assertForbidden(org.assertj.core.api.ThrowableAssert.ThrowingCallable call) {
@@ -138,17 +121,12 @@ class AdminUserServiceTest {
         return userRepository.saveAndFlush(user);
     }
 
-    private UUID branch(String name) {
-        return branchRepository.save(Branch.builder().name("Chi nhánh " + name + " " + UUID.randomUUID()).build())
-                .getId();
-    }
-
     private static CreateUserRequest request(String name, String role) {
-        return new CreateUserRequest(name, UUID.randomUUID() + "@test.vn", phone(), role, PASSWORD, List.of());
+        return new CreateUserRequest(name, UUID.randomUUID() + "@test.vn", phone(), role, PASSWORD);
     }
 
-    private static CreateUserRequest staffRequest(String name, List<UUID> branches) {
-        return new CreateUserRequest(name, UUID.randomUUID() + "@test.vn", phone(), "STAFF", PASSWORD, branches);
+    private static CreateUserRequest staffRequest(String name) {
+        return new CreateUserRequest(name, UUID.randomUUID() + "@test.vn", phone(), "STAFF", PASSWORD);
     }
 
     private static String phone() {

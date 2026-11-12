@@ -91,7 +91,7 @@ public class SecurityConfig {
                         // Signed by payOS (HMAC) / by the device (HMAC challenge-response), not by JWT.
                         .requestMatchers(HttpMethod.POST, "/api/payments/payos/webhook").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/devices/activate", "/api/devices/activate/challenge").permitAll()
-                        .requestMatchers(HttpMethod.GET, "/api/branches", "/api/branches/**").permitAll()
+                        .requestMatchers(HttpMethod.GET, "/api/store", "/api/branches", "/api/branches/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/services", "/api/services/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/bookings/timeline-availability",
                                 "/api/bookings/recommendations", "/api/bookings/machine-search").permitAll()
@@ -122,17 +122,16 @@ public class SecurityConfig {
                         .requestMatchers("/api/admin/users", "/api/admin/users/**").hasAnyRole(OWNER, ADMIN)
                         .requestMatchers(HttpMethod.GET, "/api/admin/audit-logs").hasAnyRole(OWNER, ADMIN)
 
-                        // ── Branch operations (Owner manages every branch) ──────────────────
-                        .requestMatchers(HttpMethod.GET, "/api/admin/branches", "/api/admin/branches/**")
-                                .hasAnyRole(OWNER, ADMIN)
-                        .requestMatchers("/api/admin/branches", "/api/admin/branches/**").hasRole(OWNER)
+                        // ── The store (single-store mode: one store, the Owner edits it) ──────
+                        .requestMatchers(HttpMethod.GET, "/api/admin/store").hasAnyRole(STAFF, OWNER, ADMIN)
+                        .requestMatchers("/api/admin/store").hasRole(OWNER)
                         .requestMatchers("/api/admin/booking-config/**", "/api/admin/bookings/**").hasRole(OWNER)
 
                         // ── Machines & IoT ──────────────────────────────────────────────────
                         .requestMatchers("/api/admin/iot-devices", "/api/admin/iot-devices/**").hasRole(ADMIN)
                         .requestMatchers("/api/admin/machines", "/api/admin/machines/**").hasAnyRole(OWNER, ADMIN)
 
-                        // ── Branch staff work (Staff limited to assigned branches in the services) ──
+                        // ── Store staff work ─────────────────────────────────────────────────────
                         .requestMatchers(HttpMethod.POST, "/api/staff/lockers/*/compartments").hasRole(OWNER)
                         .requestMatchers("/api/staff/**").hasAnyRole(STAFF, OWNER)
                         .requestMatchers(HttpMethod.POST, "/api/refunds/*/approve", "/api/refunds/*/reject")

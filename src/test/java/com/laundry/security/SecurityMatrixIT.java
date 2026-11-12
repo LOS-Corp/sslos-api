@@ -8,6 +8,7 @@ import com.laundry.machine.entity.MachineDeploymentStatus;
 import com.laundry.machine.entity.MachineStatus;
 import com.laundry.machine.entity.MachineType;
 import com.laundry.machine.repository.MachineRepository;
+import com.laundry.branch.service.StoreService;
 import com.laundry.shared.security.Role;
 import com.laundry.support.IntegrationTest;
 import com.laundry.user.entity.BranchAssignment;
@@ -35,6 +36,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.authentication;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -110,18 +112,16 @@ class SecurityMatrixIT {
         mvc.perform(get("/api/machines/" + machineA + "/commands").with(as(Role.CUSTOMER)))
                 .andExpect(status().isForbidden());
         mvc.perform(get("/api/machines/" + machineA + "/commands").with(as(staffOfB, Role.STAFF)))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("BRANCH_OUT_OF_SCOPE"));
+                .andExpect(status().isOk());   // single store: every Staff works on every machine
         mvc.perform(get("/api/machines/" + machineA + "/commands").with(as(staffOfA, Role.STAFF)))
                 .andExpect(status().isOk());
     }
 
     @Test
-    @DisplayName("BR-01: Staff of another branch cannot list or open the lockers of this branch")
+    @DisplayName("BR-01: every Staff of the store lists the lockers; the Admin does not")
     void staffLockerScope() throws Exception {
         mvc.perform(get("/api/staff/lockers").param("branchId", branchA.toString()).with(as(staffOfB, Role.STAFF)))
-                .andExpect(status().isForbidden())
-                .andExpect(jsonPath("$.code").value("BRANCH_OUT_OF_SCOPE"));
+                .andExpect(status().isOk());
         mvc.perform(get("/api/staff/lockers").param("branchId", branchA.toString()).with(as(staffOfA, Role.STAFF)))
                 .andExpect(status().isOk());
         mvc.perform(get("/api/staff/lockers").with(as(Role.ADMIN))).andExpect(status().isForbidden());
@@ -142,8 +142,6 @@ class SecurityMatrixIT {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("REASON_REQUIRED"))
                 .andExpect(jsonPath("$.messageCode").value("MSG24"));
-        mvc.perform(command(machineA, "STOP", "Door jammed").with(as(staffOfB, Role.STAFF)))
-                .andExpect(status().isForbidden());
         mvc.perform(command(machineA, "SELF_DESTRUCT", "x").with(as(Role.OWNER)))
                 .andExpect(status().isBadRequest());
 
@@ -196,16 +194,16 @@ class SecurityMatrixIT {
     }
 
     @Test
-    @DisplayName("SC-25 / BR-28: customers do not see a branch that is not ready; operators still do, to set it up")
-    void branchListFollowsReadiness() throws Exception {
-        String notReady = branchA.toString();
-        mvc.perform(get("/api/branches"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$[?(@.id == '" + notReady + "')]").isEmpty());
-        mvc.perform(get("/api/branches").with(as(Role.CUSTOMER)))
-                .andExpect(jsonPath("$[?(@.id == '" + notReady + "')]").isEmpty());
+    @DisplayName("Single store: the branch list holds only the store, and only once customers can book there")
+    void branchListIsTheStore() throws Exception {
+        String store = StoreService.SEEDED_STORE_ID.toString();
+        mvc.perform(get("/api/store")).andExpect(status().isOk()).andExpect(jsonPath("$.id").value(store));
         mvc.perform(get("/api/branches").with(as(Role.OWNER)))
-                .andExpect(jsonPath("$[?(@.id == '" + notReady + "')]").isNotEmpty());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].id").value(store));
+        mvc.perform(get("/api/branches").with(as(Role.CUSTOMER)))
+                .andExpect(jsonPath("$[?(@.id == '" + branchA + "')]").isEmpty());
     }
 
     @Test
@@ -217,9 +215,13 @@ class SecurityMatrixIT {
 
         mvc.perform(get("/api/admin/booking-config/branches").with(as(Role.ADMIN))).andExpect(status().isForbidden());
         mvc.perform(get("/api/admin/booking-config/branches").with(as(Role.OWNER))).andExpect(status().isOk());
-        mvc.perform(post("/api/admin/branches").with(as(Role.ADMIN))
+        mvc.perform(put("/api/admin/store").with(as(Role.ADMIN))
                         .contentType(MediaType.APPLICATION_JSON).content("{}"))
                 .andExpect(status().isForbidden());
+        mvc.perform(put("/api/admin/store").with(as(Role.STAFF))
+                        .contentType(MediaType.APPLICATION_JSON).content("{}"))
+                .andExpect(status().isForbidden());
+        mvc.perform(get("/api/store")).andExpect(status().isOk());
         mvc.perform(get("/api/admin/iot-devices").with(as(Role.OWNER))).andExpect(status().isForbidden());
         mvc.perform(get("/api/admin/users").with(as(Role.STAFF))).andExpect(status().isForbidden());
     }

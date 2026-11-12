@@ -1,7 +1,6 @@
 package com.laundry.branch.service;
 
 import com.laundry.branch.dto.BranchDto;
-import com.laundry.branch.dto.CreateBranchRequest;
 import com.laundry.branch.dto.UpdateBranchRequest;
 import com.laundry.branch.entity.Branch;
 import com.laundry.branch.entity.BranchStatus;
@@ -10,8 +9,6 @@ import com.laundry.branch.repository.BranchRepository;
 import com.laundry.shared.exception.DuplicateResourceException;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -24,26 +21,6 @@ import java.util.UUID;
 public class BranchService {
 
     private final BranchRepository branchRepository;
-
-    @Transactional
-    public BranchDto createBranch(CreateBranchRequest request) {
-        String trimmedName = request.getName().trim();
-        if (branchRepository.existsByNameIgnoreCase(trimmedName)) {
-            throw new DuplicateResourceException("Branch name already exists: " + trimmedName);
-        }
-
-        Branch branch = Branch.builder()
-                .name(trimmedName)
-                .address(request.getAddress() != null ? request.getAddress().trim() : null)
-                .phone(request.getPhone() != null ? request.getPhone().trim() : null)
-                .mapEmbedUrl(normalizeMapEmbedUrl(request.getMapEmbedUrl()))
-                .status(BranchStatus.ACTIVE)
-                .build();
-
-        branch = branchRepository.save(branch);
-        log.info("Created new branch: {} ({})", branch.getName(), branch.getId());
-        return toDto(branch);
-    }
 
     @Transactional
     public BranchDto updateBranch(UUID id, UpdateBranchRequest request) {
@@ -100,26 +77,11 @@ public class BranchService {
         return toDto(branch);
     }
 
-    @Transactional
-    public void deleteBranch(UUID id) {
-        Branch branch = branchRepository.findById(id)
-                .orElseThrow(() -> BranchNotFoundException.byId(id));
-
-        branchRepository.delete(branch);
-        log.info("Deleted branch: {} ({})", branch.getName(), id);
-    }
-
     @Transactional(readOnly = true)
     public BranchDto getBranchById(UUID id) {
         return branchRepository.findById(id)
                 .map(this::toDto)
                 .orElseThrow(() -> BranchNotFoundException.byId(id));
-    }
-
-    @Transactional(readOnly = true)
-    public Page<Branch> searchBranches(String q, BranchStatus status, Pageable pageable) {
-        String cleanQ = (q != null && !q.isBlank()) ? q.trim() : null;
-        return branchRepository.searchBranches(cleanQ, status, pageable);
     }
 
     @Transactional(readOnly = true)

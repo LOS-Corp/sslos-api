@@ -136,7 +136,7 @@ class MoneyFlowIT {
     }
 
     @Test
-    @DisplayName("Owner rejects with a reason; Staff see only their branch's pending requests")
+    @DisplayName("Owner rejects with a reason; every Staff of the store sees the pending request")
     void rejectAndVisibility() {
         UUID paymentId = paymentOf(paidBooking(tomorrow));
         CurrentUser staff = staffOf(branchId);
@@ -146,14 +146,10 @@ class MoneyFlowIT {
                 "Khách phàn nàn", null), staff);
 
         assertThat(refunds.pending(null, staff)).extracting(RefundResponse::id).contains(raised.id());
-        assertThat(refunds.pending(null, otherStaff)).extracting(RefundResponse::id).doesNotContain(raised.id());
+        assertThat(refunds.pending(null, otherStaff)).extracting(RefundResponse::id).contains(raised.id());
         assertThat(refunds.pending(branchId, owner)).extracting(RefundResponse::id).contains(raised.id());
         assertThat(refunds.get(raised.id(), staff).id()).isEqualTo(raised.id());
-        assertThatThrownBy(() -> refunds.get(raised.id(), otherStaff))
-                .isInstanceOf(BusinessException.class)
-                .satisfies(e -> assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.BRANCH_OUT_OF_SCOPE));
-        assertThatThrownBy(() -> refunds.raise(new CreateRefundRequest(paymentId, BigDecimal.ONE, "x", null), otherStaff))
-                .isInstanceOf(BusinessException.class);
+        assertThat(refunds.get(raised.id(), otherStaff).id()).as("single store: no branch scope").isEqualTo(raised.id());
 
         assertThatThrownBy(() -> refunds.reject(raised.id(), " ", owner))
                 .isInstanceOf(BusinessException.class)
@@ -181,7 +177,7 @@ class MoneyFlowIT {
     }
 
     @Test
-    @DisplayName("UC-08 4a: Staff find the order by its short code; other branches never see it")
+    @DisplayName("UC-08 4a: Staff find the order by its short code")
     void lookupByShortCode() {
         UUID booking = paidBooking(tomorrow);
         String shortCode = booking.toString().substring(0, 8).toUpperCase();
@@ -203,7 +199,6 @@ class MoneyFlowIT {
         assertThat(refunds.lookup(booking.toString(), staff).getFirst().payments().getFirst().refundable())
                 .isEqualByComparingTo(BigDecimal.valueOf(PRICE - 20_000));
 
-        assertThat(refunds.lookup(shortCode, staffOf(Fixtures.bookableBranch(jdbc, PRICE)))).isEmpty();
         assertThatThrownBy(() -> refunds.lookup("abc", staff))
                 .isInstanceOf(BusinessException.class)
                 .satisfies(e -> assertThat(((BusinessException) e).code()).isEqualTo(ErrorCode.VALIDATION_FAILED));

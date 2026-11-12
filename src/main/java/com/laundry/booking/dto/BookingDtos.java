@@ -186,7 +186,8 @@ public final class BookingDtos {
     public record AvailableStartRange(Instant startTime, Instant endExclusive) {}
 
     public record CreateHoldRequest(
-            @NotNull UUID branchId,
+            /* Single-store mode: optional, null = the store. */
+            UUID branchId,
             @NotBlank String serviceCode,
             @NotNull Instant startTime,
             @NotNull List<UUID> resourceIds,
@@ -196,7 +197,13 @@ public final class BookingDtos {
             String dryProgram,
             /* Laundry the customer brings (kg); never booked on a smaller machine (BR-26). Optional. */
             @DecimalMin(value = "0.1") BigDecimal declaredLoadKg
-    ) {}
+    ) {
+        /** This request with the store filled in when the client sent no branch. */
+        public CreateHoldRequest inStore(UUID storeId) {
+            return branchId != null ? this : new CreateHoldRequest(storeId, serviceCode, startTime, resourceIds,
+                    idempotencyKey, washProgram, dryProgram, declaredLoadKg);
+        }
+    }
 
     public record BookingDto(
             UUID transactionId,

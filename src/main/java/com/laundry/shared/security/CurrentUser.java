@@ -22,7 +22,7 @@ public record CurrentUser(UUID id, Set<Role> roles) {
         return roles.contains(role);
     }
 
-    /** Owner and Admin see every branch; Staff only their assigned branches. */
+    /** Owner and Admin run the whole system; Staff work in the store but cannot change its setup. */
     public boolean isChainWide() {
         return has(Role.OWNER) || has(Role.ADMIN);
     }

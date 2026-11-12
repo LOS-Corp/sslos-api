@@ -25,7 +25,7 @@ import java.util.UUID;
  *       The pattern intentionally rejects lowercase so the code
  *       stays canonical (e.g. "WM001", "DRYER-02").</li>
  *   <li>{@code type}: required, must match {@link MachineType}.</li>
- *   <li>{@code branchId}: required UUID.</li>
+ *   <li>{@code branchId}: optional; single-store mode fills in the store.</li>
  *   <li>{@code displayName}: optional, max 100 chars.</li>
  *   <li>{@code locationDescription}: optional, max 200 chars.</li>
  *   <li>{@code device}: optional. An approved (VERIFIED) board to attach;
@@ -49,7 +49,6 @@ public class CreateMachineRequest {
     @NotNull(message = "type is required")
     private MachineType type;
 
-    @NotNull(message = "branchId is required")
     private UUID branchId;
 
     @Size(max = 100, message = "displayName must be at most 100 characters")

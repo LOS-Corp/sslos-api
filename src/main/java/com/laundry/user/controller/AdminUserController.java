@@ -46,11 +46,6 @@ public class AdminUserController {
         return adminUserService.manageableRoles(actor);
     }
 
-    @GetMapping("/assignable-branches")
-    public List<UUID> assignableBranches(CurrentUser actor) {
-        return adminUserService.assignableBranches(actor);
-    }
-
     @PostMapping
     public AdminUserDto create(@Valid @RequestBody CreateUserRequest request, CurrentUser actor) {
         return adminUserService.create(request, actor);
