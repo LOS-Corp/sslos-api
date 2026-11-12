@@ -1,6 +1,6 @@
 package com.laundry.machine.controller;
 
-import com.laundry.iot.service.DeviceProvisioningService;
+import com.laundry.iot.service.DeviceRegistryService;
 import com.laundry.machine.dto.CreateMachineRequest;
 import com.laundry.machine.dto.MachineDto;
 import com.laundry.machine.dto.MachineQrLabelDto;
@@ -51,14 +51,14 @@ public class MachineAdminController {
 
     private final MachineRepository machineRepository;
     private final MachineCatalogService machineCatalogService;
-    private final DeviceProvisioningService provisioningService;
+    private final DeviceRegistryService registryService;
     private final MachineStartAuthorizationService startAuthorizationService;
 
     @Value("${app.machine.qr-base-url:}")
     private String qrBaseUrl;
 
     @PostMapping
-    @Operation(summary = "Create a new machine; with `device` (the scanned setup QR) it is paired in the same step")
+    @Operation(summary = "Create a new machine; with `device` (an approved board's deviceId) it is paired in the same step")
     public ResponseEntity<MachineDto> createMachine(@Valid @RequestBody CreateMachineRequest request,
                                                     Authentication authentication) {
         MachineDto created = machineCatalogService.createMachine(request, userId(authentication));
@@ -140,8 +140,8 @@ public class MachineAdminController {
     @DeleteMapping("/{machineCode}")
     @Operation(summary = "Hard-delete a machine")
     public ResponseEntity<Void> deleteMachine(@PathVariable String machineCode) {
-        // Revoke the bound ESP32's EMQX identity first so it cannot outlive the machine.
-        provisioningService.unpair(machineCode);
+        // Revoke the bound board first so it cannot outlive the machine.
+        registryService.unpair(machineCode);
         machineCatalogService.deleteMachine(machineCode);
         return ResponseEntity.noContent().build();
     }

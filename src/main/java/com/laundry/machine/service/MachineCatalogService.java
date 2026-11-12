@@ -6,7 +6,7 @@ import com.laundry.shared.error.ErrorCode;
 import com.laundry.shared.error.BusinessException;
 
 import com.laundry.branch.repository.BranchRepository;
-import com.laundry.iot.service.DeviceProvisioningService;
+import com.laundry.iot.service.DeviceRegistryService;
 import com.laundry.machine.dto.CreateMachineRequest;
 import com.laundry.machine.dto.MachineDto;
 import com.laundry.machine.dto.UpdateMachineRequest;
@@ -47,7 +47,7 @@ public class MachineCatalogService {
     private final MachineStateService machineStateService;
     private final MachineWebSocketBroadcaster broadcaster;
     private final DeviceEventRepository deviceEventRepository;
-    private final DeviceProvisioningService provisioningService;
+    private final DeviceRegistryService registryService;
 
 // ── Admin CRUD ─────────────────────────────────────────────────────────
 
@@ -66,7 +66,7 @@ public class MachineCatalogService {
         String code = request.getMachineCode().trim().toUpperCase();
 
         if (request.getBranchId() == null) {
-            throw new IllegalArgumentException("branchId is required — MQTT topics are scoped per branch");
+            throw new IllegalArgumentException("branchId is required");
         }
         UUID branchId = request.getBranchId();
 
@@ -96,10 +96,10 @@ public class MachineCatalogService {
         persistEvent(machine, DeviceEventType.MACHINE_REGISTERED,
                 "Machine registered by admin: " + branchId + "/" + code, null);
         if (request.getDevice() != null) {
-            provisioningService.pair(machine, request.getDevice(), adminId);
+            registryService.pair(machine, request.getDevice(), adminId);
         }
         log.info("[{}/{}] Machine created{}", branchId, code,
-                request.getDevice() == null ? "" : " and pairing with " + request.getDevice().deviceId());
+                request.getDevice() == null ? "" : " and attached to " + request.getDevice().deviceId());
         return toDto(machine);
     }
 
@@ -111,7 +111,7 @@ public class MachineCatalogService {
      * {@link IllegalStateException} (mapped to 400 by the global handler).
      *
      * <p>machineCode is intentionally NOT mutable here. Changing the code would
-     * orphan all in-flight MQTT topics and require device re-provisioning.
+     * orphan all in-flight device traffic and require device re-provisioning.
      */
     @Transactional
     public MachineDto updateMachine(String machineCode, UpdateMachineRequest request) {

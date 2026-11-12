@@ -29,7 +29,7 @@ import java.util.stream.Collectors;
 /**
  * Core service for all machine-related business logic triggered by IoT events.
  *
- * <p>All MQTT message handlers delegate to this service. The service:
+ * <p>All device frame handlers delegate to this service. The service:
  * <ul>
  *     <li>Validates machine exists (unknown machines are logged and ignored).</li>
  *     <li>Validates state transitions.</li>
@@ -43,7 +43,7 @@ import java.util.stream.Collectors;
  *     <li>Triggers WebSocket broadcasts (status updates + telemetry stream).</li>
  * </ul>
  *
- * <p>MQTT traffic is keyed by {@code (branchId-UUID, machineCode)}. Each
+ * <p>Device traffic is keyed by {@code (branchId-UUID, machineCode)}. Each
  * incoming message resolves the {@link Machine} entity exactly once per
  * handler call.
  */
@@ -100,9 +100,9 @@ public class MachineService {
     public Machine requireMachine(UUID branchId, String machineCode) {
         return machineRepository.findByBranchIdAndMachineCode(branchId, machineCode)
                 .orElseThrow(() -> {
-                    log.warn("Unknown MQTT machine: branchId={} machineId={}", branchId, machineCode);
+                    log.warn("Unknown device machine: branchId={} machineId={}", branchId, machineCode);
                     return new MachineNotFoundException(
-                            String.format("Unknown MQTT machine: branchId=%s machineId=%s", branchId, machineCode));
+                            String.format("Unknown device machine: branchId=%s machineId=%s", branchId, machineCode));
                 });
     }
 
@@ -111,7 +111,7 @@ public class MachineService {
     /**
      * Promote a runtime status snapshot to a persistent state change.
      *
-     * <p>This is the only place a {@code Machine} row is updated by MQTT
+     * <p>This is the only place a {@code Machine} row is updated by device frames
      * status messages. Persisted only when {@code status} transitions.
      * Sensor fields live in the runtime snapshot, never on the entity.
      */
@@ -121,7 +121,7 @@ public class MachineService {
 
         Optional<Machine> machineOpt = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
         if (machineOpt.isEmpty()) {
-            log.warn("Unknown MQTT machine: branchId={} machineId={}", branchId, machineCode);
+            log.warn("Unknown device machine: branchId={} machineId={}", branchId, machineCode);
             return;
         }
         Machine machine = machineOpt.get();
@@ -196,7 +196,7 @@ public class MachineService {
      * snapshot to {@code online=false} and updates {@code machines.online}.
      */
     @Transactional
-    public void markOfflineFromMqtt(UUID branchId, String machineCode, String status, String errorMessage) {
+    public void markOfflineFromDevice(UUID branchId, String machineCode, String status, String errorMessage) {
         Optional<Machine> machineOpt = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
         if (machineOpt.isEmpty()) return;
         Machine machine = machineOpt.get();
@@ -215,7 +215,7 @@ public class MachineService {
             machine.setErrorCode(errorMessage != null ? errorMessage : machine.getErrorCode());
             persistentChanged = true;
             persistEvent(machine, DeviceEventType.OFFLINE_DETECTED,
-                    "MQTT Last Will received: status=" + status, null);
+                    "Device link lost: status=" + status, null);
         }
 
         if (persistentChanged) {
@@ -258,7 +258,7 @@ public class MachineService {
     public void processHeartbeat(UUID branchId, String machineCode, MachineRuntimeState snapshot) {
         Optional<Machine> machineOpt = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
         if (machineOpt.isEmpty()) {
-            log.warn("Unknown MQTT machine: branchId={} machineId={}", branchId, machineCode);
+            log.warn("Unknown device machine: branchId={} machineId={}", branchId, machineCode);
             return;
         }
         Machine machine = machineOpt.get();
@@ -285,7 +285,7 @@ public class MachineService {
             broadcaster.broadcastMachineUpdate(machine);
             log.info("[{}/{}] Machine came back online", branchId, machineCode);
             if (machine.getDeploymentStatus() == MachineDeploymentStatus.PROVISIONED) {
-                // A freshly activated board just reached MQTT: the IoT module starts its self-test after commit.
+                // A freshly activated board just came online over USB: the IoT module starts its self-test after commit.
                 events.publishEvent(new MachineCameOnline(machine.getId(), machine.getMachineCode()));
             }
         }
@@ -307,7 +307,7 @@ public class MachineService {
                                    String rawEventType, String detail, String bookingIdStr) {
         Optional<Machine> machineOpt = machineRepository.findByBranchIdAndMachineCode(branchId, machineCode);
         if (machineOpt.isEmpty()) {
-            log.warn("Unknown MQTT machine: branchId={} machineId={}", branchId, machineCode);
+            log.warn("Unknown device machine: branchId={} machineId={}", branchId, machineCode);
             return;
         }
         Machine machine = machineOpt.get();

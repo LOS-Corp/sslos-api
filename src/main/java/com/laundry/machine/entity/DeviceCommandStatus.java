@@ -7,10 +7,10 @@ package com.laundry.machine.entity;
  *   PENDING → SENT → ACKNOWLEDGED / REJECTED / TIMEOUT / FAILED
  */
 public enum DeviceCommandStatus {
-    /** Command created in DB but not yet published to MQTT broker. */
+    /** Command created in DB but not yet sent to the device. */
     PENDING,
 
-    /** Command published to MQTT. Awaiting ACK from device. */
+    /** Command sent to the device. Awaiting ACK from device. */
     SENT,
 
     /** Device acknowledged the command (accepted it for execution). */

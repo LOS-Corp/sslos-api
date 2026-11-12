@@ -40,7 +40,7 @@ import java.util.UUID;
  * <ol>
  *   <li>{@link #checkIn(String, UUID)} picks the customer's machine slot (a booking allocation), creates
  *       a {@link MachineStartAuthorization} (status PENDING) and publishes
- *       an {@code AUTHORIZE_START} MQTT command.</li>
+ *       an {@code AUTHORIZE_START} device command.</li>
  *   <li>The device ACKs via {@code AUTH_ACK} →
  *       {@link #handleAuthAck(Machine, String, String, boolean, String, String, String)}
  *       flips the row to GRANTED and locks the {@code deviceBootId}.</li>
@@ -215,7 +215,7 @@ public class MachineStartAuthorizationService {
             throw new CheckInRejectedException("Reservation window has not opened yet: another booking comes first");
         }
 
-        // 8. Persist the authorization row + publish the MQTT command.
+        // 8. Persist the authorization row + send the device command.
         OffsetDateTime created = OffsetDateTime.now();
         OffsetDateTime expires = created.plusSeconds(authorizationTtlSeconds);
         MachineStartAuthorization auth = MachineStartAuthorization.builder()

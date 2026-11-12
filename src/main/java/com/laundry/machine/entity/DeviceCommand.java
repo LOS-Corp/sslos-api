@@ -10,11 +10,11 @@ import java.util.UUID;
  * Persisted record of a command issued from the backend to a device.
  *
  * <p>Commands flow: Frontend → REST API → Backend validates → DeviceCommand created
- * → published to MQTT → (optionally) ACK received from device.
+ * → sent to the device → (optionally) ACK received from device.
  *
  * <p>Idempotency: Each command has a unique {@code commandId} (UUID). The device
  * should ignore a command with a commandId it has already processed. The backend
- * tracks status so duplicate MQTT deliveries are handled gracefully.
+ * tracks status so duplicate device frames are handled gracefully.
  *
  * <p>Backward compatibility: The current ESP32 prototype only understands
  * {@code {"command": "START"}}. The full payload with commandId/bookingId/issuedAt
@@ -77,7 +77,7 @@ public class DeviceCommand {
     @Builder.Default
     private DeviceCommandStatus status = DeviceCommandStatus.PENDING;
 
-    /** Timestamp when this command was published to MQTT. */
+    /** Timestamp when this command was sent to the device. */
     @Column(name = "sent_at")
     private OffsetDateTime sentAt;
 

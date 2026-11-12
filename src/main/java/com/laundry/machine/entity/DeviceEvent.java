@@ -9,7 +9,7 @@ import java.util.UUID;
 /**
  * Persisted record of an important event from or about a device.
  *
- * <p>Not every MQTT message generates an event — only significant state changes
+ * <p>Not every device frame generates an event — only significant state changes
  * (started, completed, error, offline, etc.) are recorded here. High-frequency
  * telemetry is handled separately and only the current state is stored in Machine.
  */
@@ -57,7 +57,7 @@ public class DeviceEvent {
 
     /**
      * Raw JSON payload that caused this event (truncated to 2000 chars for storage efficiency).
-     * Useful for debugging without re-subscribing to MQTT.
+     * Useful for debugging without reading the board's serial log.
      */
     @Column(name = "raw_payload", length = 2000)
     private String rawPayload;

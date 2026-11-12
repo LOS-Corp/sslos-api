@@ -15,7 +15,7 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
  * <p>Frontend clients connect to the STOMP endpoint and subscribe to topics.
  * The backend publishes machine updates to those topics via SimpMessagingTemplate.
  *
- * <p>Flow: ESP32 → MQTT → EMQX → Spring Boot → SimpMessagingTemplate → WebSocket → Client
+ * <p>Flow: ESP32 → USB serial → Spring Boot → SimpMessagingTemplate → WebSocket → Client
  *
  * <p>Destinations:
  * <ul>

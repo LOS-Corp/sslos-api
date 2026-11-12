@@ -22,7 +22,7 @@ import java.util.UUID;
  *   <li>Status transitions are validated through {@code MachineStateService} —
  *       arbitrary admin-forced transitions are NOT allowed.</li>
  *   <li>machineCode is immutable after creation. Changing it would invalidate
- *       all in-flight MQTT topics and device-side config.</li>
+ *       all in-flight device traffic and device-side config.</li>
  * </ul>
  */
 @Data

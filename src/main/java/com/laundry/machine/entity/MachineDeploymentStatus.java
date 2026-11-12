@@ -6,8 +6,8 @@ package com.laundry.machine.entity;
  * or checked in.
  *
  * <pre>
- * UNASSIGNED → PAIRING → PROVISIONED → TESTING → TEST_PASSED → ACTIVE
- *                                          ↘ TEST_FAILED ↗ (re-test)
+ * UNASSIGNED → PROVISIONED → TESTING → TEST_PASSED → ACTIVE
+ *                              ↘ TEST_FAILED ↗ (re-test)
  *
  * ACTIVE → MAINTENANCE → TESTING → TEST_PASSED → ACTIVE
  *               ↖ (self-test failed) ↙
@@ -22,10 +22,7 @@ public enum MachineDeploymentStatus {
     /** Machine record exists; no ESP32 bound to it. */
     UNASSIGNED,
 
-    /** Admin scanned the device QR; a time-limited pairing session is open. */
-    PAIRING,
-
-    /** Device proved its identity and received its own EMQX credentials. */
+    /** An approved board is attached; waiting for its first heartbeat and self-test. */
     PROVISIONED,
 
     /** SELF_TEST command sent; waiting for the device result. */

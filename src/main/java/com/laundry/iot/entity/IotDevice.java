@@ -1,18 +1,29 @@
 package com.laundry.iot.entity;
 
-import jakarta.persistence.*;
-import lombok.*;
+import com.laundry.machine.entity.MachineType;
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.GenerationType;
+import jakarta.persistence.Id;
+import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
+import jakarta.persistence.Table;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
 
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
- * A physical ESP32 controller and its provisioning state.
- *
- * <p>No secret is stored here in plain text: the MQTT password is derived on
- * demand from the server-side device key (see {@code DeviceSecretService}),
- * and the setup key scanned from the device screen is kept AES-GCM encrypted
- * only while a pairing session is open.
+ * A physical board and its approval/binding state. The board talks to the
+ * backend over USB serial, so it holds no credential: being plugged into the
+ * store server plus an admin's approval is what lets it in.
  */
 @Entity
 @Table(name = "iot_devices")
@@ -36,31 +47,13 @@ public class IotDevice {
     @Column(nullable = false, length = 20)
     private IotDeviceStatus status;
 
-    /** Bumped on every credential issuance so the MQTT password rotates. */
-    @Column(name = "credential_version", nullable = false)
-    @Builder.Default
-    private int credentialVersion = 0;
-
-    /** Setup key from the scanned device QR, encrypted; wiped once the device activates. */
-    @Column(name = "setup_key_enc", columnDefinition = "TEXT")
-    private String setupKeyEnc;
-
-    /** Wrong activation proofs in the current pairing; the key is wiped at the limit. */
-    @Column(name = "failed_pairing_attempts", nullable = false)
-    @Builder.Default
-    private int failedPairingAttempts = 0;
+    /** Kind of machine the firmware drives, as reported in HELLO; pairing must match it. */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "device_type", length = 20)
+    private MachineType deviceType;
 
     @Column(name = "machine_id")
     private UUID machineId;
-
-    @Column(name = "mqtt_username", length = 64)
-    private String mqttUsername;
-
-    @Column(name = "challenge_nonce", length = 64)
-    private String challengeNonce;
-
-    @Column(name = "challenge_expires_at")
-    private OffsetDateTime challengeExpiresAt;
 
     @Column(name = "firmware_version", length = 50)
     private String firmwareVersion;
@@ -77,14 +70,22 @@ public class IotDevice {
     @Column(name = "last_self_test_detail", columnDefinition = "TEXT")
     private String lastSelfTestDetail;
 
-    /** First time an admin scanned this board. */
+    /** First HELLO from this board. */
     @Column(name = "enrolled_at", nullable = false)
     private OffsetDateTime enrolledAt;
 
-    /** Board proved it holds the scanned code (device added before its machine). */
+    /** Last HELLO (plug-in or board restart). */
+    @Column(name = "last_seen_at")
+    private OffsetDateTime lastSeenAt;
+
+    /** When and by whom the board was approved. */
     @Column(name = "verified_at")
     private OffsetDateTime verifiedAt;
 
+    @Column(name = "verified_by")
+    private UUID verifiedBy;
+
+    /** Attached to its machine. */
     @Column(name = "activated_at")
     private OffsetDateTime activatedAt;
 

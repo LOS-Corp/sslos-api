@@ -29,7 +29,7 @@ public interface MachineWebSocketBroadcaster {
      * This is the canonical realtime push — it carries the merged
      * telemetry / status / heartbeat / event state and is delivered to
      * every STOMP subscriber within a few hundred milliseconds of the
-     * MQTT message arriving.
+     * device frame arriving.
      *
      * <p>Destinations:
      * <ul>

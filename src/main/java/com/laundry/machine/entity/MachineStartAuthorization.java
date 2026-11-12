@@ -92,7 +92,7 @@ public class MachineStartAuthorization {
     @Column(name = "machine_id", nullable = false)
     private UUID machineId;
 
-    /** Machine code (e.g. "WM001") — denormalized for MQTT/log. */
+    /** Machine code (e.g. "WM001") — denormalized for device frames and logs. */
     @Column(name = "machine_code", nullable = false, length = 50)
     private String machineCode;
 

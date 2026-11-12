@@ -21,10 +21,9 @@ import com.laundry.machine.entity.Machine;
 import com.laundry.machine.entity.MachineType;
 import com.laundry.machine.repository.DeviceEventRepository;
 import com.laundry.machine.repository.MachineRepository;
-import com.laundry.mqtt.service.MqttPublisher;
+import com.laundry.devicelink.DeviceLink;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -89,8 +88,7 @@ public class LockerService {
     private final ObjectMapper objectMapper;
     private final MachineRepository machineRepository;
     private final DeviceEventRepository deviceEventRepository;
-    /** Lazy: MqttPublisher → connection → router → WasherMessageHandler → this service. */
-    private final ObjectProvider<MqttPublisher> mqttPublisherProvider;
+    private final DeviceLink deviceLink;
     private final BookingLifecycleService lifecycleService;
     private final BranchScopeService branchScope;
     private final BookingProperties bookingProps;
@@ -443,9 +441,7 @@ public class LockerService {
     private void publishAfterCommit(Machine machine, Map<String, Object> payload) {
         Runnable send = () -> {
             try {
-                MqttPublisher mqttPublisher = mqttPublisherProvider.getObject();
-                mqttPublisher.publish(mqttPublisher.buildWasherCommandTopic(machine.getBranchId(), machine.getMachineCode()),
-                        objectMapper.writeValueAsString(payload));
+                deviceLink.send(machine, objectMapper.writeValueAsString(payload));
             } catch (Exception e) {
                 log.error("[LOCKER] cannot send {} to {}: {}", payload.get("type"), machine.getMachineCode(), e.getMessage());
             }

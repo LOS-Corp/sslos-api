@@ -6,10 +6,8 @@ import com.laundry.iot.dto.ProvisioningDtos.ProvisioningStatus;
 import com.laundry.iot.dto.ProvisioningDtos.SelfTestResponse;
 import com.laundry.iot.entity.IotDevice;
 import com.laundry.iot.entity.IotDeviceStatus;
-import com.laundry.iot.entity.PairingSession;
 import com.laundry.iot.exception.ProvisioningRejectedException;
 import com.laundry.iot.repository.IotDeviceRepository;
-import com.laundry.iot.repository.PairingSessionRepository;
 import com.laundry.machine.entity.*;
 import com.laundry.machine.exception.MachineNotFoundException;
 import com.laundry.machine.repository.DeviceCommandRepository;
@@ -17,10 +15,11 @@ import com.laundry.machine.repository.DeviceEventRepository;
 import com.laundry.machine.repository.MachineRepository;
 import com.laundry.machine.repository.MachineStartAuthorizationRepository;
 import com.laundry.machine.service.MachineWebSocketBroadcaster;
-import com.laundry.mqtt.service.MqttPublisher;
+import com.laundry.devicelink.DeviceLink;
+import com.laundry.devicelink.DeviceLinkChanged;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -34,7 +33,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Stages 7 and 8: remote self-test over MQTT and commissioning.
+ * Stages 7 and 8: remote self-test over USB and commissioning.
  *
  * <p>The self-test is a {@code SELF_TEST} command on {@code .../command}. The
  * device acks on {@code .../command/ack}, checks door, START button (the
@@ -59,14 +58,13 @@ public class CommissioningService {
     private final MachineRepository machineRepository;
     private final MachineStartAuthorizationRepository startAuthorizationRepository;
     private final IotDeviceRepository deviceRepository;
-    private final PairingSessionRepository sessionRepository;
     private final DeviceCommandRepository commandRepository;
     private final DeviceEventRepository eventRepository;
-    /** Lazy: MqttPublisher → connection → router → WasherMessageHandler → this service. */
-    private final ObjectProvider<MqttPublisher> mqttPublisherProvider;
+    private final DeviceLink deviceLink;
     private final ObjectMapper objectMapper;
     private final MachineWebSocketBroadcaster broadcaster;
     private final IotProvisioningProperties properties;
+    private final ApplicationEventPublisher events;
 
     @Value("${app.machine.heartbeat-timeout-seconds:30}")
     private int heartbeatTimeoutSeconds;
@@ -79,13 +77,11 @@ public class CommissioningService {
         Machine machine = requireMachine(machineCode);
         IotDevice device = machine.getDeviceId() == null ? null
                 : deviceRepository.findByDeviceId(machine.getDeviceId()).orElse(null);
-        OffsetDateTime pairingExpiresAt = sessionRepository
-                .findByMachineIdAndStatus(machine.getId(), PairingSession.Status.OPEN).stream()
-                .map(PairingSession::getExpiresAt).max(OffsetDateTime::compareTo).orElse(null);
         return new ProvisioningStatus(machine.getMachineCode(), machine.getDeploymentStatus(),
-                machine.getDeviceId(), device == null ? null : device.getStatus(), machine.isOnline(),
+                machine.getDeviceId(), device == null ? null : device.getStatus(),
+                deviceLink.isConnected(machine.getDeviceId()), deviceLink.portOf(machine.getDeviceId()),
+                machine.isOnline(),
                 machine.getLastHeartbeatAt(), device == null ? null : device.getFirmwareVersion(),
-                pairingExpiresAt,
                 device == null ? null : device.getLastSelfTestAt(),
                 device == null ? null : device.getLastSelfTestPassed(),
                 device == null ? null : device.getLastSelfTestDetail(),
@@ -126,13 +122,11 @@ public class CommissioningService {
         payload.put("branchId", machine.getBranchId().toString());
         payload.put("machineId", machine.getMachineCode());
         payload.put("buttonTimeoutSeconds", properties.getSelfTestButtonTimeoutSeconds());
-        MqttPublisher mqttPublisher = mqttPublisherProvider.getObject();
         try {
-            mqttPublisher.publish(mqttPublisher.buildWasherCommandTopic(machine.getBranchId(), machine.getMachineCode()),
-                    objectMapper.writeValueAsString(payload));
+            deviceLink.send(machine, objectMapper.writeValueAsString(payload));
         } catch (Exception e) {
             command.setStatus(DeviceCommandStatus.FAILED);
-            command.setAckReason("Publish failed: " + e.getMessage());
+            command.setAckReason("Send failed: " + e.getMessage());
             commandRepository.save(command);
             throw new IllegalStateException("Failed to send SELF_TEST to device: " + e.getMessage(), e);
         }
@@ -154,7 +148,7 @@ public class CommissioningService {
     }
 
     /**
-     * Called from the MQTT {@code /event} handler for {@code SELF_TEST_RESULT}.
+     * Called from the device {@code event} handler for {@code SELF_TEST_RESULT}.
      * Ignores results that do not match the outstanding command.
      */
     @Transactional
@@ -220,6 +214,7 @@ public class CommissioningService {
                     "Maintenance since " + since + " completed by " + adminId
                             + " after a passing self-test");
             broadcaster.broadcastMachineUpdate(machine);
+            events.publishEvent(new DeviceLinkChanged(device.getDeviceId()));  // the board shows the QR again
             log.info("[IOT] Machine {} back from maintenance, approved by {}", machineCode, adminId);
             return status(machineCode);
         }
@@ -236,6 +231,7 @@ public class CommissioningService {
                 "Commissioned by " + adminId + " with device " + device.getDeviceId()
                         + " fw " + device.getFirmwareVersion());
         broadcaster.broadcastMachineUpdate(machine);
+        events.publishEvent(new DeviceLinkChanged(device.getDeviceId()));  // the board starts showing its QR
         log.info("[IOT] Machine {} commissioned by {}", machineCode, adminId);
         return status(machineCode);
     }
@@ -275,6 +271,7 @@ public class CommissioningService {
         String note = reason == null || reason.isBlank() ? "" : ": " + reason.strip();
         event(machine, DeviceEventType.MAINTENANCE_STARTED, "Maintenance started by " + adminId + note);
         broadcaster.broadcastMachineUpdate(machine);
+        if (machine.getDeviceId() != null) events.publishEvent(new DeviceLinkChanged(machine.getDeviceId()));  // hide the QR
         log.info("[IOT] Machine {} entered maintenance by {}", machineCode, adminId);
         return status(machineCode);
     }
@@ -306,7 +303,7 @@ public class CommissioningService {
         if (!machine.isOnline() || last == null
                 || last.isBefore(OffsetDateTime.now().minusSeconds(heartbeatTimeoutSeconds))) {
             throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
-                    "Device is offline; it must be connected to EMQX with a recent heartbeat");
+                    "Device is offline; it must be plugged in over USB with a recent heartbeat");
         }
     }
 }

@@ -25,7 +25,7 @@ import java.util.UUID;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record RuntimeSnapshotMessage(
         @Schema(description = "Backend UUID of the machine (matches Machine.id)") UUID machineId,
-        @Schema(description = "Human-readable code from MQTT topic", example = "WM001") String machineCode,
+        @Schema(description = "Human-readable machine code", example = "WM001") String machineCode,
         @Schema(description = "Branch UUID") UUID branchId,
         @Schema(description = "Firmware version reported by the device", example = "3.1.0") String firmwareVersion,
         @Schema(description = "true if firmware is in Wokwi / mock mode") Boolean simulation,
@@ -47,9 +47,7 @@ public record RuntimeSnapshotMessage(
         @Schema(description = "Latest HX711 weight reading in kg") BigDecimal weightKg,
         @Schema(description = "Latest water level reading in liters") BigDecimal waterLevelLiters,
         @Schema(description = "Latest MPU6050 vibration reading in g") BigDecimal vibrationG,
-        @Schema(description = "WiFi station connected") Boolean wifiConnected,
-        @Schema(description = "MQTT broker connected") Boolean mqttConnected,
-        @Schema(description = "WiFi RSSI (dBm)") Integer wifiRssi,
+        @Schema(description = "USB link to the backend is up (as seen by the board)") Boolean linkConnected,
         @Schema(description = "Device uptime in seconds since boot") Long uptimeSeconds,
         @Schema(description = "ESP32 free heap bytes") Long freeHeap,
         @Schema(description = "HX711 sensor enabled in firmware") Boolean hx711Available,
@@ -58,7 +56,7 @@ public record RuntimeSnapshotMessage(
         @Schema(description = "Water level sensor enabled in firmware") Boolean waterSensorEnabled,
         @Schema(description = "Server timestamp of the most recent telemetry") OffsetDateTime lastTelemetryAt,
         @Schema(description = "Server timestamp of the most recent heartbeat") OffsetDateTime lastHeartbeat,
-        @Schema(description = "Server timestamp of any MQTT message from the device") OffsetDateTime lastSeen,
+        @Schema(description = "Server timestamp of any frame from the device") OffsetDateTime lastSeen,
         @Schema(description = "Server timestamp when this message was produced") OffsetDateTime timestamp
 ) {
     public static RuntimeSnapshotMessage from(Machine m, MachineRuntimeState s) {
@@ -87,9 +85,7 @@ public record RuntimeSnapshotMessage(
                 s.getWeightKg(),
                 s.getWaterLevelLiters(),
                 s.getVibrationG(),
-                s.getWifiConnected(),
-                s.getMqttConnected(),
-                s.getWifiRssi(),
+                s.getLinkConnected(),
                 s.getUptimeSeconds(),
                 s.getFreeHeap(),
                 s.getHx711Available(),

@@ -1,28 +1,25 @@
 package com.laundry.iot.entity;
 
 /**
- * Lifecycle of a physical ESP32 controller.
+ * Lifecycle of a physical board (machine unit with its built-in ESP32).
  *
  * <pre>
- * PAIRING ──(machine session)──────────────→ PROVISIONED → ACTIVE
- * PAIRING ──(device-first)──→ VERIFIED ──(attach to machine)──→ PAIRING
- * any → REVOKED → (re-scan) PAIRING
+ * (USB HELLO) UNCLAIMED ──(admin approves)──→ VERIFIED ──(owner pairs)──→ PROVISIONED ──(commission)──→ ACTIVE
+ * any ──(revoke / unpair)──→ REVOKED ──(admin approves again)──→ VERIFIED
  * </pre>
  *
- * <p>A device row is created the first time an admin scans the setup QR on the
- * board's screen, so there is no separate workshop enrollment.
+ * <p>A device row is created the first time the board says HELLO on a USB
+ * serial port of the store server, so there is no separate enrollment.
  */
 public enum IotDeviceStatus {
-    /** Pairing ended without activation (expired, cancelled or too many wrong proofs). */
+    /** Seen on a USB port; waiting for an admin to approve it. */
     UNCLAIMED,
-    /** An admin scanned the board's setup QR; waiting for the board to prove it holds the key. */
-    PAIRING,
-    /** Added before its machine: the board proved its code; waiting to be attached to a machine. */
+    /** Approved by an admin; not attached to a machine yet. */
     VERIFIED,
-    /** Device authenticated and holds its own EMQX credentials. */
+    /** Attached to a machine; commissioning (self-test) in progress. */
     PROVISIONED,
     /** The machine it controls has been commissioned. */
     ACTIVE,
-    /** Identity withdrawn; EMQX credentials deleted. Reset the board and scan its new QR to reuse it. */
+    /** Withdrawn; ignored on the link until an admin approves it again. */
     REVOKED
 }

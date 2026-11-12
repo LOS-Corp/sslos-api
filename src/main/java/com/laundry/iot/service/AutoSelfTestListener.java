@@ -14,7 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 /**
  * Starts the commissioning self-test on its own the first time a freshly
- * provisioned board reaches MQTT, so the technician only has to press START
+ * provisioned board comes online over USB, so the technician only has to press START
  * when the board beeps. Later runs (re-test, after maintenance) stay manual
  * via {@code POST /api/admin/machines/{code}/self-test}.
  */

@@ -67,12 +67,9 @@ class MachineStartAuthorizationServiceTest {
     @PersistenceContext
     private EntityManager entityManager;
 
-    /**
-     * Replaces the real Paho-backed publisher with a Mockito mock so the
-     * flow doesn't need a live broker.
-     */
+    /** Mocked in {@code @IntegrationTest}, so the flow doesn't need a board on USB. */
     @Autowired
-    private com.laundry.mqtt.service.MqttPublisher mqttPublisher;
+    private com.laundry.devicelink.DeviceLink deviceLink;
 
 
     // ── Fixtures ──────────────────────────────────────────────────────────────
@@ -83,7 +80,7 @@ class MachineStartAuthorizationServiceTest {
 
     @BeforeEach
     void setUp() {
-        reset(mqttPublisher);
+        reset(deviceLink);
         authorizationRepository.deleteAll();
         paymentRepository.deleteAll();
         jdbc.update("DELETE FROM policy_violations");
@@ -121,7 +118,7 @@ class MachineStartAuthorizationServiceTest {
                 .isEqualTo(MachineStartAuthorizationStatus.PENDING);
         assertThat(response.remainingSeconds()).isPositive();
         assertThat(response.expiresAt()).isAfter(OffsetDateTime.now());
-        verifyPublished(mqttPublisher, 1);
+        verifySent(deviceLink, 1);
     }
 
     // ── 2-7. Bad-reservation variants ───────────────────────────────────────
@@ -259,7 +256,7 @@ class MachineStartAuthorizationServiceTest {
         assertThat(after.getStatus()).isEqualTo(MachineStartAuthorizationStatus.EXPIRED);
         // 1 publish for AUTHORIZE_START + 1 for REVOKE_START = 2 publishes.
         // We accept any-string because the mocked topic builder returns null.
-        verifyPublished(mqttPublisher, 2);
+        verifySent(deviceLink, 2);
     }
 
     @Test
@@ -287,7 +284,7 @@ class MachineStartAuthorizationServiceTest {
     void adminTestRun_fullCycleWithoutReservation() {
         UUID adminId = UUID.randomUUID();
         var response = service.adminTestStart("WM001", adminId);
-        verifyPublished(mqttPublisher, 1);
+        verifySent(deviceLink, 1);
 
         var auth = authorizationRepository.findById(response.authorizationId()).orElseThrow();
         assertThat(auth.isTestRun()).isTrue();
@@ -340,9 +337,9 @@ class MachineStartAuthorizationServiceTest {
                 .isInstanceOf(CheckInRejectedException.class);
 
         service.handleAuthAck(machine, test.authorizationId(), "cmd", true, "ACCEPTED", null, "boot-A");
-        org.mockito.Mockito.clearInvocations(mqttPublisher);
+        org.mockito.Mockito.clearInvocations(deviceLink);
         service.pressTestStart("WM001");
-        verifyPublished(mqttPublisher, 1);
+        verifySent(deviceLink, 1);
     }
 
     // ── 9. Double QR check-in ───────────────────────────────────────────────
@@ -355,7 +352,7 @@ class MachineStartAuthorizationServiceTest {
         var second = service.checkIn("WM001", customerId);
         assertThat(second.authorizationId()).isEqualTo(first.authorizationId());
         // Only ONE AUTHORIZE_START published.
-        verifyPublished(mqttPublisher, 1);
+        verifySent(deviceLink, 1);
     }
 
     // ── 10. Press START twice ───────────────────────────────────────────────
@@ -397,11 +394,11 @@ class MachineStartAuthorizationServiceTest {
         assertThat(runId1).isNotNull();
     }
 
-    // ── 12. MQTT disconnection: the device never ACKs ───────────────────────
+    // ── 12. Board unplugged: the device never ACKs ───────────────────────
 
     @Test
     @DisplayName("Missing AUTH_ACK does not block check-in; admin still creates a PENDING row")
-    void case12_mqttDisconnect() {
+    void case12_deviceDisconnected() {
         seedReservationAndPayment(true, false);
         var response = service.checkIn("WM001", customerId);
         // Simulate the device being unreachable: no AUTH_ACK arrives. The
@@ -587,7 +584,7 @@ class MachineStartAuthorizationServiceTest {
         assertThat(finalRow.getRunId()).isEqualTo(runId);
         assertThat(finalRow.getConsumedAt()).isNotNull();
         // AuthorizeStart + StartApproval + RevokeStart(zero) = 2 publishes.
-        verifyPublished(mqttPublisher, 2);
+        verifySent(deviceLink, 2);
     }
 
     // ── Booking cancel → revoke cascade ────────────────────────────────────
@@ -602,7 +599,7 @@ class MachineStartAuthorizationServiceTest {
         // BookingCancellationService publishes BookingReleased; its listener calls this after commit.
         int n = service.revokeByBooking(bookingOf(allocationId), "BOOKING_CANCELLED");
         assertThat(n).isEqualTo(1);
-        verifyPublished(mqttPublisher, 2); // AUTHORIZE_START, then REVOKE_START
+        verifySent(deviceLink, 2); // AUTHORIZE_START, then REVOKE_START
         reload(auth.getId());
         var after = authorizationRepository.findById(auth.getId()).orElseThrow();
         assertThat(after.getStatus()).isEqualTo(MachineStartAuthorizationStatus.REVOKED);
@@ -801,22 +798,8 @@ class MachineStartAuthorizationServiceTest {
         entityManager.clear();
     }
 
-    /**
-     * The mocked {@link com.laundry.mqtt.service.MqttPublisher#publish(String, String)}
-     * signature throws {@link org.eclipse.paho.client.mqttv3.MqttException} — that
-     * is awkward to keep declaring across every verify() call. This helper
-     * catches the (never-thrown-in-mocked-mode) exception and lets us chain
-     * verify() with raw {@code any()} matchers without polluting each test.
-     */
-    private static void verifyPublished(com.laundry.mqtt.service.MqttPublisher publisher, int times) {
-        // The service under test calls BOTH `buildWasherCommandTopic(...)` and
-        // `publish(...)` per helper. Verify only the `publish` invocations.
-        try {
-            org.mockito.Mockito.verify(publisher, org.mockito.Mockito.times(times))
-                    .publish(org.mockito.ArgumentMatchers.<String>any(),
-                             org.mockito.ArgumentMatchers.<String>any());
-        } catch (org.eclipse.paho.client.mqttv3.MqttException e) {
-            throw new AssertionError("Mocked publish should never throw MqttException", e);
-        }
+    private static void verifySent(com.laundry.devicelink.DeviceLink link, int times) {
+        org.mockito.Mockito.verify(link, org.mockito.Mockito.times(times))
+                .send(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.<String>any());
     }
 }

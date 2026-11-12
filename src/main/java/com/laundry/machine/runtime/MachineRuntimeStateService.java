@@ -37,7 +37,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * </ul>
  *
  * <p>The in-memory map is keyed by {@link Machine#getId()}, so concurrent
- * updates from MQTT threads are safe. Each update is a defensive copy of
+ * updates from device worker threads are safe. Each update is a defensive copy of
  * the previous snapshot, so a half-updated state can never be observed by
  * a reader.
  */
@@ -62,7 +62,7 @@ public class MachineRuntimeStateService {
         return txTemplate;
     }
 
-    /** machineId → latest known snapshot. Concurrent because MQTT fanout is parallel. */
+    /** machineId → latest known snapshot. Concurrent because device fanout is parallel. */
     private final ConcurrentHashMap<UUID, MachineRuntimeState> states = new ConcurrentHashMap<>();
 
     /** Dirty flag — set to true on every update, cleared after a successful flush. */
@@ -100,7 +100,7 @@ public class MachineRuntimeStateService {
      * (the device wouldn't be publishing otherwise).
      *
      * @param machine     the resolved {@link Machine} (null = unknown device, skipped)
-     * @param snapshot    the parsed payload (see {@link com.laundry.mqtt.handler.WasherPayloads.DeviceSnapshot})
+     * @param snapshot    the parsed payload (see {@link com.laundry.devicelink.handler.WasherPayloads.DeviceSnapshot})
      */
     public void applyTelemetry(Machine machine, MachineRuntimeState snapshot) {
         if (machine == null || snapshot == null) return;
@@ -193,7 +193,7 @@ public class MachineRuntimeStateService {
 
     /**
      * Mark a machine offline without zeroing out sensor data. Called by the
-     * offline detector (heartbeat timeout) or when the MQTT broker delivers a
+     * offline detector (heartbeat timeout) or when the board reports a
      * LWT retained message carrying {@code "online": false}.
      */
     public void markOffline(UUID machineId, Machine machine) {
@@ -375,7 +375,7 @@ public class MachineRuntimeStateService {
     /**
      * Heuristic: a stale seq is treated as a device reboot when the firmware
      * version changed, the uptime dropped back to a small value, or the
-     * device just reconnected (freeHeap reset, wifi/mqtt transitions).
+     * uptime dropped back.
      */
     private boolean isEsp32Reset(MachineRuntimeState prev, MachineRuntimeState incoming,
                                  long incomingSeq, long prevSeq) {
@@ -386,12 +386,6 @@ public class MachineRuntimeStateService {
         Long prevUptime = prev.getUptimeSeconds();
         Long newUptime = incoming.getUptimeSeconds();
         if (newUptime != null && (prevUptime == null || newUptime < prevUptime)) {
-            return true;
-        }
-        // Wifi just reconnected or simulation mode flipped — also signals a reboot.
-        Boolean prevWifi = prev.getWifiConnected();
-        Boolean newWifi = incoming.getWifiConnected();
-        if (newWifi != null && prevWifi != null && !newWifi.equals(prevWifi)) {
             return true;
         }
         return false;
@@ -411,9 +405,7 @@ public class MachineRuntimeStateService {
         MachineRuntimeState m = copyOf(prev);
         // Heartbeat only refreshes connectivity fields.
         if (in.getOnline() != null) m.setOnline(in.getOnline());
-        if (in.getWifiConnected() != null) m.setWifiConnected(in.getWifiConnected());
-        if (in.getMqttConnected() != null) m.setMqttConnected(in.getMqttConnected());
-        if (in.getWifiRssi() != null) m.setWifiRssi(in.getWifiRssi());
+        if (in.getLinkConnected() != null) m.setLinkConnected(in.getLinkConnected());
         if (in.getUptimeSeconds() != null) m.setUptimeSeconds(in.getUptimeSeconds());
         if (in.getFreeHeap() != null) m.setFreeHeap(in.getFreeHeap());
         if (in.getStatus() != null) m.setStatus(in.getStatus());
@@ -438,9 +430,7 @@ public class MachineRuntimeStateService {
     /** Copy non-null fields from {@code in} onto {@code m}. */
     private static void applyNonNull(MachineRuntimeState m, MachineRuntimeState in) {
         if (in.getOnline() != null) m.setOnline(in.getOnline());
-        if (in.getWifiConnected() != null) m.setWifiConnected(in.getWifiConnected());
-        if (in.getMqttConnected() != null) m.setMqttConnected(in.getMqttConnected());
-        if (in.getWifiRssi() != null) m.setWifiRssi(in.getWifiRssi());
+        if (in.getLinkConnected() != null) m.setLinkConnected(in.getLinkConnected());
         if (in.getUptimeSeconds() != null) m.setUptimeSeconds(in.getUptimeSeconds());
         if (in.getFreeHeap() != null) m.setFreeHeap(in.getFreeHeap());
         if (in.getStatus() != null) m.setStatus(in.getStatus());
@@ -472,9 +462,7 @@ public class MachineRuntimeStateService {
                 .branchId(in.getBranchId())
                 .machineCode(in.getMachineCode())
                 .online(in.getOnline())
-                .wifiConnected(in.getWifiConnected())
-                .mqttConnected(in.getMqttConnected())
-                .wifiRssi(in.getWifiRssi())
+                .linkConnected(in.getLinkConnected())
                 .uptimeSeconds(in.getUptimeSeconds())
                 .freeHeap(in.getFreeHeap())
                 .status(in.getStatus())

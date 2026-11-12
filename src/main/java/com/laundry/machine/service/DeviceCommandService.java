@@ -39,7 +39,7 @@ import java.util.UUID;
  *   <li>{@link RemoteCommandAuthorizer} decides whether the caller may send this command (FR-ACT-06, BR-25).</li>
  *   <li>Validate the machine is online and its state allows the command.</li>
  *   <li>Persist {@link DeviceCommand} as PENDING and write the audit entry — one transaction.</li>
- *   <li>After commit, {@link DeviceCommandDispatcher} publishes to MQTT and marks it SENT or FAILED,
+ *   <li>After commit, {@link DeviceCommandDispatcher} sends it to the device and marks it SENT or FAILED,
  *       so a rolled-back request never reaches a device (ADR-08).</li>
  * </ol>
  *
@@ -112,7 +112,7 @@ public class DeviceCommandService {
     }
 
     /**
-     * Builds the MQTT command payload.
+     * Builds the device command payload.
      *
      * <p>The "command" field is always present for backward compatibility
      * with older firmware. Firmware v2 additionally parses {@code commandId}.

@@ -15,7 +15,7 @@ import java.util.UUID;
 /**
  * Mutable, in-memory + persisted snapshot of a machine's runtime state.
  *
- * <p>Populated by MQTT handlers (status / telemetry / heartbeat / event / command/ack)
+ * <p>Populated by device frame handlers (status / telemetry / heartbeat / event / command/ack)
  * and read by the public API to enrich {@code MachineDetailDto} with realtime data.
  *
  * <p>Fields intentionally mirror the firmware payload — see {@code WasherPayloads}.
@@ -38,9 +38,7 @@ public class MachineRuntimeState implements Serializable {
 
     // ── Connectivity & device health ────────────────────────────────────────
     private Boolean online;
-    private Boolean wifiConnected;
-    private Boolean mqttConnected;
-    private Integer wifiRssi;
+    private Boolean linkConnected;
     private Long uptimeSeconds;
     private Long freeHeap;
 

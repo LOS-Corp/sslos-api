@@ -17,9 +17,9 @@ import java.util.UUID;
  * </pre>
  *
  * <p>High-frequency sensor telemetry (weight, water level, vibration, remaining seconds, etc.)
- * is NOT persisted into PostgreSQL. It is streamed directly via MQTT → Spring Boot → WebSocket/STOMP.
+ * is NOT persisted into PostgreSQL. It is streamed directly via USB serial → Spring Boot → WebSocket/STOMP.
  *
- * <p>MQTT identity is scoped by {@code (branchId-UUID, machineCode)} — every device
+ * <p>Device traffic is keyed by {@code (branchId-UUID, machineCode)} — every device
  * publishes to a topic that includes the {@link UUID} of the branch it is installed in.
  */
 @Entity
@@ -51,14 +51,14 @@ public class Machine {
     // ── Static Configuration / Registry ─────────────────────────────────────
 
     /**
-     * Machine identifier matching the MQTT topic segment (e.g., "WM001").
+     * Machine identifier used in device frames (e.g., "WM001").
      * Unique within each branch.
      */
     @Column(name = "machine_code", nullable = false, length = 50)
     private String machineCode;
 
     /**
-     * Branch/store this machine belongs to. Required — MQTT topics are scoped per branch.
+     * Branch/store this machine belongs to. Required.
      */
     @Column(name = "branch_id", nullable = false)
     private UUID branchId;

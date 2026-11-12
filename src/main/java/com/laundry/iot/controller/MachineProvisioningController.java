@@ -2,7 +2,7 @@ package com.laundry.iot.controller;
 
 import com.laundry.iot.dto.ProvisioningDtos.*;
 import com.laundry.iot.service.CommissioningService;
-import com.laundry.iot.service.DeviceProvisioningService;
+import com.laundry.iot.service.DeviceRegistryService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -14,7 +14,7 @@ import org.springframework.web.bind.annotation.*;
 import java.util.UUID;
 
 /**
- * Stages 3, 7 and 8 for one machine: pair a scanned device, run the remote
+ * One machine's commissioning: attach an approved board, run the remote
  * self-test, commission, and take it into maintenance. Lives under {@code /api/admin/machines} so the
  * existing admin/owner rule in {@code SecurityConfig} applies.
  */
@@ -24,7 +24,7 @@ import java.util.UUID;
 @Tag(name = "Machine Provisioning (Admin)", description = "Pairing, self-test and commissioning")
 public class MachineProvisioningController {
 
-    private final DeviceProvisioningService provisioningService;
+    private final DeviceRegistryService registryService;
     private final CommissioningService commissioningService;
 
     @GetMapping("/provisioning")
@@ -34,15 +34,16 @@ public class MachineProvisioningController {
     }
 
     @PostMapping("/pairing")
-    @Operation(summary = "Open a pairing session with the device whose QR was scanned")
-    public PairingResponse pair(@PathVariable String machineCode,
-                                @Valid @RequestBody StartPairingRequest request,
-                                Authentication authentication) {
-        return provisioningService.startPairing(machineCode, request, userId(authentication));
+    @Operation(summary = "Attach an approved (VERIFIED) board; its first heartbeat starts the self-test")
+    public ProvisioningStatus pair(@PathVariable String machineCode,
+                                   @Valid @RequestBody PairDeviceRequest request,
+                                   Authentication authentication) {
+        registryService.startPairing(machineCode, request, userId(authentication));
+        return commissioningService.status(machineCode);
     }
 
     @PostMapping("/self-test")
-    @Operation(summary = "Send SELF_TEST over MQTT; result arrives on the device /event channel")
+    @Operation(summary = "Send SELF_TEST over USB; the result arrives on the device event channel")
     public SelfTestResponse selfTest(@PathVariable String machineCode, Authentication authentication) {
         return commissioningService.startSelfTest(machineCode, userId(authentication));
     }
@@ -66,7 +67,7 @@ public class MachineProvisioningController {
     @PostMapping("/unpair")
     @Operation(summary = "Detach and revoke the device; machine returns to UNASSIGNED")
     public ResponseEntity<Void> unpair(@PathVariable String machineCode) {
-        provisioningService.unpair(machineCode);
+        registryService.unpair(machineCode);
         return ResponseEntity.noContent().build();
     }
 

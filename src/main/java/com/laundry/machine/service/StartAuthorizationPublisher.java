@@ -5,11 +5,9 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.laundry.booking.service.MachineProgramService;
 import com.laundry.machine.entity.Machine;
 import com.laundry.machine.entity.MachineStartAuthorization;
-import com.laundry.mqtt.service.MqttPublisher;
+import com.laundry.devicelink.DeviceLink;
 import lombok.extern.slf4j.Slf4j;
-import org.eclipse.paho.client.mqttv3.MqttException;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
 import java.time.OffsetDateTime;
@@ -19,24 +17,23 @@ import java.util.UUID;
 
 /**
  * Messages of the START handshake sent to the controller (AUTHORIZE_START, START_APPROVAL, REVOKE_START).
- * A failed publish is logged, never thrown: the authorization then expires or times out on its own
- * (BR-08, BR-31). {@link MqttPublisher} is lazy to break the publisher → connection → router → handler
- * → service cycle.
+ * A failed send is logged, never thrown: the authorization then expires or times out on its own
+ * (BR-08, BR-31).
  */
 @Slf4j
 @Component
 public class StartAuthorizationPublisher {
 
-    private final MqttPublisher mqttPublisher;
+    private final DeviceLink deviceLink;
     private final MachineProgramService programService;
     private final ObjectMapper objectMapper;
     private final int authorizationTtlSeconds;
 
-    public StartAuthorizationPublisher(@Lazy MqttPublisher mqttPublisher,
+    public StartAuthorizationPublisher(DeviceLink deviceLink,
                                        MachineProgramService programService,
                                        ObjectMapper objectMapper,
                                        @Value("${app.machine.start-authorization.ttl-seconds:120}") int ttlSeconds) {
-        this.mqttPublisher = mqttPublisher;
+        this.deviceLink = deviceLink;
         this.programService = programService;
         this.objectMapper = objectMapper;
         this.authorizationTtlSeconds = ttlSeconds;
@@ -95,13 +92,12 @@ public class StartAuthorizationPublisher {
     }
 
     private boolean send(Machine machine, MachineStartAuthorization auth, Map<String, Object> payload) {
-        String topic = mqttPublisher.buildWasherCommandTopic(machine.getBranchId(), machine.getMachineCode());
         try {
-            mqttPublisher.publish(topic, objectMapper.writeValueAsString(payload));
+            deviceLink.send(machine, objectMapper.writeValueAsString(payload));
             return true;
-        } catch (JsonProcessingException | MqttException | RuntimeException e) {
-            log.error("[{}] Failed to publish {} for auth={}: {}", machine.getMachineCode(), payload.get("type"),
-                    auth.getId(), e.getMessage(), e);
+        } catch (JsonProcessingException | RuntimeException e) {
+            log.error("[{}] Failed to send {} for auth={}: {}", machine.getMachineCode(), payload.get("type"),
+                    auth.getId(), e.getMessage());
             return false;
         }
     }

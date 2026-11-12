@@ -110,11 +110,12 @@
 			<optional>true</optional>
 		</dependency>
 
-		<!-- ===== MQTT — Eclipse Paho (MQTT 3.1.1, TLS, EMQX-compatible) ===== -->
+		<!-- ===== USB serial link to the ESP32 boards (replaces MQTT) ===== -->
 		<dependency>
-			<groupId>org.eclipse.paho</groupId>
-			<artifactId>org.eclipse.paho.client.mqttv3</artifactId>
-			<version>1.2.5</version>
+			<groupId>com.fazecast</groupId>
+			<artifactId>jSerialComm</artifactId>
+			<!-- 2.11.0 extracts the ARM64 DLL on Windows x64, marks it read-only and then cannot load the right one. -->
+			<version>2.11.4</version>
 		</dependency>
 
 		<!-- ===== WebSocket / STOMP ===== -->

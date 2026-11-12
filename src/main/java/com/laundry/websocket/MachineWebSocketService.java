@@ -58,7 +58,7 @@ public class MachineWebSocketService implements MachineWebSocketBroadcaster {
      * Full-fidelity realtime push of the merged runtime snapshot. This is the
      * canonical path for the Machine Detail UI: it carries every field the
      * firmware is sending so the frontend does not need to make additional
-     * REST calls between MQTT messages.
+     * REST calls between device frames.
      */
     @Override
     public void broadcastRuntimeSnapshot(Machine machine, MachineRuntimeState snapshot) {
@@ -126,7 +126,6 @@ public class MachineWebSocketService implements MachineWebSocketBroadcaster {
             boolean leakDetected,
             String errorCode,
             String displayName,
-            Integer wifiRssi,
             Long uptimeSeconds,
             OffsetDateTime lastHeartbeatAt,
             OffsetDateTime timestamp
@@ -184,7 +183,6 @@ public class MachineWebSocketService implements MachineWebSocketBroadcaster {
                 resolvedLeak,
                 m.getErrorCode(),
                 m.getDisplayName(),
-                runtime != null ? runtime.getWifiRssi() : null,
                 runtime != null ? runtime.getUptimeSeconds() : null,
                 m.getLastHeartbeatAt(),
                 OffsetDateTime.now()

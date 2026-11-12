@@ -2,9 +2,10 @@ package com.laundry.machine.service;
 
 import com.laundry.machine.entity.DeviceCommandStatus;
 import com.laundry.machine.repository.DeviceCommandRepository;
-import com.laundry.mqtt.service.MqttPublisher;
+import com.laundry.devicelink.DeviceLink;
+import com.laundry.machine.entity.Machine;
+import com.laundry.machine.repository.MachineRepository;
 import lombok.RequiredArgsConstructor;
-import org.eclipse.paho.client.mqttv3.MqttException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -15,7 +16,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 import java.time.OffsetDateTime;
 
 /**
- * Publishes a stored command to its device after the issuing transaction committed (ADR-08), then
+ * Sends a stored command to its device after the issuing transaction committed (ADR-08), then
  * records SENT or FAILED in its own transaction. A command whose ACK never arrives is turned into
  * TIMEOUT by the command-timeout job (BR-31).
  */
@@ -24,7 +25,8 @@ import java.time.OffsetDateTime;
 @RequiredArgsConstructor
 public class DeviceCommandDispatcher {
 
-    private final MqttPublisher mqttPublisher;
+    private final DeviceLink deviceLink;
+    private final MachineRepository machines;
     private final DeviceCommandRepository commands;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
@@ -32,16 +34,18 @@ public class DeviceCommandDispatcher {
     public void dispatch(DeviceCommandRequested event) {
         commands.findById(event.commandId()).ifPresent(command -> {
             DeviceCommandRequested.Payload payload = event.payload();
-            String topic = mqttPublisher.buildWasherCommandTopic(payload.branchId(), payload.machineCode());
             try {
-                mqttPublisher.publish(topic, payload.json());
+                Machine machine = machines.findByBranchIdAndMachineCode(payload.branchId(), payload.machineCode())
+                        .orElseThrow(() -> new IllegalStateException("Machine " + payload.machineCode() + " not found"));
+                deviceLink.send(machine, payload.json());
                 command.setStatus(DeviceCommandStatus.SENT);
                 command.setSentAt(OffsetDateTime.now());
-                log.info("[{}] Command {} published to {}", payload.machineCode(), command.getCommandId(), topic);
-            } catch (MqttException | RuntimeException e) {
+                log.info("[{}] Command {} sent", payload.machineCode(), command.getCommandId());
+            } catch (RuntimeException e) {
                 command.setStatus(DeviceCommandStatus.FAILED);
-                command.setAckReason("Publish failed: " + e.getMessage());
-                log.error("[{}] Failed to publish command {}", payload.machineCode(), command.getCommandId(), e);
+                command.setAckReason("Send failed: " + e.getMessage());
+                log.error("[{}] Failed to send command {}: {}", payload.machineCode(), command.getCommandId(),
+                        e.getMessage());
             }
             commands.save(command);
         });

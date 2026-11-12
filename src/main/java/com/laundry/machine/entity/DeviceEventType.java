@@ -3,7 +3,7 @@ package com.laundry.machine.entity;
 /**
  * Types of device events that are persisted in the device_events table.
  *
- * <p>Events originate either from the device (via MQTT /event topic) or from
+ * <p>Events originate either from the device (via the event channel) or from
  * the backend itself (e.g., OFFLINE detected by scheduler).
  *
  * <p>Historical note: an earlier version of this enum carried an
@@ -71,7 +71,7 @@ public enum DeviceEventType {
     /** Admin scanned the device QR and opened a pairing session. */
     DEVICE_PAIRING_STARTED,
 
-    /** Device authenticated and received its own EMQX identity. */
+    /** Approved board attached to the machine. */
     DEVICE_PROVISIONED,
 
     /** Device reported a passing commissioning self-test. */
@@ -83,7 +83,7 @@ public enum DeviceEventType {
     /** Admin commissioned the machine; it is now bookable. */
     MACHINE_COMMISSIONED,
 
-    /** Device identity revoked and its EMQX credentials removed. */
+    /** Board detached from the machine and revoked. */
     DEVICE_REVOKED,
 
     // ── Maintenance ─────────────────────────────────────────────────────────

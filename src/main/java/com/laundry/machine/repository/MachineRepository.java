@@ -23,12 +23,12 @@ import java.util.UUID;
  * Repository for Machine entities.
  *
  * <p>Machine identity is scoped by {@code (branchId, machineCode)} where
- * {@code branchId} is a {@link UUID}. All MQTT topic lookups use this composite key.
+ * {@code branchId} is a {@link UUID}. All device lookups use this composite key.
  */
 @Repository
 public interface MachineRepository extends JpaRepository<Machine, UUID> {
 
-    /** Lookup by MQTT topic segment (e.g., "WM001"). */
+    /** Lookup by machine code (e.g., "WM001"). */
     Optional<Machine> findByMachineCode(String machineCode);
 
     boolean existsByMachineCode(String machineCode);
@@ -124,7 +124,7 @@ public interface MachineRepository extends JpaRepository<Machine, UUID> {
      * N machines with N statements instead of N round-trips.
      *
      * <p>Called by {@link com.laundry.machine.runtime.MachineRuntimeStateService}
-     * — do NOT call from the MQTT hot path.
+     * — do NOT call from the device frame hot path.
      */
     @Modifying
     @Query(value = """

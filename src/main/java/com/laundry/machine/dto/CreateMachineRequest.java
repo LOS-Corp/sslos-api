@@ -1,6 +1,6 @@
 package com.laundry.machine.dto;
 
-import com.laundry.iot.dto.ProvisioningDtos.StartPairingRequest;
+import com.laundry.iot.dto.ProvisioningDtos.PairDeviceRequest;
 import com.laundry.machine.entity.MachineType;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -22,13 +22,13 @@ import java.util.UUID;
  * <p>Validation rules:
  * <ul>
  *   <li>{@code machineCode}: required, 2-50 chars, uppercase letters / digits / '-' / '_'.
- *       The pattern intentionally rejects lowercase so the MQTT topic segment
+ *       The pattern intentionally rejects lowercase so the code
  *       stays canonical (e.g. "WM001", "DRYER-02").</li>
  *   <li>{@code type}: required, must match {@link MachineType}.</li>
- *   <li>{@code branchId}: required UUID — MQTT topics are scoped per branch.</li>
+ *   <li>{@code branchId}: required UUID.</li>
  *   <li>{@code displayName}: optional, max 100 chars.</li>
  *   <li>{@code locationDescription}: optional, max 200 chars.</li>
- *   <li>{@code device}: optional. The content of the setup QR on the ESP32 screen;
+ *   <li>{@code device}: optional. An approved (VERIFIED) board to attach;
  *       when present the machine is created and paired in one transaction.</li>
  * </ul>
  */
@@ -49,7 +49,7 @@ public class CreateMachineRequest {
     @NotNull(message = "type is required")
     private MachineType type;
 
-    @NotNull(message = "branchId is required — MQTT topics are scoped per branch")
+    @NotNull(message = "branchId is required")
     private UUID branchId;
 
     @Size(max = 100, message = "displayName must be at most 100 characters")
@@ -63,5 +63,5 @@ public class CreateMachineRequest {
     private java.math.BigDecimal capacityKg;
 
     @Valid
-    private StartPairingRequest device;
+    private PairDeviceRequest device;
 }

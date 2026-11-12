@@ -29,7 +29,7 @@ import java.util.stream.Collectors;
  * REST API for machine management and IoT command dispatch.
  *
  * <p>All command endpoints authenticate via JWT. The frontend MUST NOT publish
- * directly to EMQX — all commands route through this API for validation.
+ * directly to a board — all commands route through this API for validation.
  */
 @RestController
 @RequestMapping("/api/machines")
@@ -125,13 +125,13 @@ public class MachineController {
      * Customer-facing check-in endpoint. Scan QR → POST machineCode →
      * backend validates reservation ownership + payment + machine
      * availability, creates a {@link MachineStartAuthorization}, and
-     * publishes {@code AUTHORIZE_START} over MQTT.
+     * publishes {@code AUTHORIZE_START} over the USB link.
      *
      * <p>The customer's identity is taken from Spring Security — the
      * frontend MUST NOT be allowed to submit a userId.
      */
     @PostMapping("/check-in")
-    @Operation(summary = "QR check-in: validate reservation + payment, create START authorization, publish AUTHORIZE_START over MQTT")
+    @Operation(summary = "QR check-in: validate reservation + payment, create START authorization, send AUTHORIZE_START to the board")
     public ResponseEntity<CheckInResponse> checkIn(@Valid @RequestBody CheckInRequest request,
                                                   CurrentUser customer) {
         CheckInResponse response = startAuthorizationService.checkIn(request.machineCode(), customer.id());

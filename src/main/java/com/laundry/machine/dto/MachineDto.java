@@ -59,7 +59,6 @@ public class MachineDto {
     private String motorDirection;
     private Boolean doorClosed;
     private Boolean leakDetected;
-    private Integer wifiRssi;
     private Long uptimeSeconds;
 
     private String errorCode;
@@ -86,7 +85,6 @@ public class MachineDto {
         if (motorDirection == null) motorDirection = runtime.getMotorDirection();
         if (doorClosed == null) doorClosed = runtime.getDoorClosed();
         if (leakDetected == null) leakDetected = runtime.getLeakDetected();
-        if (wifiRssi == null) wifiRssi = runtime.getWifiRssi();
         if (uptimeSeconds == null) uptimeSeconds = runtime.getUptimeSeconds();
     }
 }
