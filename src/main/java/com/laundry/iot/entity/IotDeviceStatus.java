@@ -4,15 +4,15 @@ package com.laundry.iot.entity;
  * Lifecycle of a physical board (machine unit with its built-in ESP32).
  *
  * <pre>
- * (USB HELLO) UNCLAIMED ──(admin approves)──→ VERIFIED ──(owner pairs)──→ PROVISIONED ──(commission)──→ ACTIVE
+ * (HELLO) UNCLAIMED ──(admin approves)──→ VERIFIED ──(owner pairs)──→ PROVISIONED ──(commission)──→ ACTIVE
  * any ──(revoke / unpair)──→ REVOKED ──(admin approves again)──→ VERIFIED
  * </pre>
  *
- * <p>A device row is created the first time the board says HELLO on a USB
- * serial port of the store server, so there is no separate enrollment.
+ * <p>A device row is created the first time the board says HELLO on the
+ * store broker, so there is no separate enrollment.
  */
 public enum IotDeviceStatus {
-    /** Seen on a USB port; waiting for an admin to approve it. */
+    /** Seen on the broker; waiting for an admin to approve it. */
     UNCLAIMED,
     /** Approved by an admin; not attached to a machine yet. */
     VERIFIED,

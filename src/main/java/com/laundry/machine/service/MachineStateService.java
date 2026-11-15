@@ -5,6 +5,7 @@ import com.laundry.machine.entity.MachineStatus;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
+import java.util.Locale;
 import java.util.EnumSet;
 import java.util.Map;
 import java.util.Set;
@@ -80,7 +81,7 @@ public class MachineStateService {
      */
     public MachineStatus parseDeviceStatus(String rawStatus) {
         if (rawStatus == null || rawStatus.isBlank()) return null;
-        return switch (rawStatus.toUpperCase().trim()) {
+        return switch (rawStatus.toUpperCase(Locale.ROOT).trim()) {
             case "AVAILABLE"      -> MachineStatus.AVAILABLE;
             case "RUNNING"        -> MachineStatus.RUNNING;
             case "COMPLETED"      -> MachineStatus.COMPLETED;

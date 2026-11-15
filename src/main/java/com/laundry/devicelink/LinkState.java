@@ -30,7 +30,12 @@ public record LinkState(State state, String deviceId, String machineCode, String
         /** Withdrawn by an admin: the board must stay idle until approved again. */
         REVOKED,
         /** The same deviceId is already connected on another port. */
-        DUPLICATE
+        DUPLICATE,
+        /**
+         * Wi-Fi only: the board could not prove its identity (bad signature, or a key other than
+         * the pinned one). Nothing it sends is accepted until an admin trusts its new key.
+         */
+        AUTH_FAILED
     }
 
     public static LinkState of(State state, String deviceId) {

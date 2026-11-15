@@ -21,9 +21,8 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
- * A physical board and its approval/binding state. The board talks to the
- * backend over USB serial, so it holds no credential: being plugged into the
- * store server plus an admin's approval is what lets it in.
+ * A physical board and its approval/binding state. On every connection it proves itself with the
+ * ECDSA key pinned in {@link #publicKey} (see {@code DeviceKeys}); an admin's approval lets it in.
  */
 @Entity
 @Table(name = "iot_devices")
@@ -97,6 +96,42 @@ public class IotDevice {
 
     @Column(name = "revoked_at")
     private OffsetDateTime revokedAt;
+
+    // ── Wi-Fi identity (V59) ────────────────────────────────────────────────
+
+    /** Pinned P-256 public key (base64 of the 65-byte point); null until the board first joined over Wi-Fi. */
+    @Column(name = "public_key", columnDefinition = "TEXT")
+    private String publicKey;
+
+    /** SHA-256 of {@link #publicKey}, 64 hex digits; the board's screen shows the first 8. Unique. */
+    @Column(name = "key_fingerprint", length = 64)
+    private String keyFingerprint;
+
+    /** A different key the board presented and was refused with; an admin may trust it. */
+    @Column(name = "pending_public_key", columnDefinition = "TEXT")
+    private String pendingPublicKey;
+
+    @Column(name = "pending_key_fingerprint", length = 64)
+    private String pendingKeyFingerprint;
+
+    @Column(name = "pending_key_seen_at")
+    private OffsetDateTime pendingKeySeenAt;
+
+    /** Refused connections since the key was last trusted. */
+    @Builder.Default
+    @Column(name = "auth_failures", nullable = false)
+    private int authFailures = 0;
+
+    @Column(name = "last_auth_failure_at")
+    private OffsetDateTime lastAuthFailureAt;
+
+    /** The board's address on the store Wi-Fi, from its last HELLO. */
+    @Column(name = "last_ip", length = 45)
+    private String lastIp;
+
+    /** Wi-Fi signal strength (dBm) from its last HELLO. */
+    @Column(name = "last_rssi")
+    private Integer lastRssi;
 
     @Column(name = "updated_at", nullable = false)
     private OffsetDateTime updatedAt;

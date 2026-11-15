@@ -24,6 +24,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.Locale;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -61,7 +62,7 @@ public class MachineCatalogService {
      */
     @Transactional
     public MachineDto createMachine(CreateMachineRequest request, UUID adminId) {
-        String code = request.getMachineCode().trim().toUpperCase();
+        String code = request.getMachineCode().trim().toUpperCase(Locale.ROOT);
 
         if (machineRepository.existsByMachineCode(code)) {
             throw new DuplicateResourceException("Machine code already exists: " + code);

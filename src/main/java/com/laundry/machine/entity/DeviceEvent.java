@@ -57,7 +57,7 @@ public class DeviceEvent {
 
     /**
      * Raw JSON payload that caused this event (truncated to 2000 chars for storage efficiency).
-     * Useful for debugging without reading the board's serial log.
+     * Useful for debugging without reading the board's log.
      */
     @Column(name = "raw_payload", length = 2000)
     private String rawPayload;

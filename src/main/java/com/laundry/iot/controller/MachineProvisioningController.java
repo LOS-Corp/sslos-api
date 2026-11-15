@@ -43,7 +43,7 @@ public class MachineProvisioningController {
     }
 
     @PostMapping("/self-test")
-    @Operation(summary = "Send SELF_TEST over USB; the result arrives on the device event channel")
+    @Operation(summary = "Send SELF_TEST to the board; the result arrives on the device event channel")
     public SelfTestResponse selfTest(@PathVariable String machineCode, Authentication authentication) {
         return commissioningService.startSelfTest(machineCode, userId(authentication));
     }

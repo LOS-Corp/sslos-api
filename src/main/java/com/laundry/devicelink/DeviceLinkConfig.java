@@ -14,7 +14,7 @@ public class DeviceLinkConfig {
     public static final String DEVICE_EXECUTOR = "deviceTaskExecutor";
 
     /**
-     * Dedicated pool for incoming device frames, so the serial reader threads are
+     * Dedicated pool for incoming device frames, so the MQTT inbound thread is
      * never blocked by database work and device load stays isolated from the rest
      * of the application's async work.
      */

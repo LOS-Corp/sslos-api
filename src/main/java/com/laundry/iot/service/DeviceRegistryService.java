@@ -1,5 +1,7 @@
 package com.laundry.iot.service;
 
+import com.laundry.devicelink.DeviceIdentity;
+import com.laundry.devicelink.DeviceKeys;
 import com.laundry.devicelink.DeviceLink;
 import com.laundry.devicelink.DeviceLinkChanged;
 import com.laundry.devicelink.LinkState;
@@ -36,18 +38,19 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * Board onboarding over the USB serial link:
+ * Board onboarding over the store broker:
  *
  * <ol>
- *   <li>a board plugged into the store server says HELLO and gets a
+ *   <li>a board on the store Wi-Fi says HELLO, signs the backend's nonce and gets an
  *       {@code UNCLAIMED} row ({@link #onHello});</li>
  *   <li>an admin approves it ({@link #approve}) → {@code VERIFIED};</li>
  *   <li>the owner attaches it to a machine ({@link #pair}) → {@code PROVISIONED};
  *       its first heartbeat starts the self-test, then the machine is commissioned.</li>
  * </ol>
  *
- * <p>There is no secret to exchange: only a board physically plugged into the
- * server can talk to the backend, and an admin decides which boards are real.
+ * <p>The board signs every connection with its own key; the first key of a board that is
+ * not approved yet is pinned (the admin compares its fingerprint with the board's screen before
+ * approving), and any other key later is refused until an admin trusts it ({@link #trustPendingKey}).
  * Every change pushes the new {@link LinkState} to the board.
  */
 @Service
@@ -72,11 +75,7 @@ public class DeviceRegistryService {
         Map<UUID, String> machineCodes = machineRepository.findAll().stream()
                 .collect(Collectors.toMap(Machine::getId, Machine::getMachineCode));
         return deviceRepository.findAllByOrderByEnrolledAtDesc().stream()
-                .map(d -> new DeviceSummary(d.getDeviceId(), d.getStatus(), d.getDeviceType(), d.getMachineId(),
-                        d.getMachineId() == null ? null : machineCodes.get(d.getMachineId()),
-                        d.getFirmwareVersion(), deviceLink.isConnected(d.getDeviceId()),
-                        deviceLink.portOf(d.getDeviceId()), d.getEnrolledAt(), d.getLastSeenAt(),
-                        d.getVerifiedAt(), d.getActivatedAt(), d.getCommissionedAt(), d.getRevokedAt()))
+                .map(d -> toSummary(d, d.getMachineId() == null ? null : machineCodes.get(d.getMachineId())))
                 .toList();
     }
 
@@ -87,26 +86,99 @@ public class DeviceRegistryService {
                 .filter(d -> d.getStatus() == IotDeviceStatus.VERIFIED && d.getMachineId() == null)
                 .filter(d -> type == null || d.getDeviceType() == null || d.getDeviceType() == type)
                 .map(d -> new AvailableDevice(d.getDeviceId(), d.getDeviceType(), d.getFirmwareVersion(),
-                        deviceLink.isConnected(d.getDeviceId()), deviceLink.portOf(d.getDeviceId()), d.getVerifiedAt()))
+                        deviceLink.isConnected(d.getDeviceId()), d.getVerifiedAt()))
                 .toList();
     }
 
-    // ── Link callbacks (from the serial link) ──────────────────────────────
+    // ── Link callbacks (from the device link hub) ──────────────────────────
 
-    /** A board said HELLO: record it (first time = UNCLAIMED) and tell it where it stands. */
+    /**
+     * A board said HELLO and signed this session's nonce with {@code identity.publicKey()}.
+     * Accepts it when that key is the pinned one, pins it when the board has never been approved,
+     * and otherwise refuses it ({@code AUTH_FAILED}) and keeps the key as pending for an admin.
+     */
     @Transactional
-    public LinkState onHello(String deviceId, String firmwareVersion, String deviceType) {
+    public LinkState onHello(String deviceId, String firmwareVersion, String deviceType, DeviceIdentity identity) {
+        String key = DeviceKeys.encode(identity.publicKey());
+        String fingerprint = DeviceKeys.fingerprint(identity.publicKey());
+        OffsetDateTime now = OffsetDateTime.now();
         IotDevice device = deviceRepository.findByDeviceIdForUpdate(deviceId)
                 .orElseGet(() -> {
-                    log.info("[IOT] New board {} seen on USB; waiting for admin approval", deviceId);
+                    log.info("[IOT] New board {} joined (key {}); waiting for admin approval",
+                            deviceId, DeviceKeys.shortFingerprint(fingerprint));
                     return IotDevice.builder().deviceId(deviceId).status(IotDeviceStatus.UNCLAIMED).build();
                 });
+        String refusal = keyRefusal(device, fingerprint);
+        if (refusal != null) {
+            log.warn("[IOT] {} refused: {} (key {})", deviceId, refusal, DeviceKeys.shortFingerprint(fingerprint));
+            device.setPendingPublicKey(key);
+            device.setPendingKeyFingerprint(fingerprint);
+            device.setPendingKeySeenAt(now);
+            device.setAuthFailures(device.getAuthFailures() + 1);
+            device.setLastAuthFailureAt(now);
+            deviceRepository.save(device);
+            return LinkState.of(LinkState.State.AUTH_FAILED, deviceId);
+        }
+        if (device.getKeyFingerprint() == null) {
+            device.setPublicKey(key);
+            device.setKeyFingerprint(fingerprint);
+            log.info("[IOT] Pinned key {} for {}", DeviceKeys.shortFingerprint(fingerprint), deviceId);
+        }
+        device.setPendingPublicKey(null);
+        device.setPendingKeyFingerprint(null);
+        device.setPendingKeySeenAt(null);
         device.setFirmwareVersion(firmwareVersion);
         MachineType type = parseType(deviceType);
         if (type != null) device.setDeviceType(type);
-        device.setLastSeenAt(OffsetDateTime.now());
+        device.setLastSeenAt(now);
+        device.setLastIp(cleanIp(identity.ip()));
+        device.setLastRssi(identity.rssi() == null || identity.rssi() < -127 || identity.rssi() > 0 ? null : identity.rssi());
         deviceRepository.save(device);
         return linkStateOf(device);
+    }
+
+    /** Why {@code fingerprint} may not speak for {@code device}, or {@code null} when it may. */
+    private String keyRefusal(IotDevice device, String fingerprint) {
+        if (device.getKeyFingerprint() != null) {
+            return device.getKeyFingerprint().equals(fingerprint) ? null : "the key differs from the pinned one";
+        }
+        String owner = deviceRepository.findByKeyFingerprint(fingerprint)
+                .map(IotDevice::getDeviceId).filter(id -> !id.equals(device.getDeviceId())).orElse(null);
+        if (owner != null) return "the key already belongs to " + owner;
+        // Trust on first use only before approval: a board approved without a key must be confirmed again.
+        return switch (device.getStatus()) {
+            case UNCLAIMED, REVOKED -> null;
+            case VERIFIED, PROVISIONED, ACTIVE -> "the board was approved before it had a key";
+        };
+    }
+
+    /**
+     * Admin compared the pending key's fingerprint with the board's screen: pin it. Used after the
+     * board's flash was erased (new key) or for a board approved before it had a key.
+     */
+    @Transactional
+    public DeviceSummary trustPendingKey(String deviceId, UUID adminId) {
+        IotDevice device = requireDevice(deviceId);
+        if (device.getPendingPublicKey() == null || device.getPendingKeyFingerprint() == null) {
+            throw new ProvisioningRejectedException(HttpStatus.CONFLICT, "Device " + deviceId + " has no key waiting to be trusted");
+        }
+        String fingerprint = device.getPendingKeyFingerprint();
+        deviceRepository.findByKeyFingerprint(fingerprint)
+                .filter(other -> !other.getDeviceId().equals(device.getDeviceId()))
+                .ifPresent(other -> {
+                    throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
+                            "This key already belongs to " + other.getDeviceId() + "; it cannot identify two boards");
+                });
+        device.setPublicKey(device.getPendingPublicKey());
+        device.setKeyFingerprint(fingerprint);
+        device.setPendingPublicKey(null);
+        device.setPendingKeyFingerprint(null);
+        device.setPendingKeySeenAt(null);
+        device.setAuthFailures(0);
+        deviceRepository.save(device);
+        events.publishEvent(new DeviceLinkChanged(device.getDeviceId()));
+        log.warn("[IOT] Admin {} trusted key {} for {}", adminId, DeviceKeys.shortFingerprint(fingerprint), deviceId);
+        return summary(device);
     }
 
     @Transactional(readOnly = true)
@@ -278,16 +350,31 @@ public class DeviceRegistryService {
     private IotDevice requireDevice(String deviceId) {
         return deviceRepository.findByDeviceIdForUpdate(deviceId.trim().toUpperCase(Locale.ROOT))
                 .orElseThrow(() -> new ProvisioningRejectedException(HttpStatus.NOT_FOUND,
-                        "Unknown device " + deviceId + "; plug it into the store server first"));
+                        "Unknown device " + deviceId + "; connect it to the store Wi-Fi first"));
     }
 
     private DeviceSummary summary(IotDevice d) {
         String machineCode = d.getMachineId() == null ? null
                 : machineRepository.findById(d.getMachineId()).map(Machine::getMachineCode).orElse(null);
+        return toSummary(d, machineCode);
+    }
+
+    private DeviceSummary toSummary(IotDevice d, String machineCode) {
+        boolean connected = deviceLink.isConnected(d.getDeviceId());
         return new DeviceSummary(d.getDeviceId(), d.getStatus(), d.getDeviceType(), d.getMachineId(), machineCode,
-                d.getFirmwareVersion(), deviceLink.isConnected(d.getDeviceId()), deviceLink.portOf(d.getDeviceId()),
+                d.getFirmwareVersion(), connected,
                 d.getEnrolledAt(), d.getLastSeenAt(), d.getVerifiedAt(), d.getActivatedAt(),
-                d.getCommissionedAt(), d.getRevokedAt());
+                d.getCommissionedAt(), d.getRevokedAt(),
+                d.getLastIp(), d.getLastRssi(),
+                DeviceKeys.shortFingerprint(d.getKeyFingerprint()), DeviceKeys.shortFingerprint(d.getPendingKeyFingerprint()),
+                d.getAuthFailures(), d.getLastAuthFailureAt());
+    }
+
+    /** Only a plain IPv4/IPv6 literal from the board is stored. */
+    private static String cleanIp(String raw) {
+        if (raw == null) return null;
+        String ip = raw.trim();
+        return ip.length() <= 45 && ip.matches("[0-9A-Fa-f:.]+") ? ip : null;
     }
 
     private static MachineType parseType(String raw) {

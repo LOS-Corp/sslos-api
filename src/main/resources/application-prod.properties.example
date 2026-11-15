@@ -1,0 +1,58 @@
+# Template of application-prod.properties (which is git-ignored). Copy it, fill in every empty secret and
+# put it on the server at /opt/sslos/config/application-prod.properties.
+# Run with SPRING_PROFILES_ACTIVE=prod. On the VPS this file lives at /opt/sslos/config/application-prod.properties
+# and is mounted into the container as /app/config/ (Spring Boot reads ./config/ next to the jar).
+# Environment variables with the same names (/opt/sslos/api.env) still override every value.
+
+# ── Database ──────────────────────────────────────────────────────────────
+spring.datasource.url=${DB_URL:jdbc:postgresql://<host>:5432/sslos}
+spring.datasource.username=${DB_USERNAME:sslos}
+spring.datasource.password=${DB_PASSWORD:}
+spring.jpa.properties.hibernate.jdbc.time_zone=Asia/Ho_Chi_Minh
+spring.jpa.show-sql=false
+
+# ── Auth: a fresh random secret (>= 32 bytes), never the dev one ───────────
+app.jwt.secret=${JWT_SECRET:}
+app.jwt.issuer=${JWT_ISSUER:sslos-api}
+# Empty = no bootstrap Admin. Set once for a fresh database, then clear.
+app.bootstrap.admin.email=${BOOTSTRAP_ADMIN_EMAIL:}
+app.bootstrap.admin.password=${BOOTSTRAP_ADMIN_PASSWORD:}
+
+# ── CORS ──────────────────────────────────────────────────────────────────
+app.cors.allowed-origins=${CORS_ALLOWED_ORIGINS:https://laundryos.store,https://manage.laundryos.store}
+
+# ── Payment: payOS ─────────────────────────────────────────────────────────
+app.payment.gateway=payos
+app.payos.client-id=${PAYOS_CLIENT_ID:}
+app.payos.api-key=${PAYOS_API_KEY:}
+app.payos.checksum-key=${PAYOS_CHECKSUM_KEY:}
+app.payos.base-url=${PAYOS_BASE_URL:https://api-merchant.payos.vn}
+app.payos.callback-url=${PAYOS_CALLBACK_URL:https://api.laundryos.store/api/payments/payos/webhook}
+app.payos.return-url=${PAYOS_RETURN_URL:https://laundryos.store/?payment=return}
+app.payos.cancel-url=${PAYOS_CANCEL_URL:https://laundryos.store/?payment=cancelled}
+
+# ── Email ────────────────────────────────────────────────────────────────
+app.email.enabled=true
+spring.mail.host=${SMTP_HOST:smtp.gmail.com}
+spring.mail.port=${SMTP_PORT:587}
+spring.mail.username=${SMTP_USERNAME:}
+spring.mail.password=${SMTP_PASSWORD:}
+spring.mail.from=${EMAIL_FROM:noreply@sslos.com}
+
+# ── ESP32 boards: the store's EMQX ──────────────────────────────────────────
+app.mqtt.broker-url=${MQTT_BROKER_URL:tcp://emqx:1883}
+app.mqtt.api-url=${MQTT_API_URL:http://emqx:18083}
+app.mqtt.api-key=${MQTT_API_KEY:}
+app.mqtt.api-secret=${MQTT_API_SECRET:}
+app.mqtt.username=${MQTT_USERNAME:laundryos-server}
+app.mqtt.password=${MQTT_PASSWORD:}
+app.mqtt.device-host=${MQTT_DEVICE_HOST:}
+
+# ── Machines ──────────────────────────────────────────────────────────────
+app.machine.qr-base-url=${QR_BASE_URL:https://laundryos.store}
+
+# ── Hardening ─────────────────────────────────────────────────────────────
+# API docs are a development aid only.
+springdoc.api-docs.enabled=false
+springdoc.swagger-ui.enabled=false
+management.endpoint.health.show-details=never

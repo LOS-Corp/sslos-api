@@ -1,38 +1,35 @@
 package com.laundry.devicelink;
 
-import java.util.Optional;
-
 /**
- * One protocol line on the serial link: {@code @<channel> <json>}.
+ * Channel names of the device protocol. Each channel is its own MQTT topic and carries one JSON object
+ * (see {@link com.laundry.devicelink.mqtt.MqttTopics}).
  *
- * <p>Board → backend channels: {@code hello} and the {@link DeviceChannel} paths.
- * Backend → board channels: {@code link} (binding state + keepalive) and {@code cmd}.
- * Any line that does not start with {@code @} is the board's debug log.
+ * <p>Board → backend: {@link #HELLO}, {@link #PROOF} and the {@link DeviceChannel} paths.
+ * Backend → board: {@link #LINK}, {@link #CHALLENGE}, {@link #COMMAND} and {@link #NETWORK}.
  */
-public record DeviceFrame(String channel, String payload) {
+public final class DeviceFrame {
 
-    public static final char MARKER = '@';
+    /** Board → backend: {@code {deviceId, firmwareVersion, deviceType, publicKey, ip, rssi}}. */
     public static final String HELLO = "hello";
+    /** Board → backend: {@code {nonce, signature}} answering {@link #CHALLENGE}. */
+    public static final String PROOF = "proof";
+    /** Backend → board: binding state {@code {state, machineCode, machineType, qrUrl}}; also the keepalive. */
     public static final String LINK = "link";
-    public static final String COMMAND = "cmd";
+    /** Backend → board: {@code {nonce}} to sign before the HELLO is accepted. */
+    public static final String CHALLENGE = "challenge";
+    /** Backend → board: a machine command (AUTHORIZE_START, STOP, SELF_TEST, ...). */
+    public static final String COMMAND = "command";
+    /** Backend → board: network settings, e.g. {@code {"action":"RESET"}} back to setup mode. */
+    public static final String NETWORK = "netcfg";
 
-    /** Longest line accepted from a board; longer input is dropped. */
-    public static final int MAX_LINE = 4096;
+    /** Largest payload accepted from a board; larger messages are dropped. */
+    public static final int MAX_PAYLOAD = 4096;
 
-    /** Empty for a log line or a malformed frame. */
-    public static Optional<DeviceFrame> parse(String line) {
-        if (line == null) return Optional.empty();
-        String trimmed = line.strip();
-        if (trimmed.length() < 2 || trimmed.charAt(0) != MARKER) return Optional.empty();
-        int space = trimmed.indexOf(' ');
-        String channel = (space < 0 ? trimmed.substring(1) : trimmed.substring(1, space)).trim();
-        String payload = space < 0 ? "{}" : trimmed.substring(space + 1).trim();
-        if (channel.isEmpty() || payload.isEmpty() || payload.charAt(0) != '{') return Optional.empty();
-        return Optional.of(new DeviceFrame(channel, payload));
+    private DeviceFrame() {
     }
 
-    /** The line to write, without the trailing newline. */
-    public String format() {
-        return MARKER + channel + " " + payload;
+    /** A payload the hub accepts: a JSON object no larger than {@link #MAX_PAYLOAD}. */
+    public static boolean isJsonObject(String payload) {
+        return payload != null && payload.length() <= MAX_PAYLOAD && payload.startsWith("{") && payload.endsWith("}");
     }
 }

@@ -27,6 +27,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.Locale;
 import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
@@ -190,7 +191,7 @@ public class MachineAdminController {
     private <E extends Enum<E>> E parseEnum(Class<E> type, String raw, String paramName) {
         if (raw == null || raw.isBlank()) return null;
         try {
-            return Enum.valueOf(type, raw.trim().toUpperCase());
+            return Enum.valueOf(type, raw.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException(
                     "Invalid value for '" + paramName + "': '" + raw + "'. Allowed: "

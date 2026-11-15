@@ -45,7 +45,7 @@ public record RuntimeSnapshotMessage(
         @Schema(description = "Latest HX711 weight reading in kg") BigDecimal weightKg,
         @Schema(description = "Latest water level reading in liters") BigDecimal waterLevelLiters,
         @Schema(description = "Latest MPU6050 vibration reading in g") BigDecimal vibrationG,
-        @Schema(description = "USB link to the backend is up (as seen by the board)") Boolean linkConnected,
+        @Schema(description = "Link to the backend is up (as seen by the board)") Boolean linkConnected,
         @Schema(description = "Device uptime in seconds since boot") Long uptimeSeconds,
         @Schema(description = "ESP32 free heap bytes") Long freeHeap,
         @Schema(description = "HX711 sensor enabled in firmware") Boolean hx711Available,

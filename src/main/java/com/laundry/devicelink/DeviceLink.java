@@ -11,13 +11,18 @@ public interface DeviceLink {
     /**
      * Sends a JSON command to the board bound to {@code machine}.
      *
-     * @throws DeviceNotConnectedException if no board for this machine is plugged in
+     * @throws DeviceNotConnectedException if the machine's board is not on the broker
      */
     void send(Machine machine, String json);
 
-    /** True while the board with this id is plugged in and has said HELLO. */
+    /** True while the board with this id is on the broker and its HELLO was accepted. */
     boolean isConnected(String deviceId);
 
-    /** Serial port the board is plugged into, or {@code null} when it is not connected. */
-    String portOf(String deviceId);
+    /**
+     * Sends a link-level frame (not a machine command) to a connected board, e.g.
+     * {@code netcfg {"action":"RESET"}}. Works whether or not the board is attached to a machine.
+     *
+     * @throws DeviceNotConnectedException if the board is not connected
+     */
+    void sendFrame(String deviceId, String channel, String json);
 }

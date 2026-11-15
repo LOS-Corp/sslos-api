@@ -11,7 +11,7 @@ import java.util.UUID;
 
 /**
  * Dispatches incoming device frames to their handler on the device worker pool,
- * off the serial reader thread.
+ * off the MQTT inbound thread.
  */
 @Service
 @RequiredArgsConstructor

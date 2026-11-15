@@ -98,5 +98,8 @@ jobs:
              docker pull '$IMAGE_NAME:latest' && \
              (docker network create sslos 2>/dev/null || true) && \
              (docker rm -f '$CONTAINER_NAME' 2>/dev/null || true) && \
+             mkdir -p /opt/sslos/config && \
              docker run -d --restart unless-stopped --name '$CONTAINER_NAME' \
-               --network sslos --env-file /opt/sslos/api.env -p '$HOST_PORT:8080' '$IMAGE_NAME:latest'"
+               --network sslos --env-file /opt/sslos/api.env \
+               -e SPRING_PROFILES_ACTIVE=prod -v /opt/sslos/config:/app/config:ro \
+               -p '$HOST_PORT:8080' '$IMAGE_NAME:latest'"

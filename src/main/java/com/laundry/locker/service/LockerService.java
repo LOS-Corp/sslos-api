@@ -59,7 +59,7 @@ import java.util.concurrent.ConcurrentHashMap;
  *   --pickup PIN, door opened+closed--> COMPLETED
  * </pre>
  *
- * Device protocol, on the cabinet's USB serial link:
+ * Device protocol, on the cabinet's MQTT topics:
  * <ul>
  *   <li>auth ← {@code PIN_ENTERED {requestId, compartment, pin}}: the customer picked a
  *       compartment (A = 1, B = 2) and typed its PIN. A PIN only opens the compartment of

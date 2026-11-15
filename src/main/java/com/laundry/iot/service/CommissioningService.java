@@ -33,7 +33,7 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Stages 7 and 8: remote self-test over USB and commissioning.
+ * Stages 7 and 8: remote self-test over the device link and commissioning.
  *
  * <p>The self-test is a {@code SELF_TEST} command on {@code .../command}. The
  * device acks on {@code .../command/ack}, checks door, START button (the
@@ -79,7 +79,7 @@ public class CommissioningService {
                 : deviceRepository.findByDeviceId(machine.getDeviceId()).orElse(null);
         return new ProvisioningStatus(machine.getMachineCode(), machine.getDeploymentStatus(),
                 machine.getDeviceId(), device == null ? null : device.getStatus(),
-                deviceLink.isConnected(machine.getDeviceId()), deviceLink.portOf(machine.getDeviceId()),
+                deviceLink.isConnected(machine.getDeviceId()),
                 machine.isOnline(),
                 machine.getLastHeartbeatAt(), device == null ? null : device.getFirmwareVersion(),
                 device == null ? null : device.getLastSelfTestAt(),
@@ -302,7 +302,7 @@ public class CommissioningService {
         if (!machine.isOnline() || last == null
                 || last.isBefore(OffsetDateTime.now().minusSeconds(heartbeatTimeoutSeconds))) {
             throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
-                    "Device is offline; it must be plugged in over USB with a recent heartbeat");
+                    "Device is offline; it must be on the store Wi-Fi with a recent heartbeat");
         }
     }
 }

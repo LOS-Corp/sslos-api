@@ -90,7 +90,8 @@ public class SecurityConfig {
                         .requestMatchers("/ws", "/ws/**").permitAll()
                         // Signed by payOS (HMAC) / by the device (HMAC challenge-response), not by JWT.
                         .requestMatchers(HttpMethod.POST, "/api/payments/payos/webhook").permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/devices/activate", "/api/devices/activate/challenge").permitAll()
+                        // ESP32 boards register themselves (signed nonce; see DeviceRegistrationService).
+                        .requestMatchers(HttpMethod.POST, "/api/devices/register", "/api/devices/register/challenge").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/store", "/api/store/offerings").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/services", "/api/services/**").permitAll()
                         .requestMatchers(HttpMethod.GET, "/api/bookings/timeline-availability",

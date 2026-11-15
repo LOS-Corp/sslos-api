@@ -123,7 +123,7 @@ public class MachineController {
      * Customer-facing check-in endpoint. Scan QR → POST machineCode →
      * backend validates reservation ownership + payment + machine
      * availability, creates a {@link MachineStartAuthorization}, and
-     * publishes {@code AUTHORIZE_START} over the USB link.
+     * publishes {@code AUTHORIZE_START} to the board.
      *
      * <p>The customer's identity is taken from Spring Security — the
      * frontend MUST NOT be allowed to submit a userId.

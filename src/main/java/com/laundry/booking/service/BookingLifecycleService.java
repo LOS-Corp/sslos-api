@@ -15,6 +15,7 @@ import java.math.BigDecimal;
 import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Locale;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -231,7 +232,7 @@ public class BookingLifecycleService {
                     """, (rs, row) -> new LaundryCompletedEmail(
                     rs.getString("email"),
                     rs.getString("full_name"),
-                    bookingId.toString().substring(0, 8).toUpperCase(),
+                    bookingId.toString().substring(0, 8).toUpperCase(Locale.ROOT),
                     rs.getString("service_name"),
                     rs.getString("store_name"),
                     rs.getString("store_address"),

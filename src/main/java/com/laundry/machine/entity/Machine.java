@@ -17,7 +17,7 @@ import java.util.UUID;
  * </pre>
  *
  * <p>High-frequency sensor telemetry (weight, water level, vibration, remaining seconds, etc.)
- * is NOT persisted into PostgreSQL. It is streamed directly via USB serial → Spring Boot → WebSocket/STOMP.
+ * is NOT persisted into PostgreSQL. It is streamed directly via MQTT → Spring Boot → WebSocket/STOMP.
  *
  * <p>Device traffic is keyed by {@code machineCode}, unique in the store (V58).
  */

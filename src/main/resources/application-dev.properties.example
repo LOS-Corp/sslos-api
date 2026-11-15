@@ -1,0 +1,56 @@
+# Template of application-dev.properties (which is git-ignored). Copy it next to this file:
+#   cp application-dev.properties.example application-dev.properties
+# then fill in the local database password, JWT_SECRET (>= 32 bytes) and, if needed, SMTP/payOS sandbox keys.
+# Active when no profile is given (spring.profiles.default=dev):
+#   ./mvnw spring-boot:run            (Windows: .\mvnw.cmd spring-boot:run)
+# Every value keeps its ${ENV_VAR:...} name, so an environment variable (e.g. from docker-compose) still wins.
+
+# ── Database ──────────────────────────────────────────────────────────────
+spring.datasource.url=${DB_URL:jdbc:postgresql://localhost:5433/sslos_dev?sslmode=disable&serverTimezone=Asia/Ho_Chi_Minh}
+spring.datasource.username=${DB_USERNAME:postgres}
+spring.datasource.password=${DB_PASSWORD:}
+spring.jpa.properties.hibernate.jdbc.time_zone=Asia/Ho_Chi_Minh
+# SQL trace off; set true only when debugging ORM queries.
+spring.jpa.show-sql=false
+spring.jpa.properties.hibernate.format_sql=false
+
+# ── Auth ──────────────────────────────────────────────────────────────────
+# >= 32 bytes. Local only: production uses its own secret.
+app.jwt.secret=${JWT_SECRET:}
+app.jwt.issuer=${JWT_ISSUER:sslos-api}
+app.auth.reset-token-expiration-seconds=${PASSWORD_RESET_TOKEN_EXPIRATION:}
+# Ready-made Admin for a fresh local database (same login as scripts/seed-demo-accounts.sql).
+app.bootstrap.admin.email=${BOOTSTRAP_ADMIN_EMAIL:admin@sslos.vn}
+app.bootstrap.admin.password=${BOOTSTRAP_ADMIN_PASSWORD:Pass@123}
+
+# ── CORS ──────────────────────────────────────────────────────────────────
+app.cors.allowed-origins=${CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173,http://localhost:5174,http://127.0.0.1:5174,http://localhost:8080,http://localhost:55940}
+
+# ── Payment: mock gateway + local payment simulation endpoint ───────────────
+app.payment.gateway=${PAYMENT_GATEWAY:mock}
+app.payos.client-id=${PAYOS_CLIENT_ID:}
+app.payos.api-key=${PAYOS_API_KEY:}
+app.payos.checksum-key=${PAYOS_CHECKSUM_KEY:}
+app.payos.base-url=${PAYOS_BASE_URL:https://api-merchant.payos.vn}
+app.payos.callback-url=${PAYOS_CALLBACK_URL:http://localhost:8080/api/payments/payos/webhook}
+
+# ── Email (false = OTP codes are printed in the log) ────────────────────────
+app.email.enabled=${EMAIL_ENABLED:true}
+spring.mail.host=${SMTP_HOST:smtp.gmail.com}
+spring.mail.port=${SMTP_PORT:587}
+spring.mail.username=${SMTP_USERNAME:}
+spring.mail.password=${SMTP_PASSWORD:}
+spring.mail.from=${EMAIL_FROM:noreply@sslos.com}
+
+# ── ESP32 boards: local EMQX (docker compose up -d emqx), Dashboard http://127.0.0.1:18083 ──
+app.mqtt.enabled=${MQTT_ENABLED:true}
+app.mqtt.broker-url=${MQTT_BROKER_URL:tcp://localhost:1883}
+app.mqtt.api-url=${MQTT_API_URL:http://127.0.0.1:18083}
+app.mqtt.api-key=${MQTT_API_KEY:}
+app.mqtt.api-secret=${MQTT_API_SECRET:}
+app.mqtt.username=${MQTT_USERNAME:laundryos-server}
+app.mqtt.password=${MQTT_PASSWORD:local-compose-mqtt-server-change-me}
+app.mqtt.device-host=${MQTT_DEVICE_HOST:}
+
+# ── Machines ──────────────────────────────────────────────────────────────
+app.machine.qr-base-url=${QR_BASE_URL:http://localhost:5173}

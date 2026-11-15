@@ -110,12 +110,11 @@
 			<optional>true</optional>
 		</dependency>
 
-		<!-- ===== USB serial link to the ESP32 boards (replaces MQTT) ===== -->
+		<!-- ===== Wi-Fi link: ESP32 boards via the store's local Mosquitto broker (MQTT 3.1.1, LAN only) ===== -->
 		<dependency>
-			<groupId>com.fazecast</groupId>
-			<artifactId>jSerialComm</artifactId>
-			<!-- 2.11.0 extracts the ARM64 DLL on Windows x64, marks it read-only and then cannot load the right one. -->
-			<version>2.11.4</version>
+			<groupId>org.eclipse.paho</groupId>
+			<artifactId>org.eclipse.paho.client.mqttv3</artifactId>
+			<version>1.2.5</version>
 		</dependency>
 
 		<!-- ===== WebSocket / STOMP ===== -->
@@ -159,10 +158,23 @@
 	</dependencies>
 
 	<build>
+		<resources>
+			<resource>
+				<directory>src/main/resources</directory>
+				<!-- application-*.properties.example are templates for developers, not runtime config. -->
+				<excludes>
+					<exclude>**/*.example</exclude>
+				</excludes>
+			</resource>
+		</resources>
 		<plugins>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
+				<configuration>
+					<!-- ./mvnw spring-boot:run: same clock as the store and the database. -->
+					<jvmArguments>-Duser.timezone=Asia/Ho_Chi_Minh</jvmArguments>
+				</configuration>
 			</plugin>
 			<!-- Coverage report of unit + integration tests: target/site/jacoco/index.html -->
 			<plugin>

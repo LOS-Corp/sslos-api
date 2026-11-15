@@ -15,10 +15,15 @@ public interface IotDeviceRepository extends JpaRepository<IotDevice, UUID> {
 
     Optional<IotDevice> findByDeviceId(String deviceId);
 
+    long countByStatus(com.laundry.iot.entity.IotDeviceStatus status);
+
     /** Row lock so a HELLO and an admin action on one device serialize. */
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT d FROM IotDevice d WHERE d.deviceId = :deviceId")
     Optional<IotDevice> findByDeviceIdForUpdate(@Param("deviceId") String deviceId);
 
     List<IotDevice> findAllByOrderByEnrolledAtDesc();
+
+    /** The board that owns a pinned key (fingerprints are unique, V59). */
+    Optional<IotDevice> findByKeyFingerprint(String keyFingerprint);
 }

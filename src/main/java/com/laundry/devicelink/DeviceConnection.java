@@ -1,14 +1,18 @@
 package com.laundry.devicelink;
 
 /**
- * One open physical link to a board (a USB serial port). Implementations must
- * make {@link #writeLine} safe to call from several threads.
+ * One board's MQTT session on the store's local broker, as seen by the {@link DeviceLinkHub}.
+ * Implementations must make {@link #send} safe to call from several threads.
  */
 public interface DeviceConnection {
 
-    /** Stable name of the link, e.g. {@code COM3} or {@code /dev/ttyUSB0}. */
-    String name();
+    /**
+     * The only deviceId this session may speak for: its MQTT client id, which the broker's ACL bound
+     * to the topics it publishes on. A broker password alone does not prove the board, so its HELLO is only
+     * accepted after it signed a nonce with its pinned key.
+     */
+    String deviceId();
 
-    /** Writes one line; the newline is added by the implementation. */
-    void writeLine(String line);
+    /** Publishes {@code json} on the board's {@code down/<channel>} topic. */
+    void send(String channel, String json);
 }

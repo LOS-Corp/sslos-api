@@ -13,6 +13,7 @@ import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.Locale;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -99,7 +100,7 @@ public class StoreBookingConfigService {
     @Transactional
     public ResourceDto addResource(CreateResourceRequest request) {
         queries.lockStoreConfiguration();
-        String resourceType = request.resourceType().trim().toUpperCase();
+        String resourceType = request.resourceType().trim().toUpperCase(Locale.ROOT);
         if (!Set.of("IRON_STATION", "LOCKER").contains(resourceType)) {
             throw BusinessException.of(ErrorCode.INVALID_REQUEST, "resourceType must be IRON_STATION or LOCKER");
         }

@@ -1,6 +1,7 @@
 package com.laundry.devicelink;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.laundry.devicelink.mqtt.MqttTopics;
 import com.laundry.machine.runtime.MachineRuntimeState;
 import com.laundry.devicelink.handler.WasherPayloads.CommandAckPayload;
 import com.laundry.devicelink.handler.WasherPayloads.DeviceSnapshot;
@@ -18,24 +19,35 @@ class DeviceContractTest {
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
-    void parsesFramesAndKeepsLogLinesOut() {
-        DeviceFrame ack = DeviceFrame.parse("@command/ack {\"commandId\":\"C1\"}\r").orElseThrow();
-        assertEquals("command/ack", ack.channel());
-        assertEquals("{\"commandId\":\"C1\"}", ack.payload());
+    void topicTreeIsVersionedAndSplitByDirectionAndChannel() {
+        String id = "ESP-24A1B2C3D4E5";
+        assertEquals("laundryos/v1/devices/ESP-24A1B2C3D4E5/presence", MqttTopics.presence(id));
+        assertEquals("laundryos/v1/devices/ESP-24A1B2C3D4E5/up/command/ack", MqttTopics.up(id, "command/ack"));
+        assertEquals("laundryos/v1/devices/ESP-24A1B2C3D4E5/down/command", MqttTopics.down(id, DeviceFrame.COMMAND));
+        assertEquals("laundryos/v1/devices/+/up/#", MqttTopics.SUBSCRIBE_UP);
+    }
+
+    @Test
+    void parsesInboundTopicsOnly() {
+        MqttTopics.Inbound ack = MqttTopics.parse("laundryos/v1/devices/ESP-24A1B2C3D4E5/up/command/ack").orElseThrow();
+        assertEquals("ESP-24A1B2C3D4E5", ack.deviceId());
         assertEquals(DeviceChannel.COMMAND_ACK, DeviceChannel.fromPath(ack.channel()).orElseThrow());
         assertEquals(DeviceChannel.AUTH, DeviceChannel.fromPath("auth").orElseThrow());
-        assertEquals("{}", DeviceFrame.parse("@hello").orElseThrow().payload());
+        assertTrue(MqttTopics.parse("laundryos/v1/devices/ESP-24A1B2C3D4E5/presence").orElseThrow().isPresence());
 
-        assertTrue(DeviceFrame.parse("[WIFI] booting...").isEmpty());   // debug log
-        assertTrue(DeviceFrame.parse("@status not-json").isEmpty());
-        assertTrue(DeviceFrame.parse("@").isEmpty());
-        assertTrue(DeviceFrame.parse("").isEmpty());
+        assertTrue(MqttTopics.parse("laundryos/v1/devices/ESP-24A1B2C3D4E5/down/command").isEmpty());  // our own output
+        assertTrue(MqttTopics.parse("laundryos/v1/devices/ESP-24A1B2C3D4E5/up").isEmpty());
+        assertTrue(MqttTopics.parse("laundryos/v1/devices/ESP-24A1B2C3D4E5/up/a/b/c").isEmpty());
+        assertTrue(MqttTopics.parse("laundryos/dev/ESP-24A1B2C3D4E5/up").isEmpty());                // old tree
         assertTrue(DeviceChannel.fromPath("unknown").isEmpty());
     }
 
     @Test
-    void formatsBackendFrames() {
-        assertEquals("@cmd {\"type\":\"STOP\"}", new DeviceFrame(DeviceFrame.COMMAND, "{\"type\":\"STOP\"}").format());
+    void acceptsOnlyJsonObjectPayloads() {
+        assertTrue(DeviceFrame.isJsonObject("{\"status\":\"AVAILABLE\"}"));
+        assertFalse(DeviceFrame.isJsonObject("not-json"));
+        assertFalse(DeviceFrame.isJsonObject(""));
+        assertFalse(DeviceFrame.isJsonObject("{" + "x".repeat(DeviceFrame.MAX_PAYLOAD) + "}"));
     }
 
     @Test

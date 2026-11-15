@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.OffsetDateTime;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -141,8 +142,8 @@ public class MachineWebSocketService implements MachineWebSocketBroadcaster {
         if (m.getStatus() == null) return "AVAILABLE";
         String runtimeStatus = runtime != null ? runtime.getStatus() : null;
         if (m.getStatus() == com.laundry.machine.entity.MachineStatus.RUNNING
-                && runtimeStatus != null && RUNNING_PHASES.contains(runtimeStatus.toUpperCase())) {
-            return runtimeStatus.toUpperCase();
+                && runtimeStatus != null && RUNNING_PHASES.contains(runtimeStatus.toUpperCase(Locale.ROOT))) {
+            return runtimeStatus.toUpperCase(Locale.ROOT);
         }
         return m.getStatus().name();
     }

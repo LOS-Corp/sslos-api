@@ -63,45 +63,36 @@ Or use the project's `docker-compose.yml` if present.
 
 ---
 
-### 2. Configure Environment Variables
+### 2. Configure the Spring profiles
 
-Copy `.env.example` to `.env` and fill in:
+Configuration is split into two profiles. Their files hold real values and are **git-ignored**; the
+committed `*.example` files are the templates.
 
-```env
-# Database
-DB_URL=jdbc:postgresql://localhost:5432/sslos
-DB_USERNAME=postgres
-DB_PASSWORD=yourpassword
+| Profile | File | Used for |
+|---|---|---|
+| `dev` (default) | `src/main/resources/application-dev.properties` | Local machine: mock payment, bootstrap Admin, local EMQX (`docker compose up -d emqx`) |
+| `prod` | `application-prod.properties` (on the VPS: `/opt/sslos/config/`) | Deployed API: payOS, email on, Swagger off |
 
-# JWT
-JWT_SECRET=your-very-long-random-secret-minimum-32-chars
-
-# EMQX Cloud MQTT
-MQTT_BROKER_HOST=your-cluster.emqxsl.com
-MQTT_BROKER_PORT=8883
-MQTT_USERNAME=your_mqtt_user
-MQTT_PASSWORD=your_mqtt_password
-MQTT_CLIENT_ID=sslos-backend-001
-MQTT_USE_TLS=true
+```bash
+cd src/main/resources
+cp application-dev.properties.example application-dev.properties    # then fill DB password, JWT secret (>= 32 bytes), ...
+cp application-prod.properties.example application-prod.properties  # only on a machine that deploys
 ```
+
+Every value is written as `${ENV_VAR:value}`, so an environment variable with that name (docker-compose,
+`/opt/sslos/api.env`) still overrides the file. `application.properties` holds only shared defaults.
 
 ---
 
 ### 3. Run Spring Boot
 
-Windows PowerShell:
-```powershell
-# Load env vars from .env file
-Get-Content .env | ForEach-Object {
-  if ($_ -match '^([^#][^=]+)=(.*)$') {
-    [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2])
-  }
-}
-
-.\mvnw.cmd spring-boot:run -Dspring-boot.run.profiles=dev
+```bash
+./mvnw spring-boot:run                                   # dev profile (Windows: .\mvnw.cmd spring-boot:run)
+./mvnw spring-boot:run -Dspring-boot.run.profiles=prod   # prod profile on this machine
 ```
 
-Or use `run-be.ps1` if available.
+In Docker, select the profile with `SPRING_PROFILES_ACTIVE=prod` and mount the prod file at `/app/config/`
+(the CI deploy does `-v /opt/sslos/config:/app/config:ro`). `.dockerignore` keeps both profile files out of images.
 
 The application starts on: `http://localhost:8080`. The `dev` profile uses the
 mock payment gateway and enables the authenticated local payment simulation

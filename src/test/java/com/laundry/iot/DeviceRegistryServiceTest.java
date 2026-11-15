@@ -1,7 +1,9 @@
 package com.laundry.iot;
 
 import com.laundry.devicelink.DeviceLink;
+import com.laundry.devicelink.DeviceIdentity;
 import com.laundry.devicelink.DeviceLinkChanged;
+import com.laundry.devicelink.TestDeviceKey;
 import com.laundry.devicelink.LinkState;
 import com.laundry.iot.dto.ProvisioningDtos.PairDeviceRequest;
 import com.laundry.iot.entity.IotDevice;
@@ -34,7 +36,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * USB onboarding: HELLO creates an UNCLAIMED board, an admin approves it, the
+ * Onboarding: a signed HELLO creates an UNCLAIMED board, an admin approves it, the
  * owner attaches it to a machine. Repositories are in-memory fakes so the state
  * transitions are observable.
  */
@@ -50,6 +52,14 @@ class DeviceRegistryServiceTest {
     private MachineRepository machineRepository;
     private IotDeviceRepository deviceRepository;
     private DeviceRegistryService service;
+
+    /** One key per board, as the firmware keeps it in NVS. */
+    private final Map<String, TestDeviceKey> keys = new HashMap<>();
+
+    private LinkState hello(String deviceId, String firmwareVersion, String deviceType) {
+        TestDeviceKey key = keys.computeIfAbsent(deviceId, id -> new TestDeviceKey());
+        return service.onHello(deviceId, firmwareVersion, deviceType, new DeviceIdentity(key.raw, "192.168.1.23", -60));
+    }
 
     @BeforeEach
     void setUp() {
@@ -77,7 +87,7 @@ class DeviceRegistryServiceTest {
 
     @Test
     void firstHelloCreatesAnUnclaimedBoardWaitingForApproval() {
-        LinkState link = service.onHello(DEVICE, "2.0", "washer");
+        LinkState link = hello(DEVICE, "2.0", "washer");
 
         assertThat(link.state()).isEqualTo(LinkState.State.PENDING);
         IotDevice device = devices.get(DEVICE);
@@ -89,7 +99,7 @@ class DeviceRegistryServiceTest {
 
     @Test
     void approvedBoardIsAttachedAndThenReportsItsMachine() {
-        service.onHello(DEVICE, "2.0", "WASHER");
+        hello(DEVICE, "2.0", "WASHER");
         service.approve(DEVICE, ADMIN);
         assertThat(devices.get(DEVICE).getStatus()).isEqualTo(IotDeviceStatus.VERIFIED);
         assertThat(devices.get(DEVICE).getVerifiedBy()).isEqualTo(ADMIN);
@@ -109,7 +119,7 @@ class DeviceRegistryServiceTest {
     @Test
     void theBoardGetsItsQrUrlOnlyOnceTheMachineIsActive() {
         org.springframework.test.util.ReflectionTestUtils.setField(service, "qrBaseUrl", "http://192.168.1.12:5173/");
-        service.onHello(DEVICE, "2.0", "WASHER");
+        hello(DEVICE, "2.0", "WASHER");
         service.approve(DEVICE, ADMIN);
         service.startPairing("WM01", new PairDeviceRequest(DEVICE), ADMIN);
         assertThat(service.linkState(DEVICE).qrUrl()).isNull();   // not sold to customers yet
@@ -126,7 +136,7 @@ class DeviceRegistryServiceTest {
         assertThatThrownBy(() -> service.startPairing("WM01", new PairDeviceRequest(DEVICE), ADMIN))
                 .isInstanceOf(ProvisioningRejectedException.class);   // never seen on USB
 
-        service.onHello(DEVICE, "2.0", "WASHER");
+        hello(DEVICE, "2.0", "WASHER");
         assertThatThrownBy(() -> service.startPairing("WM01", new PairDeviceRequest(DEVICE), ADMIN))
                 .isInstanceOf(ProvisioningRejectedException.class)
                 .hasMessageContaining("not been approved");
@@ -135,7 +145,7 @@ class DeviceRegistryServiceTest {
 
     @Test
     void firmwareOfAnotherKindIsRefused() {
-        service.onHello(DEVICE, "2.0", "LOCKER");
+        hello(DEVICE, "2.0", "LOCKER");
         service.approve(DEVICE, ADMIN);
 
         assertThatThrownBy(() -> service.startPairing("WM01", new PairDeviceRequest(DEVICE), ADMIN))
@@ -146,7 +156,7 @@ class DeviceRegistryServiceTest {
 
     @Test
     void unpairRevokesTheBoardUntilAnAdminApprovesItAgain() {
-        service.onHello(DEVICE, "2.0", "WASHER");
+        hello(DEVICE, "2.0", "WASHER");
         service.approve(DEVICE, ADMIN);
         service.startPairing("WM01", new PairDeviceRequest(DEVICE), ADMIN);
         when(machineRepository.hasActiveBookingAllocation(machine.getId())).thenReturn(false);
@@ -165,8 +175,8 @@ class DeviceRegistryServiceTest {
     @Test
     void ownerSeesOnlyApprovedUnattachedBoardsOfTheRightKind() {
         when(deviceRepository.findAllByOrderByEnrolledAtDesc()).thenAnswer(call -> devices.values().stream().toList());
-        service.onHello(DEVICE, "2.0", "WASHER");
-        service.onHello("ESP-000000000002", "2.0", "DRYER");
+        hello(DEVICE, "2.0", "WASHER");
+        hello("ESP-000000000002", "2.0", "DRYER");
         assertThat(service.availableDevices(null)).isEmpty();   // nothing approved yet
 
         service.approve(DEVICE, ADMIN);
@@ -179,7 +189,7 @@ class DeviceRegistryServiceTest {
 
     @Test
     void unplugMarksTheBoundMachineOffline() {
-        service.onHello(DEVICE, "2.0", "WASHER");
+        hello(DEVICE, "2.0", "WASHER");
         service.approve(DEVICE, ADMIN);
         service.startPairing("WM01", new PairDeviceRequest(DEVICE), ADMIN);
 

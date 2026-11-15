@@ -4,8 +4,8 @@ import java.util.Arrays;
 import java.util.Optional;
 
 /**
- * Device-to-backend channels. On the USB serial link a frame is
- * {@code @<channel> <json>}, e.g. {@code @command/ack {"correlationId":"..."}}.
+ * Board-to-backend channels routed to the machine handlers once the board is bound. Each is published on
+ * {@code laundryos/v1/devices/<deviceId>/up/<path>}, e.g. {@code .../up/command/ack {"correlationId":"..."}}.
  */
 public enum DeviceChannel {
     STATUS("status"),

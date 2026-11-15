@@ -18,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -49,7 +50,7 @@ public class MachineProgramService {
                     (rs, row) -> map(rs));
         }
         return jdbc.query("SELECT " + COLUMNS + " FROM machine_programs WHERE active = TRUE AND machine_type = ? ORDER BY sort_order, name",
-                (rs, row) -> map(rs), machineType.toUpperCase());
+                (rs, row) -> map(rs), machineType.toUpperCase(Locale.ROOT));
     }
 
     @Transactional(readOnly = true)
@@ -130,7 +131,7 @@ public class MachineProgramService {
                 defaultFor(type).ifPresent(programs::add);
                 continue;
             }
-            MachineProgramDto program = find(requested.trim().toUpperCase())
+            MachineProgramDto program = find(requested.trim().toUpperCase(Locale.ROOT))
                     .filter(MachineProgramDto::active)
                     .filter(candidate -> candidate.machineType().equals(type))
                     .orElseThrow(() -> BusinessException.of(ErrorCode.INVALID_REQUEST, "Chương trình không hợp lệ cho " + ("WASHER".equals(type) ? "máy giặt" : "máy sấy")));

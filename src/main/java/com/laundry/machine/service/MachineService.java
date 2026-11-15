@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.OffsetDateTime;
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -285,7 +286,7 @@ public class MachineService {
             broadcaster.broadcastMachineUpdate(machine);
             log.info("[{}] Machine came back online", machineCode);
             if (machine.getDeploymentStatus() == MachineDeploymentStatus.PROVISIONED) {
-                // A freshly activated board just came online over USB: the IoT module starts its self-test after commit.
+                // A freshly activated board just came online: the IoT module starts its self-test after commit.
                 events.publishEvent(new MachineCameOnline(machine.getId(), machine.getMachineCode()));
             }
         }
@@ -532,7 +533,7 @@ public class MachineService {
         if (raw == null || raw.isBlank()) return null;
         if ("ERROR".equalsIgnoreCase(raw.trim())) return DeviceEventType.DEVICE_ERROR;
         try {
-            return DeviceEventType.valueOf(raw.toUpperCase().trim());
+            return DeviceEventType.valueOf(raw.toUpperCase(Locale.ROOT).trim());
         } catch (IllegalArgumentException e) {
             log.warn("[{}] Unknown event type '{}' — ignoring", machineCode, raw);
             return null;

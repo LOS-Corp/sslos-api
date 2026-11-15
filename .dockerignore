@@ -1,0 +1,7 @@
+# Never bake local or production secrets into an image: the prod profile is mounted at runtime
+# (/opt/sslos/config -> /app/config), docker-compose passes its own environment.
+src/main/resources/application-dev.properties
+src/main/resources/application-prod.properties
+.env
+.env.*
+target/
