@@ -70,13 +70,20 @@ public final class Fixtures {
         return id;
     }
 
-    /** The store sells {@code serviceCode} at {@code price} VND (replacing an earlier price). */
+    /**
+     * The store sells {@code serviceCode} at {@code price} VND (replacing an earlier price). A washer service is
+     * priced by weight (V61): {@code price} per kilogram with no fixed part, so a 1 kg booking costs {@code price}.
+     */
     public static void offering(JdbcTemplate jdbc, String serviceCode, long price) {
         jdbc.update("""
-                INSERT INTO service_offerings (service_code, enabled, price) VALUES (?, TRUE, ?)
+                INSERT INTO service_offerings (service_code, enabled, price, price_per_kg)
+                SELECT ?, TRUE, CASE WHEN w THEN 0 ELSE ? END, CASE WHEN w THEN ? END
+                FROM (SELECT EXISTS (SELECT 1 FROM booking_service_requirements
+                                     WHERE service_code = ? AND resource_type = 'WASHER') w) washer
                 ON CONFLICT (service_code) DO UPDATE SET enabled = TRUE, price = EXCLUDED.price,
+                    price_per_kg = EXCLUDED.price_per_kg,
                     processing_minutes_override = NULL, secondary_processing_minutes_override = NULL
-                """, serviceCode, price);
+                """, serviceCode, price, price, serviceCode);
     }
 
     /** A verified online payment of a transaction; returns its id. */

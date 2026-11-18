@@ -24,5 +24,7 @@ public record AuthorizationStatusResponse(
         OffsetDateTime grantedAt,
         OffsetDateTime consumedAt,
         OffsetDateTime revokedAt,
-        String revokeReason
+        String revokeReason,
+        /* Washer weighing before START (V61); null for test runs. */
+        LoadStatusResponse load
 ) {}

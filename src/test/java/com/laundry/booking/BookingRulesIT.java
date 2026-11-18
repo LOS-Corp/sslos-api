@@ -51,7 +51,7 @@ class BookingRulesIT {
         assertThat(hold(tomorrow, big, new BigDecimal("10"))).isNotNull();
 
         var search = availability.machineSearch("WASH_ONLY", tomorrow, tomorrow.plus(2, ChronoUnit.HOURS),
-                null, null, new BigDecimal("10"));
+                new BigDecimal("10"));
         assertThat(search.unavailable()).anySatisfy(machine -> {
             assertThat(machine.resourceId()).isEqualTo(small);
             assertThat(machine.reason()).isEqualTo("TOO_SMALL");
@@ -97,16 +97,16 @@ class BookingRulesIT {
                     assertThat(((BusinessException) e).code().messageCode()).isEqualTo("MSG09");
                 });
         assertThatThrownBy(() -> availability.machineSearch("WASH_ONLY", tooFar,
-                tooFar.plus(1, ChronoUnit.HOURS), null, null, null))
+                tooFar.plus(1, ChronoUnit.HOURS), null))
                 .isInstanceOf(BusinessException.class);
         assertThatThrownBy(() -> availability.timelineAvailability("WASH_ONLY",
-                LocalDate.now(Fixtures.ZONE).plusDays(5), null, null))
+                LocalDate.now(Fixtures.ZONE).plusDays(5), null))
                 .isInstanceOf(BusinessException.class);
     }
 
     private Object hold(Instant start, UUID washer, BigDecimal load) {
         return bookings.createHold(UUID.randomUUID(), new CreateHoldRequest("WASH_ONLY", start,
-                List.of(washer), "rules-" + UUID.randomUUID(), null, null, load));
+                List.of(washer), "rules-" + UUID.randomUUID(), null, null, load == null ? BigDecimal.ONE : load));
     }
 
     private UUID washer(BigDecimal capacityKg) {

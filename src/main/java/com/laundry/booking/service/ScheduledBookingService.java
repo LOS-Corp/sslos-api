@@ -3,6 +3,7 @@ package com.laundry.booking.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.laundry.booking.dto.MachineProgramDtos.MachineProgramDto;
+import com.laundry.booking.domain.LoadPolicy;
 import com.laundry.machine.repository.MachineRepository;
 import com.laundry.transaction.entity.ServiceType;
 import com.laundry.transaction.entity.Transaction;
@@ -79,13 +80,19 @@ public class ScheduledBookingService {
         }
 
         queries.lockStoreConfiguration();
-        ServiceConfig offered = queries.offering(request.serviceCode());
-        if (offered == null) {
+        // V61: washing is priced by weight. A washer service needs the whole kilograms the customer pays for;
+        // the program is always the machine type's default (customers no longer pick one).
+        BigDecimal loadKg = request.declaredLoadKg();
+        if (queries.pricePerKg(request.serviceCode()) != null && !LoadPolicy.isBookableKg(loadKg)) {
+            throw BusinessException.of(ErrorCode.INVALID_REQUEST,
+                    "Choose the laundry weight in whole kilograms (%d–%d kg)"
+                            .formatted(LoadPolicy.MIN_BOOKED_KG, LoadPolicy.MAX_BOOKED_KG));
+        }
+        ServiceConfig config = queries.customerOffering(request.serviceCode(), loadKg);
+        if (config == null) {
             throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not offered at the store");
         }
-        List<MachineProgramDto> programs = programService.resolve(
-                offered.requirements(), request.washProgram(), request.dryProgram());
-        ServiceConfig config = withPrograms(offered, programs);
+        List<MachineProgramDto> programs = programService.resolve(config.requirements(), null, null);
         SlotPlan plan = buildPlan(config, request.startTime());
         if (request.resourceIds().size() != config.requirements().size()
                 || request.resourceIds().stream().distinct().count() != request.resourceIds().size()) {
@@ -177,7 +184,7 @@ public class ScheduledBookingService {
                        t.status transaction_status, st.name store_name,
                        st.address store_address, st.phone store_phone, sb.start_time,
                        sb.expected_end_time, sb.hold_expires_at, t.total_amount,
-                       sb.timeline::text timeline, sb.programs::text programs,
+                       sb.timeline::text timeline, sb.programs::text programs, sb.declared_load_kg,
                        p.payment_id, p.status payment_status, p.checkout_url payment_url, p.qr_code,
                        allocated.booking_resources
                 FROM scheduled_bookings sb
@@ -219,7 +226,7 @@ public class ScheduledBookingService {
                        t.status transaction_status, st.name store_name,
                        st.address store_address, st.phone store_phone, sb.start_time,
                        sb.expected_end_time, sb.hold_expires_at, t.total_amount,
-                       sb.timeline::text timeline, sb.programs::text programs,
+                       sb.timeline::text timeline, sb.programs::text programs, sb.declared_load_kg,
                        p.payment_id, p.status payment_status, p.checkout_url payment_url, p.qr_code,
                        allocated.booking_resources
                 FROM scheduled_bookings sb
@@ -496,6 +503,7 @@ public class ScheduledBookingService {
                 rs.getString("store_phone"), start.value(), end.value(), holdExpires.value(),
                 rs.getBigDecimal("total_amount"), "VND", timeline, resources,
                 programService.fromJson(rs.getString("programs")),
+                rs.getBigDecimal("declared_load_kg"),
                 rs.getObject("payment_id", UUID.class), rs.getString("payment_status"),
                 rs.getString("payment_url"), rs.getString("qr_code"));
     }

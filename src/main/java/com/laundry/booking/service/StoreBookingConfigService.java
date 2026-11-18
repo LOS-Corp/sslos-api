@@ -84,16 +84,26 @@ public class StoreBookingConfigService {
         if (hasFutureReservations(serviceCode) && ((currentlyEnabled && !request.enabled()) || durationChanged)) {
             throw BusinessException.of(ErrorCode.CONFIG_CONFLICT, "Cannot disable or change service duration while future bookings exist");
         }
+        // V61: a washer service is priced by weight and needs a per-kg price; other services a fixed price above 0.
+        boolean byWeight = queries.requirementsFor(serviceCode).contains("WASHER");
+        if (byWeight && (request.pricePerKg() == null || request.pricePerKg().signum() <= 0)) {
+            throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Dịch vụ giặt tính theo kg: nhập đơn giá/kg lớn hơn 0");
+        }
+        if (!byWeight && request.price().signum() <= 0) {
+            throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Giá dịch vụ phải lớn hơn 0");
+        }
         jdbc.update("""
                 INSERT INTO service_offerings
-                  (service_code, enabled, price, processing_minutes_override, secondary_processing_minutes_override)
-                VALUES (?, ?, ?, ?, ?)
+                  (service_code, enabled, price, price_per_kg, processing_minutes_override,
+                   secondary_processing_minutes_override)
+                VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT (service_code) DO UPDATE SET
                   enabled = EXCLUDED.enabled,
                   price = EXCLUDED.price,
+                  price_per_kg = EXCLUDED.price_per_kg,
                   processing_minutes_override = EXCLUDED.processing_minutes_override,
                   secondary_processing_minutes_override = EXCLUDED.secondary_processing_minutes_override
-                """, serviceCode, request.enabled(), request.price(),
+                """, serviceCode, request.enabled(), request.price(), byWeight ? request.pricePerKg() : null,
                 request.processingMinutes(), request.secondaryProcessingMinutes());
     }
 
@@ -169,8 +179,10 @@ public class StoreBookingConfigService {
                 SELECT d.code, d.name, d.service_mode, d.description,
                        d.processing_minutes, d.secondary_processing_minutes,
                        d.check_in_minutes, d.transfer_minutes, d.checkout_minutes,
-                       o.enabled, o.price, o.processing_minutes_override,
-                       o.secondary_processing_minutes_override
+                       o.enabled, o.price, o.price_per_kg, o.processing_minutes_override,
+                       o.secondary_processing_minutes_override,
+                       EXISTS (SELECT 1 FROM booking_service_requirements r
+                               WHERE r.service_code = d.code AND r.resource_type = 'WASHER') by_weight
                 FROM booking_service_definitions d
                 LEFT JOIN service_offerings o ON o.service_code = d.code
                 WHERE d.active = TRUE
@@ -178,14 +190,14 @@ public class StoreBookingConfigService {
                 """, (rs, row) -> new ServiceOfferingDto(
                 rs.getString("code"), rs.getString("name"), rs.getString("service_mode"),
                 rs.getString("description"), rs.getObject("enabled") != null && rs.getBoolean("enabled"),
-                rs.getBigDecimal("price"),
+                rs.getBigDecimal("price"), rs.getBigDecimal("price_per_kg"),
                 rs.getObject("processing_minutes_override") == null
                         ? rs.getInt("processing_minutes") : rs.getInt("processing_minutes_override"),
                 rs.getObject("secondary_processing_minutes_override") == null
                         ? rs.getInt("secondary_processing_minutes")
                         : rs.getInt("secondary_processing_minutes_override"),
                 rs.getInt("check_in_minutes"), rs.getInt("transfer_minutes"),
-                rs.getInt("checkout_minutes"), rs.getObject("enabled") != null));
+                rs.getInt("checkout_minutes"), rs.getObject("enabled") != null, rs.getBoolean("by_weight")));
     }
 
     @Transactional

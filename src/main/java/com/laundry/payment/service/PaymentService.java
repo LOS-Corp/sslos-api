@@ -12,6 +12,7 @@ import com.laundry.payment.gateway.PaymentGateway;
 import com.laundry.payment.gateway.payos.PayOSProperties;
 import com.laundry.payment.gateway.PaymentResult;
 import com.laundry.payment.repository.PaymentRepository;
+import com.laundry.booking.service.LoadTopUpService;
 import com.laundry.booking.service.ScheduledBookingService;
 import com.laundry.transaction.dto.response.TransactionResponse;
 import com.laundry.transaction.entity.TransactionStatus;
@@ -39,6 +40,7 @@ public class PaymentService {
     private final WalletPaymentService walletPayments;
     private final ScheduledBookingService scheduledBookingService;
     private final PayOSProperties payos;
+    private final LoadTopUpService loadTopUps;
 
     @Value("${app.payment.callback-base-url:http://localhost:8080}")
     private String callbackBaseUrl;
@@ -143,9 +145,31 @@ public class PaymentService {
         if (!transactionId.equals(expectedTransactionId)) {
             throw new PaymentException("Transaction does not match booking");
         }
+        return payTransaction(transactionId, idempotencyKey, customerId, useWallet);
+    }
+
+    /**
+     * Pays for extra kilograms weighed at the washer (V61): the same wallet-then-payOS flow as a booking.
+     * Repeating the call returns the payment it already created.
+     */
+    @Transactional
+    public PaymentResponse createLoadTopUpPayment(UUID transactionId, UUID customerId, boolean useWallet) {
+        String idempotencyKey = "load-topup:" + transactionId;
+        var previous = paymentRepository.findByIdempotencyKey(idempotencyKey)
+                .or(() -> paymentRepository.findByIdempotencyKey(idempotencyKey + ":wallet"));
+        if (previous.isPresent()) {
+            ensureCustomerOwnsTransaction(transactionId, customerId);
+            return toResponse(previous.get());
+        }
+        ensureCustomerOwnsTransaction(transactionId, customerId);
+        return payTransaction(transactionId, idempotencyKey, customerId, useWallet);
+    }
+
+    /** FR-PAY-04: wallet credit first; UC-02 5b: a wallet that covers everything confirms without payOS. */
+    private PaymentResponse payTransaction(UUID transactionId, String idempotencyKey, UUID customerId,
+                                           boolean useWallet) {
         TransactionResponse transaction = transactionQueries.getTransaction(transactionId);
         Money total = Money.of(transaction.getTotalAmount());
-        // FR-PAY-04: wallet credit first; UC-02 5b: a wallet that covers everything confirms without payOS.
         Money walletPart = useWallet
                 ? walletPayments.payFromWallet(customerId, transactionId, total, idempotencyKey)
                 : walletPayments.activeWalletPart(transactionId);
@@ -294,12 +318,20 @@ public class PaymentService {
     private void cancelAssociatedTransaction(UUID transactionId) {
         // SC-31: the rest of the payment failed, so the wallet part goes back to the customer.
         walletPayments.reverse(java.util.List.of(transactionId), "Hoàn phần ví do thanh toán payOS không thành công");
+        if (loadTopUps.isTopUp(transactionId)) {
+            loadTopUps.cancelForPaymentFailure(transactionId);
+            return;
+        }
         scheduledBookingService.cancelForPaymentFailure(transactionId);
     }
 
-    /** Every transaction belongs to a scheduled booking (the only way one is created). */
+    /** A transaction is a scheduled booking, or extra kilograms paid at the washer (V61). */
     @Transactional
     public void confirmTransactionPayment(UUID transactionId) {
+        if (loadTopUps.isTopUp(transactionId)) {
+            loadTopUps.confirmPayment(transactionId);
+            return;
+        }
         scheduledBookingService.confirmPayment(transactionId);
     }
 

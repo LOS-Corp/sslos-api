@@ -81,7 +81,7 @@ public class StoreBookingReadinessService {
                 SELECT d.code, d.name, d.service_mode, d.processing_minutes,
                        d.secondary_processing_minutes, d.check_in_minutes,
                        d.transfer_minutes, d.checkout_minutes,
-                       o.enabled, o.price, o.processing_minutes_override,
+                       o.enabled, o.price, o.price_per_kg, o.processing_minutes_override,
                        o.secondary_processing_minutes_override
                 FROM booking_service_definitions d
                 LEFT JOIN service_offerings o ON o.service_code = d.code
@@ -91,6 +91,7 @@ public class StoreBookingReadinessService {
             boolean configured = rs.getObject("enabled") != null;
             boolean enabled = configured && rs.getBoolean("enabled");
             java.math.BigDecimal price = rs.getBigDecimal("price");
+            java.math.BigDecimal pricePerKg = rs.getBigDecimal("price_per_kg");
             int processing = rs.getObject("processing_minutes_override") == null
                     ? rs.getInt("processing_minutes")
                     : rs.getInt("processing_minutes_override");
@@ -99,12 +100,19 @@ public class StoreBookingReadinessService {
                     : rs.getInt("secondary_processing_minutes_override");
             String code = rs.getString("code");
             List<ValidationIssue> serviceIssues = new ArrayList<>();
+            // V61: a washer service is priced by weight (fixed part >= 0 plus a per-kg price); others by a fixed price.
+            boolean byWeight = requirements(code).contains("WASHER");
+            boolean priceValid = byWeight
+                    ? price != null && price.signum() >= 0 && pricePerKg != null && pricePerKg.signum() > 0
+                    : price != null && price.signum() > 0;
             if (!configured) {
                 serviceIssues.add(issue("SERVICE_NOT_CONFIGURED", "Dịch vụ chưa được cấu hình tại cửa hàng.",
                         "Bật dịch vụ và đặt giá.", code));
             } else if (enabled) {
-                if (price == null || price.signum() <= 0) {
-                    serviceIssues.add(issue("SERVICE_PRICE_INVALID", "Giá dịch vụ phải lớn hơn 0.",
+                if (!priceValid) {
+                    serviceIssues.add(issue("SERVICE_PRICE_INVALID", byWeight
+                                    ? "Dịch vụ giặt tính theo kg: đơn giá/kg phải lớn hơn 0."
+                                    : "Giá dịch vụ phải lớn hơn 0.",
                             "Nhập giá hợp lệ cho dịch vụ.", code));
                 }
                 for (String type : requirements(code)) {
@@ -128,10 +136,9 @@ public class StoreBookingReadinessService {
                     }
                 }
             }
-            boolean serviceReady = configured && enabled && price != null && price.signum() > 0
-                    && serviceIssues.isEmpty();
+            boolean serviceReady = configured && enabled && priceValid && serviceIssues.isEmpty();
             return new ServiceReadiness(code, rs.getString("name"), rs.getString("service_mode"),
-                    configured, enabled, price, processing, secondary, rs.getInt("check_in_minutes"),
+                    configured, enabled, price, pricePerKg, processing, secondary, rs.getInt("check_in_minutes"),
                     rs.getInt("transfer_minutes"), rs.getInt("checkout_minutes"),
                     serviceReady, serviceIssues);
         });

@@ -178,7 +178,7 @@ class RefundCapIT {
 
     private BookingDto hold(Instant start) {
         return bookings.createHold(customerId, new CreateHoldRequest("WASH_ONLY", start,
-                List.of(Fixtures.washer(jdbc)), "cap-" + UUID.randomUUID(), null, null, null));
+                List.of(Fixtures.washer(jdbc)), "cap-" + UUID.randomUUID(), null, null, BigDecimal.ONE));
     }
 
     private String status(UUID bookingId) {

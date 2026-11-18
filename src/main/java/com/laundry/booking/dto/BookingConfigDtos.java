@@ -32,6 +32,8 @@ public final class BookingConfigDtos {
             boolean configured,
             boolean enabled,
             BigDecimal price,
+            /* Washer services (V61): price per kilogram; price is then the fixed part. */
+            BigDecimal pricePerKg,
             int processingMinutes,
             int secondaryProcessingMinutes,
             int checkInMinutes,
@@ -69,12 +71,16 @@ public final class BookingConfigDtos {
             String description,
             boolean enabled,
             BigDecimal price,
+            /* Washer services (V61): price per kilogram; price is then the fixed part (0 for WASH_ONLY). */
+            BigDecimal pricePerKg,
             int processingMinutes,
             int secondaryProcessingMinutes,
             int checkInMinutes,
             int transferMinutes,
             int checkoutMinutes,
-            boolean configured
+            boolean configured,
+            /* True when the service uses a washer, so it is priced by weight. */
+            boolean priceByWeight
     ) {}
 
     public record ServiceOfferingUpdate(

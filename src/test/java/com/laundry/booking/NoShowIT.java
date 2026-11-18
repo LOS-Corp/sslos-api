@@ -1,5 +1,7 @@
 package com.laundry.booking;
 
+import java.math.BigDecimal;
+
 import com.laundry.booking.dto.BookingDtos.CreateHoldRequest;
 import com.laundry.booking.service.NoShowJob;
 import com.laundry.booking.service.ScheduledBookingService;
@@ -136,7 +138,7 @@ class NoShowIT {
     private UUID confirmedBookingThatStarted(int minutesAgo, String service, UUID resource) {
         Instant start = Instant.now().plus(2, ChronoUnit.MINUTES).truncatedTo(ChronoUnit.MINUTES);
         var hold = bookings.createHold(customerId, new CreateHoldRequest(service, start, List.of(resource),
-                "noshow-" + UUID.randomUUID(), null, null, null));
+                "noshow-" + UUID.randomUUID(), null, null, BigDecimal.ONE));
         Fixtures.paidPayment(jdbc, hold.transactionId(), hold.totalAmount().longValue());
         bookings.confirmPayment(hold.transactionId());
         jdbc.update("""

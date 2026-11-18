@@ -45,7 +45,11 @@ public final class BookingDtos {
             int transferMinutes,
             int checkoutMinutes,
             List<OpeningHoursDto> openingHours,
-            List<String> availableResources
+            List<String> availableResources,
+            /* Washer services: price per booked kilogram (price is then the 1 kg price); null otherwise. */
+            BigDecimal pricePerKg,
+            /* Largest washer capacity in the store: the most a customer can book; null when unknown. */
+            BigDecimal maxLoadKg
     ) {}
 
     public record OpeningHoursDto(String dayOfWeek, LocalTime opensAt, LocalTime closesAt) {}
@@ -190,11 +194,12 @@ public final class BookingDtos {
             @NotNull Instant startTime,
             @NotNull List<UUID> resourceIds,
             @NotBlank String idempotencyKey,
-            /* Program codes; null or blank picks the machine type's default. */
+            /* Ignored since V61: customers no longer pick a program, the machine runs the default. */
             String washProgram,
             String dryProgram,
-            /* Laundry the customer brings (kg); never booked on a smaller machine (BR-26). Optional. */
-            @DecimalMin(value = "0.1") BigDecimal declaredLoadKg
+            /* Whole kilograms the customer pays for; required for washer services (V61), never booked on a
+               smaller machine (BR-26). */
+            @DecimalMin(value = "1") BigDecimal declaredLoadKg
     ) {}
 
     public record BookingDto(
@@ -216,6 +221,8 @@ public final class BookingDtos {
             List<SlotPhaseDto> timeline,
             List<RecommendedResourceDto> resources,
             List<MachineProgramDtos.MachineProgramDto> programs,
+            /* Kilograms paid for (booked + extra paid at the machine); null when not priced by weight. */
+            BigDecimal loadKg,
             UUID paymentId,
             String paymentStatus,
             String paymentUrl,
@@ -238,7 +245,10 @@ public final class BookingDtos {
 
     public record ServiceOfferingRequest(
             boolean enabled,
-            @NotNull @DecimalMin(value = "0.01") BigDecimal price,
+            /* Fixed part; washer services may set 0 and charge by weight only. */
+            @NotNull @DecimalMin(value = "0") BigDecimal price,
+            /* Washer services (V61): price per booked kilogram, required for them; ignored otherwise. */
+            @DecimalMin(value = "1") BigDecimal pricePerKg,
             @Positive Integer processingMinutes,
             @Positive Integer secondaryProcessingMinutes
     ) {}

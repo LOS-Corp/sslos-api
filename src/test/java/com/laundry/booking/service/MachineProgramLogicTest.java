@@ -18,14 +18,15 @@ class MachineProgramLogicTest {
     private static final Instant START = Instant.parse("2026-10-25T09:00:00Z");
 
     @Test
-    void comboTakesWasherAndDryerDurationsAndBothSurcharges() {
+    void comboTakesWasherAndDryerDurationsButNoSurcharge() {
         SlotPlanner.ServiceConfig config = SlotPlanner.withPrograms(
                 service("WASH_DRY", 35, 45, List.of("WASHER", "DRYER")),
                 List.of(washer("WASH_HEAVY", 45, 8, "10000"), dryer("DRY_LOW", 40, 5, "5000")));
 
         assertEquals(53, config.processingMinutes());
         assertEquals(45, config.secondaryProcessingMinutes());
-        assertEquals(new BigDecimal("55000"), config.price());
+        // V61: washing is priced by weight; programs never change the price.
+        assertEquals(new BigDecimal("40000"), config.price());
         // 5 check-in + 53 wash + 10 transfer + 45 dry + 5 check-out.
         assertEquals(START.plusSeconds(118 * 60), SlotPlanner.buildPlan(config, START).expectedEnd());
     }

@@ -72,6 +72,29 @@ public class StartAuthorizationPublisher {
         send(machine, auth, payload);
     }
 
+    /**
+     * LOAD_VERDICT: result of weighing the laundry before START (V61). {@code accepted} unlocks the next
+     * START press; otherwise the washer shows why and keeps START locked until the customer takes laundry
+     * out (and weighs again) or pays for the extra kilograms in the app. {@code expiresInSeconds} replaces
+     * the device's authorization timer, since paying takes longer than the usual unlock window.
+     */
+    public void loadVerdict(Machine machine, MachineStartAuthorization auth, boolean accepted, String reason,
+                            Integer extraKg, java.math.BigDecimal paidKg, long expiresInSeconds) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("type", "LOAD_VERDICT");
+        payload.put("commandId", "LOAD-" + auth.getId());
+        payload.put("authorizationId", auth.getId().toString());
+        payload.put("machineId", machine.getMachineCode());
+        payload.put("accepted", accepted);
+        payload.put("reason", reason);
+        if (auth.getMeasuredLoadKg() != null) payload.put("measuredKg", auth.getMeasuredLoadKg());
+        if (paidKg != null) payload.put("paidKg", paidKg);
+        if (machine.getCapacityKg() != null) payload.put("capacityKg", machine.getCapacityKg());
+        if (extraKg != null) payload.put("extraKg", extraKg);
+        payload.put("expiresInSeconds", Math.max(1, expiresInSeconds));
+        send(machine, auth, payload);
+    }
+
     public void revokeStart(Machine machine, MachineStartAuthorization auth, String reason) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("type", "REVOKE_START");

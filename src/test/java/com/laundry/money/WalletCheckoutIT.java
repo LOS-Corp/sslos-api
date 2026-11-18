@@ -131,7 +131,7 @@ class WalletCheckoutIT {
     private Hold hold() {
         var dto = bookings.createHold(customerId, new CreateHoldRequest("WASH_ONLY",
                 LocalDate.now(Fixtures.ZONE).plusDays(1).atTime(9, 0).atZone(Fixtures.ZONE).toInstant(),
-                List.of(washerId), "wallet-" + UUID.randomUUID(), null, null, null));
+                List.of(washerId), "wallet-" + UUID.randomUUID(), null, null, BigDecimal.ONE));
         return new Hold(dto.bookingId(), dto.transactionId());
     }
 

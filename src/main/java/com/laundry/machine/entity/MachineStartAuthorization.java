@@ -137,6 +137,28 @@ public class MachineStartAuthorization {
     @Column(name = "run_id")
     private UUID runId;
 
+    // ── Weighing before START (V61) ─────────────────────────────────────────
+
+    /** Last scale reading sent by the washer (LOAD_WEIGHED); null until the customer weighed the laundry. */
+    @Column(name = "measured_load_kg", precision = 5, scale = 2)
+    private java.math.BigDecimal measuredLoadKg;
+
+    /** ACCEPTED, OVER_BOOKED or OVER_CAPACITY (see {@link com.laundry.booking.domain.LoadPolicy}). */
+    @Column(name = "load_verdict", length = 20)
+    private String loadVerdict;
+
+    /** Whole kilograms still to pay for the last reading; 0 when accepted. */
+    @Column(name = "load_extra_kg")
+    private Integer loadExtraKg;
+
+    @Column(name = "load_checked_at")
+    private OffsetDateTime loadCheckedAt;
+
+    /** True when the laundry was weighed and refused: START stays locked until it is resolved. */
+    public boolean isLoadBlocked() {
+        return loadVerdict != null && !"ACCEPTED".equals(loadVerdict);
+    }
+
     /** Optimistic-lock guard against concurrent transitions. */
     @Version
     @Column(nullable = false)

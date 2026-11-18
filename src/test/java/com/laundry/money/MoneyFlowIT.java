@@ -224,7 +224,7 @@ class MoneyFlowIT {
 
     private UUID paidBooking(Instant start, UUID washer) {
         var hold = bookings.createHold(customerId, new CreateHoldRequest("WASH_ONLY",
-                start.truncatedTo(ChronoUnit.MINUTES), List.of(washer), "money-" + UUID.randomUUID(), null, null, null));
+                start.truncatedTo(ChronoUnit.MINUTES), List.of(washer), "money-" + UUID.randomUUID(), null, null, BigDecimal.ONE));
         jdbc.update("""
                 INSERT INTO payments (id, transaction_id, amount, payment_method, status, paid_at, created_at, updated_at)
                 VALUES (gen_random_uuid(), ?, ?, 'ONLINE', 'PAID', NOW(), NOW(), NOW())

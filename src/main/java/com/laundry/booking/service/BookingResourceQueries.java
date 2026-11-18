@@ -27,6 +27,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.math.BigDecimal;
+import com.laundry.booking.domain.LoadPolicy;
 
 import static com.laundry.booking.dto.BookingDtos.*;
 
@@ -95,13 +97,38 @@ public class BookingResourceQueries {
         return configured.getFirst();
     }
 
-    /** The store offering with the chosen (or default) wash / dry programs applied. */
-    ServiceConfig customerOffering(String serviceCode, String washProgram, String dryProgram) {
+    /**
+     * The store offering as a customer books it: the default wash / dry programs set the durations (customers
+     * no longer pick a program) and, for a washer service, the price is the fixed part plus the per-kg price
+     * times {@code loadKg} (V61). A null load prices the smallest bookable load, the "from" price.
+     */
+    ServiceConfig customerOffering(String serviceCode, BigDecimal loadKg) {
         ServiceConfig config = offering(serviceCode);
         if (config == null) {
             return null;
         }
-        return withPrograms(config, programService.resolve(config.requirements(), washProgram, dryProgram));
+        config = withPrograms(config, programService.resolve(config.requirements(), null, null));
+        BigDecimal perKg = pricePerKg(serviceCode);
+        if (perKg == null) {
+            return config;
+        }
+        BigDecimal kg = loadKg == null ? BigDecimal.valueOf(LoadPolicy.MIN_BOOKED_KG) : loadKg;
+        return new ServiceConfig(config.code(), config.name(), config.mode(), config.description(),
+                config.processingMinutes(), config.secondaryProcessingMinutes(), config.checkInMinutes(),
+                config.checkoutMinutes(), config.transferMinutes(), config.pickupDeadlineHours(),
+                LoadPolicy.price(config.price(), perKg, kg), config.timezone(), config.opensAt(), config.closesAt(),
+                config.requirements(), config.bufferMinutes());
+    }
+
+    /** Price per kilogram of a washer service; null when the service is not priced by weight. */
+    BigDecimal pricePerKg(String serviceCode) {
+        return jdbc.query("""
+                SELECT o.price_per_kg FROM service_offerings o
+                WHERE o.service_code = ? AND EXISTS (
+                    SELECT 1 FROM booking_service_requirements r
+                    WHERE r.service_code = o.service_code AND r.resource_type = 'WASHER')
+                """, (rs, row) -> rs.getBigDecimal(1), serviceCode).stream()
+                .filter(java.util.Objects::nonNull).findFirst().orElse(null);
     }
 
     List<String> requirementsFor(String serviceCode) {

@@ -35,6 +35,8 @@ public class AuthChannelHandler {
      *
      * <ul>
      *   <li>{@code AUTH_ACK} — device answer to {@code AUTHORIZE_START}.</li>
+     *   <li>{@code LOAD_WEIGHED} — washer: the laundry on the scale weighs {@code weightKg} (V61); answered
+     *       with LOAD_VERDICT.</li>
      *   <li>{@code START_REQUEST} — customer pressed START on an authorized machine.</li>
      *   <li>{@code STARTED} — the cycle is actually running.</li>
      *   <li>{@code START_REJECTED} — device refused to start (door open, interlock, ...).</li>
@@ -59,7 +61,8 @@ public class AuthChannelHandler {
             String pin,
             String accessId,
             Integer compartment,
-            Boolean opened
+            Boolean opened,
+            Double weightKg
     ) {
     }
 
@@ -86,6 +89,9 @@ public class AuthChannelHandler {
             case "AUTH_ACK" -> authorizationService.handleAuthAck(machine,
                     m.authorizationId(), m.commandId(), Boolean.TRUE.equals(m.success()),
                     orEmpty(m.result()), orEmpty(m.reason()), orEmpty(m.bootId()));
+            case "LOAD_WEIGHED" -> authorizationService.handleLoadWeighed(machine,
+                    m.authorizationId(), m.weightKg() == null ? null : java.math.BigDecimal.valueOf(m.weightKg()),
+                    orEmpty(m.bootId()));
             case "START_REQUEST" -> authorizationService.handleStartRequest(machine,
                     m.authorizationId(), orEmpty(m.startRequestId()), orEmpty(m.bootId()));
             case "STARTED" -> authorizationService.handleStarted(machine,

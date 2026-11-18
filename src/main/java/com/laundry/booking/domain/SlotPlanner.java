@@ -122,7 +122,8 @@ public final class SlotPlanner {
 
     /**
      * A machine program replaces the processing time of its machine (first
-     * requirement = primary, second = secondary) and adds its surcharge.
+     * requirement = primary, second = secondary). Programs no longer change the
+     * price: washing is priced by weight (V61, {@link LoadPolicy}).
      */
     public static ServiceConfig withPrograms(ServiceConfig config, List<MachineProgramDto> programs) {
         if (programs.isEmpty()) {
@@ -135,7 +136,6 @@ public final class SlotPlanner {
             int index = config.requirements().indexOf(program.machineType());
             if (index == 0) primary = program.totalMinutes();
             else if (index == 1) secondary = program.totalMinutes();
-            if (price != null && program.surcharge() != null) price = price.add(program.surcharge());
         }
         return new ServiceConfig(config.code(), config.name(), config.mode(), config.description(),
                 primary, secondary, config.checkInMinutes(), config.checkoutMinutes(), config.transferMinutes(),

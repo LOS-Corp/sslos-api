@@ -1,5 +1,7 @@
 package com.laundry.booking;
 
+import java.math.BigDecimal;
+
 import com.laundry.shared.EmailService;
 import com.laundry.booking.dto.BookingDtos.CreateHoldRequest;
 import com.laundry.booking.service.BookingLifecycleService;
@@ -61,7 +63,7 @@ class BookingLifecycleIT {
         customerId = Fixtures.customer(jdbc);
         var hold = bookings.createHold(customerId, new CreateHoldRequest("WASH_DRY",
                 Instant.now().plus(5, ChronoUnit.MINUTES).truncatedTo(ChronoUnit.MINUTES),
-                List.of(washerId, dryerId), "life-" + UUID.randomUUID(), null, null, null));
+                List.of(washerId, dryerId), "life-" + UUID.randomUUID(), null, null, BigDecimal.ONE));
         bookingId = hold.bookingId();
         Fixtures.paidPayment(jdbc, hold.transactionId(), COMBO);
         bookings.confirmPayment(hold.transactionId());

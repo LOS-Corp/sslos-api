@@ -108,7 +108,7 @@ public class BookingAvailabilityService {
             if (!service.enabled() || !service.ready()) {
                 continue;
             }
-            ServiceConfig offered = queries.customerOffering(service.code(), null, null);
+            ServiceConfig offered = queries.customerOffering(service.code(), null);
             if (offered == null) {
                 continue;
             }
@@ -116,15 +116,15 @@ public class BookingAvailabilityService {
                     settings.getPhone(), offered.timezone(), offered.price(), offered.processingMinutes(),
                     offered.secondaryProcessingMinutes(), offered.checkInMinutes(),
                     offered.transferMinutes(), offered.checkoutMinutes(), hours,
-                    List.copyOf(offered.requirements())));
+                    List.copyOf(offered.requirements()), queries.pricePerKg(service.code()),
+                    maxWasherCapacityKg()));
         }
         return result;
     }
 
     @Transactional(readOnly = true)
-    public TimelineAvailabilityResponse timelineAvailability(String serviceCode, LocalDate date,
-                                                             String washProgram, String dryProgram) {
-        ServiceConfig config = queries.customerOffering(serviceCode, washProgram, dryProgram);
+    public TimelineAvailabilityResponse timelineAvailability(String serviceCode, LocalDate date, BigDecimal loadKg) {
+        ServiceConfig config = queries.customerOffering(serviceCode, loadKg);
         if (config == null) {
             throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not offered at the store");
         }
@@ -152,8 +152,10 @@ public class BookingAvailabilityService {
         List<AvailabilityInterval> operatingIntervals =
                 operatingIntervals(weeklyHours, zone, dayStart, dayEnd);
         List<String> requirements = config.requirements();
-        Map<String, List<Resource>> resourcesByType =
-                queries.resourcesByType(requirements, machineRepository.findAll());
+        List<Machine> machinesInStore = machineRepository.findAll();
+        Map<String, List<Resource>> resourcesByType = new java.util.LinkedHashMap<>(
+                queries.resourcesByType(requirements, machinesInStore));
+        dropTooSmall(resourcesByType, machinesInStore, loadKg);
         Map<UUID, Resource> resourcesById = byId(resourcesByType);
 
         Map<UUID, List<OccupiedInterval>> occupiedByResource =
@@ -206,11 +208,11 @@ public class BookingAvailabilityService {
     @Transactional(readOnly = true)
     public RecommendationsResponse recommendations(String serviceCode,
                                                     Instant desiredStartTime, Instant preferredEndTime,
-                                                    String washProgram, String dryProgram) {
+                                                    BigDecimal loadKg) {
         if (!isMinuteAligned(desiredStartTime)) {
             throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Start time must be aligned to a whole minute");
         }
-        ServiceConfig config = queries.customerOffering(serviceCode, washProgram, dryProgram);
+        ServiceConfig config = queries.customerOffering(serviceCode, loadKg);
         if (config == null) {
             throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not offered at the store");
         }
@@ -220,8 +222,10 @@ public class BookingAvailabilityService {
         List<RecommendationDto> recommendations = new ArrayList<>();
         if (preferredEndSatisfied && queries.isWithinOpeningHours(config, desiredStartTime, plan)) {
             List<List<Resource>> candidates = new ArrayList<>();
-            Map<String, List<Resource>> resourcesByType = queries.resourcesByType(
-                    config.requirements(), machineRepository.findAll());
+            List<Machine> machinesInStore = machineRepository.findAll();
+            Map<String, List<Resource>> resourcesByType = new java.util.LinkedHashMap<>(
+                    queries.resourcesByType(config.requirements(), machinesInStore));
+            dropTooSmall(resourcesByType, machinesInStore, loadKg);
             for (int i = 0; i < config.requirements().size(); i++) {
                 AllocationPlan allocation = plan.allocationPlans().get(i);
                 List<Resource> ofType = resourcesByType.get(config.requirements().get(i));
@@ -254,8 +258,8 @@ public class BookingAvailabilityService {
      */
     @Transactional(readOnly = true)
     public MachineSearchResponse machineSearch(String serviceCode, Instant from, Instant to,
-                                               String washProgram, String dryProgram, BigDecimal declaredLoadKg) {
-        ServiceConfig config = queries.customerOffering(serviceCode, washProgram, dryProgram);
+                                               BigDecimal declaredLoadKg) {
+        ServiceConfig config = queries.customerOffering(serviceCode, declaredLoadKg);
         if (config == null) {
             throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not offered at the store");
         }
@@ -545,5 +549,30 @@ public class BookingAvailabilityService {
             collectRecommendations(config, plan, candidates, index + 1, selected, result);
             selected.removeLast();
         }
+    }
+
+    /** BR-26: washers / dryers smaller than the load are not offered. Machines without a capacity always fit. */
+    private static void dropTooSmall(Map<String, List<Resource>> resourcesByType, List<Machine> machines,
+                                     BigDecimal loadKg) {
+        if (loadKg == null) {
+            return;
+        }
+        Map<UUID, Machine> byId = new java.util.HashMap<>();
+        machines.forEach(machine -> byId.put(machine.getId(), machine));
+        resourcesByType.replaceAll((type, list) -> list.stream().filter(resource -> {
+            Machine machine = byId.get(resource.id());
+            return machine == null || machine.getCapacityKg() == null
+                    || machine.getCapacityKg().compareTo(loadKg) >= 0;
+        }).toList());
+    }
+
+    /** Largest rated load among the bookable washers: the most a customer can book; null when none is set. */
+    private BigDecimal maxWasherCapacityKg() {
+        return machineRepository.findAll().stream()
+                .filter(machine -> machine.getType() == MachineType.WASHER && queries.isOperationallyUsable(machine))
+                .map(Machine::getCapacityKg)
+                .filter(java.util.Objects::nonNull)
+                .max(Comparator.naturalOrder())
+                .orElse(null);
     }
 }

@@ -7,6 +7,7 @@ import com.laundry.machine.repository.DeviceEventRepository;
 import com.laundry.machine.repository.MachineRepository;
 import com.laundry.machine.service.DeviceCommandService;
 import com.laundry.machine.service.MachineCatalogService;
+import com.laundry.machine.service.MachineLoadService;
 import com.laundry.machine.service.MachineStartAuthorizationService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -43,6 +44,7 @@ public class MachineController {
     private final DeviceCommandService deviceCommandService;
     private final MachineCatalogService machineCatalogService;
     private final MachineStartAuthorizationService startAuthorizationService;
+    private final MachineLoadService machineLoadService;
 
     private static final int MAX_PAGE_SIZE = 100;
 
@@ -160,6 +162,7 @@ public class MachineController {
                         .consumedAt(a.getConsumedAt())
                         .revokedAt(a.getRevokedAt())
                         .revokeReason(a.getRevokeReason())
+                        .load(machineLoadService.describe(a))
                         .build()))
                 .orElse(ResponseEntity.notFound().build());
     }

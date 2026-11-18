@@ -43,9 +43,8 @@ public class CustomerBookingController {
     @GetMapping("/timeline-availability")
     public TimelineAvailabilityResponse timelineAvailability(@RequestParam String serviceCode,
                                                                @RequestParam LocalDate date,
-                                                               @RequestParam(required = false) String washProgram,
-                                                               @RequestParam(required = false) String dryProgram) {
-        return availabilityService.timelineAvailability(serviceCode, date, washProgram, dryProgram);
+                                                               @RequestParam(required = false) BigDecimal loadKg) {
+        return availabilityService.timelineAvailability(serviceCode, date, loadKg);
     }
 
     /**
@@ -57,21 +56,16 @@ public class CustomerBookingController {
     public MachineSearchResponse machineSearch(@RequestParam String serviceCode,
                                                @RequestParam Instant from,
                                                @RequestParam Instant to,
-                                               @RequestParam(required = false) String washProgram,
-                                               @RequestParam(required = false) String dryProgram,
                                                @RequestParam(required = false) BigDecimal declaredLoadKg) {
-        return availabilityService.machineSearch(serviceCode, from, to, washProgram, dryProgram,
-                declaredLoadKg);
+        return availabilityService.machineSearch(serviceCode, from, to, declaredLoadKg);
     }
 
     @GetMapping("/recommendations")
     public RecommendationsResponse recommendations(@RequestParam String serviceCode,
                                                     @RequestParam Instant desiredStartTime,
                                                     @RequestParam(required = false) Instant preferredEndTime,
-                                                    @RequestParam(required = false) String washProgram,
-                                                    @RequestParam(required = false) String dryProgram) {
-        return availabilityService.recommendations(serviceCode, desiredStartTime, preferredEndTime,
-                washProgram, dryProgram);
+                                                    @RequestParam(required = false) BigDecimal loadKg) {
+        return availabilityService.recommendations(serviceCode, desiredStartTime, preferredEndTime, loadKg);
     }
 
     @PostMapping("/holds")

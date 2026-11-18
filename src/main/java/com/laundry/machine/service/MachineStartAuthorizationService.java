@@ -1,6 +1,9 @@
 package com.laundry.machine.service;
 
+import com.laundry.booking.domain.LoadPolicy;
 import com.laundry.booking.event.BookingReleased;
+import com.laundry.booking.event.LoadTopUpPaid;
+import com.laundry.booking.service.LoadTopUpService;
 import com.laundry.booking.service.MachineSlotService;
 import com.laundry.booking.service.MachineSlotService.MachineSlot;
 import com.laundry.machine.dto.CheckInResponse;
@@ -44,6 +47,10 @@ import java.util.UUID;
  *   <li>The device ACKs via {@code AUTH_ACK} →
  *       {@link #handleAuthAck(Machine, String, String, boolean, String, String, String)}
  *       flips the row to GRANTED and locks the {@code deviceBootId}.</li>
+ *   <li>Washers with a scale (V61): the customer puts the laundry on the scale and presses START → device
+ *       publishes {@code LOAD_WEIGHED} → {@link #handleLoadWeighed} compares the weight with the paid
+ *       kilograms and the machine capacity ({@link LoadPolicy}) and answers {@code LOAD_VERDICT}. Only an
+ *       accepted load lets the next START press through.</li>
  *   <li>The customer presses the physical START button → device publishes
  *       {@code START_REQUEST} → {@link #handleStartRequest(Machine, UUID, String, String, String)}
  *       sets START_PENDING and synchronously publishes {@code START_APPROVAL}.</li>
@@ -71,6 +78,7 @@ public class MachineStartAuthorizationService {
     private final com.laundry.booking.service.BookingLifecycleService bookingLifecycleService;
     private final CheckInWindowPolicy checkInWindowPolicy;
     private final StartAuthorizationPublisher publisher;
+    private final LoadTopUpService loadTopUps;
 
     public MachineStartAuthorizationService(
             MachineRepository machineRepository,
@@ -80,7 +88,8 @@ public class MachineStartAuthorizationService {
             PlatformTransactionManager transactionManager,
             com.laundry.booking.service.BookingLifecycleService bookingLifecycleService,
             CheckInWindowPolicy checkInWindowPolicy,
-            StartAuthorizationPublisher publisher) {
+            StartAuthorizationPublisher publisher,
+            LoadTopUpService loadTopUps) {
         this.machineRepository = machineRepository;
         this.machineSlots = machineSlots;
         this.paymentRepository = paymentRepository;
@@ -89,10 +98,15 @@ public class MachineStartAuthorizationService {
         this.bookingLifecycleService = bookingLifecycleService;
         this.checkInWindowPolicy = checkInWindowPolicy;
         this.publisher = publisher;
+        this.loadTopUps = loadTopUps;
     }
 
     @Value("${app.machine.start-authorization.ttl-seconds:120}")
     private int authorizationTtlSeconds;
+
+    /** Time the customer gets to take laundry out or pay for extra kilograms after a refused weighing. */
+    @Value("${app.machine.load-decision-seconds:600}")
+    private int loadDecisionSeconds;
 
     /** START pressed → STARTED normally takes ~1 s; the device gives up after 5 s. */
     private static final int START_PENDING_MAX_SECONDS = 15;
@@ -461,6 +475,13 @@ public class MachineStartAuthorizationService {
             throw new StaleAuthorizationException(authorizationId,
                     "Machine already running");
         }
+        // V61: weighed and refused (too heavy for the paid kilograms or the machine). The washer firmware never
+        // sends START before an accepted LOAD_VERDICT; this guards against an out-of-date board.
+        if (auth.isLoadBlocked()) {
+            publisher.startApproval(machine, auth, startRequestId, null, "LOAD_NOT_ACCEPTED", bootId);
+            throw new StaleAuthorizationException(authorizationId,
+                    "Laundry weighed " + auth.getMeasuredLoadKg() + " kg was not accepted (" + auth.getLoadVerdict() + ")");
+        }
 
         auth.setStatus(MachineStartAuthorizationStatus.START_PENDING);
         // The device drops an approval after 5 s; if STARTED never comes, let the sweep
@@ -477,6 +498,88 @@ public class MachineStartAuthorizationService {
         // reaches CONSUMED).
         runAfterCommit(() -> publisher.startApproval(machine, auth, startRequestId, runId, "APPROVED", bootId));
         return runId;
+    }
+
+    /**
+     * Handle {@code LOAD_WEIGHED} from a washer (V61): the laundry on the scale weighs {@code weightKg}.
+     * Compares it with the kilograms the booking paid for and the machine's capacity, stores the result on
+     * the authorization and answers {@code LOAD_VERDICT}. A refused load keeps the authorization open for
+     * {@code app.machine.load-decision-seconds} so the customer can take laundry out (and press START to weigh
+     * again), pay for the extra kilograms or move to a larger washer in the app. Admin test runs are always
+     * accepted.
+     */
+    @Transactional
+    public void handleLoadWeighed(Machine machine, UUID authorizationId, java.math.BigDecimal weightKg, String bootId) {
+        MachineStartAuthorization auth = lockOrThrow(authorizationId, machine.getId());
+        if (auth.getStatus() == MachineStartAuthorizationStatus.PENDING && bootId != null && !bootId.isBlank()) {
+            // Like START_REQUEST: the board only knows this id from AUTHORIZE_START, so this is an implicit ACK.
+            auth.setStatus(MachineStartAuthorizationStatus.GRANTED);
+            auth.setGrantedAt(OffsetDateTime.now());
+            auth.setDeviceBootId(bootId);
+        }
+        OffsetDateTime now = OffsetDateTime.now();
+        if (auth.getStatus() != MachineStartAuthorizationStatus.GRANTED || !auth.getExpiresAt().isAfter(now)
+                || weightKg == null) {
+            log.info("[{}] LOAD_WEIGHED for authorization {} ignored (status={}, weight={})",
+                    machine.getMachineCode(), auth.getId(), auth.getStatus(), weightKg);
+            MachineStartAuthorization refused = auth;
+            runAfterCommit(() -> publisher.loadVerdict(machine, refused, false,
+                    weightKg == null ? "NO_WEIGHT" : "NOT_AUTHORIZED", null, null, 1));
+            return;
+        }
+        auth.setMeasuredLoadKg(weightKg.max(java.math.BigDecimal.ZERO).setScale(2, java.math.RoundingMode.HALF_UP));
+        applyLoadVerdict(machine, auth);
+    }
+
+    /** Extra kilograms were paid: weigh the last reading again, which normally unlocks START now. */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onLoadTopUpPaid(LoadTopUpPaid event) {
+        revokeInNewTxTemplate.executeWithoutResult(status -> authorizationRepository.findActiveByBooking(event.bookingId())
+                .stream()
+                .filter(auth -> auth.getMeasuredLoadKg() != null
+                        && auth.getStatus() == MachineStartAuthorizationStatus.GRANTED)
+                .forEach(auth -> machineRepository.findById(auth.getMachineId())
+                        .ifPresent(machine -> applyLoadVerdict(machine, auth))));
+    }
+
+    /** Evaluates {@code auth}'s last scale reading, saves the verdict and sends LOAD_VERDICT after commit. */
+    private void applyLoadVerdict(Machine machine, MachineStartAuthorization auth) {
+        OffsetDateTime now = OffsetDateTime.now();
+        LoadPolicy.Verdict verdict;
+        java.math.BigDecimal paidKg = null;
+        if (auth.isTestRun() || auth.getBookingId() == null) {
+            verdict = new LoadPolicy.Verdict(LoadPolicy.Kind.ACCEPTED, auth.getMeasuredLoadKg(), null,
+                    machine.getCapacityKg(), 0);
+        } else {
+            paidKg = loadTopUps.bookingLoad(auth.getBookingId()).paidKg();
+            verdict = LoadPolicy.evaluate(auth.getMeasuredLoadKg(), paidKg, machine.getCapacityKg());
+        }
+        auth.setLoadVerdict(verdict.kind().name());
+        auth.setLoadExtraKg(verdict.extraKg());
+        auth.setLoadCheckedAt(now);
+        // Accepted: the usual unlock window to load the drum and press START. Refused: time to decide and pay.
+        OffsetDateTime keepUntil = now.plusSeconds(verdict.accepted() ? authorizationTtlSeconds : loadDecisionSeconds);
+        if (auth.getExpiresAt().isBefore(keepUntil)) {
+            auth.setExpiresAt(keepUntil);
+        }
+        authorizationRepository.save(auth);
+        log.info("[{}] Load {} kg for authorization {} (paid {} kg, capacity {} kg): {} extra={}",
+                machine.getMachineCode(), auth.getMeasuredLoadKg(), auth.getId(), paidKg, machine.getCapacityKg(),
+                verdict.kind(), verdict.extraKg());
+        long seconds = java.time.Duration.between(now, auth.getExpiresAt()).getSeconds();
+        java.math.BigDecimal paid = paidKg;
+        runAfterCommit(() -> publisher.loadVerdict(machine, auth, verdict.accepted(), verdict.kind().name(),
+                verdict.extraKg(), paid, seconds));
+    }
+
+    /**
+     * The customer chose to move to a larger washer (their slot was moved by the booking module): the
+     * authorization on this machine ends and its START button locks again.
+     */
+    @Transactional
+    public void revokeForMove(UUID authorizationId, String targetMachineCode) {
+        authorizationRepository.findById(authorizationId)
+                .ifPresent(auth -> revokeInternal(auth, "LOAD_MOVED", "moved to " + targetMachineCode, true));
     }
 
     /**

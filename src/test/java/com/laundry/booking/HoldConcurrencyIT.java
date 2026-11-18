@@ -1,5 +1,7 @@
 package com.laundry.booking;
 
+import java.math.BigDecimal;
+
 import com.laundry.booking.dto.BookingDtos.CreateHoldRequest;
 import com.laundry.booking.service.ScheduledBookingService;
 import com.laundry.machine.entity.Machine;
@@ -124,7 +126,7 @@ class HoldConcurrencyIT {
         Instant otherStart = start.plus(2, ChronoUnit.HOURS);
         UUID lateCustomer = Fixtures.customer(jdbc);
         var late = bookings.createHold(lateCustomer, new CreateHoldRequest("WASH_ONLY", otherStart,
-                List.of(washerId), "pay-late-" + UUID.randomUUID(), null, null, null));
+                List.of(washerId), "pay-late-" + UUID.randomUUID(), null, null, BigDecimal.ONE));
         // The hold lapses (second 310 of a 300 s hold) while the slot is still free.
         jdbc.update("UPDATE scheduled_bookings SET hold_expires_at = NOW() - interval '10 seconds' WHERE id = ?",
                 late.bookingId());
@@ -144,6 +146,6 @@ class HoldConcurrencyIT {
 
     private CreateHoldRequest hold(String key) {
         return new CreateHoldRequest("WASH_ONLY", start, List.of(washerId), key + "-" + UUID.randomUUID(),
-                null, null, null);
+                null, null, BigDecimal.ONE);
     }
 }
