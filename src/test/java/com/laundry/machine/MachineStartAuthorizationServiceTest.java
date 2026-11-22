@@ -80,6 +80,8 @@ class MachineStartAuthorizationServiceTest {
     void setUp() {
         reset(deviceLink);
         authorizationRepository.deleteAll();
+        // Refunds written by other integration tests in the same run point at payments.
+        jdbc.update("DELETE FROM refund_requests");
         paymentRepository.deleteAll();
         jdbc.update("DELETE FROM policy_violations");
         jdbc.update("DELETE FROM scheduled_bookings");

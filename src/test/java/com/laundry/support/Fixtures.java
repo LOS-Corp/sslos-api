@@ -37,7 +37,10 @@ public final class Fixtures {
      * share the store, so every call overwrites what the previous test configured.
      */
     public static void bookableStore(JdbcTemplate jdbc, long price, LocalTime opens, LocalTime closes) {
-        jdbc.update("UPDATE store_settings SET timezone = ?, turnover_buffer_minutes = 0", ZONE.getId());
+        jdbc.update("""
+                UPDATE store_settings SET timezone = ?, turnover_buffer_minutes = 0,
+                    check_in_minutes = 5, checkout_minutes = 5, transfer_minutes = 10
+                """, ZONE.getId());
         jdbc.update("DELETE FROM store_hours");
         for (int day = 1; day <= 7; day++) {
             jdbc.update("INSERT INTO store_hours (day_of_week, opens_at, closes_at) VALUES (?, ?, ?)", day, opens, closes);
@@ -53,9 +56,10 @@ public final class Fixtures {
         UUID id = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO machines (id, machine_code, type, status, deployment_status, online,
-                                      last_heartbeat_at, created_at, updated_at)
-                VALUES (?, ?, 'WASHER', 'AVAILABLE', 'ACTIVE', TRUE, NOW() + interval '1 day', NOW(), NOW())
-                """, id, "W" + id.toString().substring(0, 8).toUpperCase());
+                                      last_heartbeat_at, created_at, updated_at, price_profile_id)
+                VALUES (?, ?, 'WASHER', 'AVAILABLE', 'ACTIVE', TRUE, NOW() + interval '1 day', NOW(), NOW(), ?)
+                """, id, "W" + id.toString().substring(0, 8).toUpperCase(),
+                priceProfile(jdbc, "WASHER", offeredPrice(jdbc, "WASH_ONLY", 30_000)));
         return id;
     }
 
@@ -64,22 +68,44 @@ public final class Fixtures {
         UUID id = UUID.randomUUID();
         jdbc.update("""
                 INSERT INTO machines (id, machine_code, type, status, deployment_status, online,
-                                      last_heartbeat_at, created_at, updated_at)
-                VALUES (?, ?, 'DRYER', 'AVAILABLE', 'ACTIVE', TRUE, NOW() + interval '1 day', NOW(), NOW())
-                """, id, "D" + id.toString().substring(0, 8).toUpperCase());
+                                      last_heartbeat_at, created_at, updated_at, price_profile_id)
+                VALUES (?, ?, 'DRYER', 'AVAILABLE', 'ACTIVE', TRUE, NOW() + interval '1 day', NOW(), NOW(), ?)
+                """, id, "D" + id.toString().substring(0, 8).toUpperCase(),
+                priceProfile(jdbc, "DRYER", offeredPrice(jdbc, "DRY_ONLY", 20_000)));
         return id;
     }
 
     /**
-     * The store sells {@code serviceCode} at {@code price} VND (replacing an earlier price). A washer service is
-     * priced by weight (V61): {@code price} per kilogram with no fixed part, so a 1 kg booking costs {@code price}.
+     * V68: washers and dryers are priced by their price profile only. The fixtures price each new machine like the
+     * store's single-machine service ({@code WASH_ONLY} / {@code DRY_ONLY}) at the time it is created, so a booking of
+     * one machine still costs what the test set with {@link #bookableStore} or {@link #offering}.
+     */
+    public static UUID priceProfile(JdbcTemplate jdbc, String machineType, long price) {
+        String name = "Test " + machineType + " " + price;
+        return jdbc.query("SELECT id FROM price_profiles WHERE lower(name) = lower(?)",
+                        (rs, row) -> rs.getObject(1, UUID.class), name).stream().findFirst()
+                .orElseGet(() -> jdbc.queryForObject("""
+                        INSERT INTO price_profiles (name, machine_type, base_price, cycle_minutes)
+                        VALUES (?, ?, ?, ?) RETURNING id
+                        """, UUID.class, name, machineType, price, "DRYER".equals(machineType) ? 45 : 35));
+    }
+
+    private static long offeredPrice(JdbcTemplate jdbc, String serviceCode, long fallback) {
+        return jdbc.query("SELECT price FROM service_offerings WHERE service_code = ? AND price > 0",
+                        (rs, row) -> rs.getLong(1), serviceCode).stream().findFirst().orElse(fallback);
+    }
+
+    /**
+     * The store sells {@code serviceCode} at {@code price} VND (replacing an earlier price). V65: self-service is
+     * priced per cycle ({@code price}); assisted laundry costs {@code price} when booking plus {@code price} per kg
+     * once staff weighed it.
      */
     public static void offering(JdbcTemplate jdbc, String serviceCode, long price) {
         jdbc.update("""
                 INSERT INTO service_offerings (service_code, enabled, price, price_per_kg)
-                SELECT ?, TRUE, CASE WHEN w THEN 0 ELSE ? END, CASE WHEN w THEN ? END
-                FROM (SELECT EXISTS (SELECT 1 FROM booking_service_requirements
-                                     WHERE service_code = ? AND resource_type = 'WASHER') w) washer
+                SELECT ?, TRUE, ?, CASE WHEN assisted THEN ? END
+                FROM (SELECT EXISTS (SELECT 1 FROM booking_service_definitions
+                                     WHERE code = ? AND service_mode = 'ASSISTED_LOCKER') assisted) mode
                 ON CONFLICT (service_code) DO UPDATE SET enabled = TRUE, price = EXCLUDED.price,
                     price_per_kg = EXCLUDED.price_per_kg,
                     processing_minutes_override = NULL, secondary_processing_minutes_override = NULL

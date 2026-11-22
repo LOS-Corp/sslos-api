@@ -60,10 +60,10 @@ class AdminUserServiceTest {
     }
 
     @Test
-    @DisplayName("Admin manages Admin/Owner only; Owner manages Staff only; nobody creates CUSTOMER or MANAGER")
+    @DisplayName("Admin manages Admin/Owner, Owner manages Staff; both create kiosks (V72); nobody creates CUSTOMER or MANAGER")
     void eachLevelManagesTheLevelBelow() {
-        assertThat(service.manageableRoles(admin)).containsExactly(Role.ADMIN, Role.OWNER);
-        assertThat(service.manageableRoles(owner)).containsExactly(Role.STAFF);
+        assertThat(service.manageableRoles(admin)).containsExactly(Role.ADMIN, Role.OWNER, Role.KIOSK);
+        assertThat(service.manageableRoles(owner)).containsExactly(Role.STAFF, Role.KIOSK);
 
         assertThat(service.create(request("Owner 2", "OWNER"), admin).role()).isEqualTo("OWNER");
         assertForbidden(() -> service.create(staffRequest("Staff by admin"), admin));

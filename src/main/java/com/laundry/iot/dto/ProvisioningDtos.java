@@ -4,10 +4,15 @@ import com.laundry.devicelink.DeviceIds;
 import com.laundry.iot.entity.IotDeviceStatus;
 import com.laundry.machine.entity.MachineDeploymentStatus;
 import com.laundry.machine.entity.MachineType;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
+import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
@@ -36,7 +41,43 @@ public final class ProvisioningDtos {
                                 OffsetDateTime commissionedAt, OffsetDateTime revokedAt,
                                 String ipAddress, Integer wifiRssi,
                                 String keyFingerprint, String pendingKeyFingerprint,
-                                int authFailures, OffsetDateTime lastAuthFailureAt) {}
+                                int authFailures, OffsetDateTime lastAuthFailureAt,
+                                UUID modelId, String manufacturer, String model, BigDecimal purchaseCost,
+                                LocalDate warrantyUntil, String technicalSpecs) {}
+
+    /**
+     * What the admin confirms when approving a device (V62): the machine as an asset. The brand comes with the
+     * catalog model (V63).
+     *
+     * @param modelId       a model of the brand/model catalog
+     * @param warrantyUntil last day of the warranty; null = the machine has no warranty
+     */
+    public record ApproveDeviceRequest(
+            @NotNull UUID modelId,
+            @NotNull @DecimalMin("0") @Digits(integer = 10, fraction = 2) BigDecimal purchaseCost,
+            LocalDate warrantyUntil,
+            @Size(max = 500) String technicalSpecs) {}
+
+    /**
+     * {@link ApproveDeviceRequest} with the catalog model resolved: what is stored on the device.
+     *
+     * @param machineType the model's machine type, checked against the board's firmware; null when unknown
+     */
+    public record DeviceAsset(UUID modelId, String manufacturer, String model, MachineType machineType,
+                              BigDecimal purchaseCost, LocalDate warrantyUntil, String technicalSpecs) {}
+
+    /**
+     * Use and payback of a device while attached to its current machine (since {@code since}).
+     *
+     * @param rentalCount    customer cycles actually started (test runs excluded)
+     * @param revenue        paid by customers for those cycles, plus paid extra kilograms, minus refunds; a booking
+     *                       that used several machines is split evenly between them
+     * @param paybackPercent revenue / purchase cost × 100; null without a purchase cost
+     * @param remaining      purchase cost still to earn back (0 once paid back); null without a purchase cost
+     */
+    public record DeviceStats(String deviceId, String machineCode, OffsetDateTime since,
+                              long maintenanceCount, long rentalCount, BigDecimal revenue,
+                              BigDecimal purchaseCost, BigDecimal paybackPercent, BigDecimal remaining) {}
 
     /**
      * An approved board not attached to any machine yet: what the owner picks when

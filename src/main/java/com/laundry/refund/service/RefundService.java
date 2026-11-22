@@ -8,6 +8,7 @@ import com.laundry.audit.service.AuditService.AuditEntry;
 import com.laundry.payment.entity.Payment;
 import com.laundry.payment.entity.PaymentStatus;
 import com.laundry.payment.repository.PaymentRepository;
+import com.laundry.kiosk.KioskAccounts;
 import com.laundry.refund.dto.request.CreateRefundRequest;
 import com.laundry.refund.dto.response.RefundCandidate;
 import com.laundry.refund.dto.response.RefundCandidate.RefundablePayment;
@@ -65,6 +66,7 @@ public class RefundService {
     private final Clock clock;
     private final JdbcTemplate jdbc;
     private final AttachmentService attachments;
+    private final KioskAccounts kioskAccounts;
 
     @Transactional
     public RefundResponse raise(CreateRefundRequest request, CurrentUser requester) {
@@ -101,7 +103,11 @@ public class RefundService {
         UUID customerId = transactions.findById(refund.getTransactionId())
                 .map(Transaction::getCustomerId)
                 .orElse(null);
-        if (customerId != null) {
+        if (kioskAccounts.isKiosk(customerId)) {
+            // V72: a walk-in customer of the kiosk has no wallet. The Owner approves once the money was handed
+            // back (cash or bank transfer); it must never reach the kiosk account's wallet.
+            refund.complete(now());
+        } else if (customerId != null) {
             wallet.credit(customerId, Money.of(refund.getAmount()), WalletEntryType.REFUND_CREDIT,
                     "refund:" + refund.getId(), "Hoàn tiền ngoại lệ được chủ cửa hàng duyệt");
             refund.complete(now());

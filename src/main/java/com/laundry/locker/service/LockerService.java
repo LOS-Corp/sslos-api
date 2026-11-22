@@ -14,6 +14,7 @@ import com.laundry.locker.dto.LockerDtos.CompartmentDto;
 import com.laundry.locker.dto.LockerDtos.CompartmentState;
 import com.laundry.locker.dto.LockerDtos.CustomerLockerAccess;
 import com.laundry.locker.dto.LockerDtos.LockerCabinetDto;
+import com.laundry.locker.dto.LockerDtos.WeightInfo;
 import com.laundry.machine.entity.DeviceEvent;
 import com.laundry.machine.entity.DeviceEventType;
 import com.laundry.machine.entity.Machine;
@@ -91,6 +92,7 @@ public class LockerService {
     private final BookingLifecycleService lifecycleService;
     private final BookingProperties bookingProps;
     private final AuditService audit;
+    private final com.laundry.booking.service.AssistedWeightService weightCharges;
     private final SecureRandom random = new SecureRandom();
 
     /** Live door states reported by each cabinet, by machine id. */
@@ -115,11 +117,13 @@ public class LockerService {
             case "HELD", "PAYMENT_REVIEW_REQUIRED" -> "PAYMENT";
             case "CONFIRMED" -> "DROP_OFF";
             case "CHECKED_IN", "IN_PROGRESS" -> "WAITING_STAFF";
-            case "READY_FOR_PICKUP" -> "PICKUP";
+            // V65: laundry priced by weight waits for its weight charge before the pickup PIN.
+            case "READY_FOR_PICKUP" -> weightCharges.pickupAllowed(bookingId) ? "PICKUP" : "PAYMENT_DUE";
             case "COMPLETED" -> "DONE";
             default -> "CLOSED";
         };
-        if (cabinet == null && !Set.of("DONE", "CLOSED").contains(stage)) stage = "NOT_LINKED";
+        if (cabinet == null && !Set.of("DONE", "CLOSED", "PAYMENT_DUE").contains(stage)) stage = "NOT_LINKED";
+        WeightInfo weight = weightInfo(bookingId);
 
         Access access = null;
         if (cabinet != null && "DROP_OFF".equals(stage)) {
@@ -136,7 +140,22 @@ public class LockerService {
                 access == null ? null : access.pin(),
                 access == null ? null : access.validFrom(),
                 access == null ? null : access.validUntil(),
-                cabinet != null && cabinet.isOnline());
+                cabinet != null && cabinet.isOnline(), weight);
+    }
+
+    /** Weight charge of a booking priced by weight; null when the booking is not (V65). */
+    private WeightInfo weightInfo(UUID bookingId) {
+        List<WeightInfo> rows = jdbc.query("""
+                SELECT COALESCE(b.price_per_kg, o.price_per_kg), c.weight_kg, c.amount, c.status, c.weighed_at
+                FROM scheduled_bookings b
+                JOIN booking_service_definitions d ON d.code = b.service_code AND d.service_mode = 'ASSISTED_LOCKER'
+                LEFT JOIN service_offerings o ON o.service_code = b.service_code
+                LEFT JOIN booking_weight_charges c ON c.booking_id = b.id
+                WHERE b.id = ?
+                """, (rs, row) -> rs.getBigDecimal(1) == null ? null : new WeightInfo(rs.getBigDecimal(1),
+                rs.getBigDecimal(2), rs.getBigDecimal(3), rs.getString(4),
+                rs.getTimestamp(5) == null ? null : rs.getTimestamp(5).toInstant()), bookingId);
+        return rows.isEmpty() ? null : rows.getFirst();
     }
 
     // ── Device messages (auth channel) ──────────────────────────────────
@@ -180,6 +199,11 @@ public class LockerService {
         String needed = "DROP_OFF".equals(access.purpose()) ? "CONFIRMED" : "READY_FOR_PICKUP";
         if (!needed.equals(access.bookingStatus())) {
             rejectPin(machine, requestId, "NOT_READY");
+            return;
+        }
+        // V65: laundry priced by weight is handed over only once its weight charge is paid.
+        if ("PICKUP".equals(access.purpose()) && !weightCharges.pickupAllowed(access.bookingId())) {
+            rejectPin(machine, requestId, "PAYMENT_DUE");
             return;
         }
         if ("OPENING".equals(access.status()) && access.openedAt() != null
@@ -273,7 +297,9 @@ public class LockerService {
             List<CompartmentDto> compartments = jdbc.query("""
                     SELECT r.id, r.resource_code, r.display_name, r.compartment_no,
                            b.id AS booking_id, b.status AS booking_status, b.start_time,
-                           u.full_name, u.phone
+                           u.full_name, u.phone,
+                           COALESCE(b.price_per_kg, o.price_per_kg) AS price_per_kg,
+                           c.weight_kg, c.amount AS weight_amount, c.status AS weight_status, c.weighed_at
                     FROM service_resources r
                     LEFT JOIN LATERAL (
                         SELECT sb.* FROM booking_resource_allocations a
@@ -284,6 +310,8 @@ public class LockerService {
                     ) b ON TRUE
                     LEFT JOIN transactions t ON t.id = b.transaction_id
                     LEFT JOIN users u ON u.id = t.customer_id
+                    LEFT JOIN service_offerings o ON o.service_code = b.service_code
+                    LEFT JOIN booking_weight_charges c ON c.booking_id = b.id
                     WHERE r.locker_machine_id = ?
                     ORDER BY r.compartment_no
                     """, (rs, row) -> {
@@ -293,7 +321,11 @@ public class LockerService {
                 CompartmentBooking booking = bookingId == null ? null : new CompartmentBooking(bookingId,
                         bookingId.toString().substring(0, 8).toUpperCase(Locale.ROOT),
                         rs.getString("full_name"), rs.getString("phone"), rs.getString("booking_status"),
-                        rs.getTimestamp("start_time").toInstant());
+                        rs.getTimestamp("start_time").toInstant(),
+                        rs.getBigDecimal("price_per_kg") == null ? null : new WeightInfo(rs.getBigDecimal("price_per_kg"),
+                                rs.getBigDecimal("weight_kg"), rs.getBigDecimal("weight_amount"),
+                                rs.getString("weight_status"),
+                                rs.getTimestamp("weighed_at") == null ? null : rs.getTimestamp("weighed_at").toInstant()));
                 return new CompartmentDto(no, rs.getObject("id", UUID.class), rs.getString("resource_code"),
                         rs.getString("display_name"), state == null ? null : state.doorClosed(),
                         state == null ? null : state.unlocked(),
@@ -367,6 +399,10 @@ public class LockerService {
             if (!needed.equals(status)) {
                 throw BusinessException.of(ErrorCode.CONFLICT, "COLLECT".equals(act)
                         ? "Ô này chưa có đồ khách gửi" : "Đơn này chưa được lấy đi xử lý");
+            }
+            // V65: laundry priced by weight is weighed before it goes back, so the customer knows what to pay.
+            if ("RETURN".equals(act) && weightCharges.needsWeighing(bookingId)) {
+                throw BusinessException.of(ErrorCode.CONFLICT, "Cân đồ và nhập số kg trước khi trả vào tủ");
             }
         }
         UUID accessId = UUID.randomUUID();

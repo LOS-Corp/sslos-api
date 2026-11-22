@@ -24,6 +24,9 @@ public interface IotDeviceRepository extends JpaRepository<IotDevice, UUID> {
 
     List<IotDevice> findAllByOrderByEnrolledAtDesc();
 
+    /** A catalog model still used by a device cannot be deleted (V63). */
+    boolean existsByModelId(UUID modelId);
+
     /** The board that owns a pinned key (fingerprints are unique, V59). */
     Optional<IotDevice> findByKeyFingerprint(String keyFingerprint);
 }

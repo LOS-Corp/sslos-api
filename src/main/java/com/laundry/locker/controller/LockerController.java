@@ -4,7 +4,11 @@ import com.laundry.shared.security.CurrentUser;
 import com.laundry.shared.security.Roles;
 import com.laundry.locker.dto.LockerDtos.CustomerLockerAccess;
 import com.laundry.locker.dto.LockerDtos.LockerCabinetDto;
+import com.laundry.booking.service.AssistedWeightService;
+import com.laundry.locker.dto.LockerDtos.RecordWeightRequest;
 import com.laundry.locker.dto.LockerDtos.StaffOpenRequest;
+import com.laundry.payment.dto.response.PaymentResponse;
+import com.laundry.payment.service.PaymentService;
 import com.laundry.locker.dto.LockerDtos.SyncCompartmentsRequest;
 import com.laundry.locker.service.LockerService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -27,6 +31,8 @@ import java.util.UUID;
 public class LockerController {
 
     private final LockerService lockerService;
+    private final AssistedWeightService weightCharges;
+    private final PaymentService payments;
 
     @GetMapping("/api/bookings/{bookingId}/locker")
     @Operation(summary = "Locker compartment and current PIN (drop-off or pickup) for the customer's assisted-laundry booking")
@@ -55,4 +61,19 @@ public class LockerController {
         return lockerService.syncCompartments(machineId, request.count());
     }
 
+    @PostMapping("/api/staff/lockers/bookings/{bookingId}/weight")
+    @Operation(summary = "Staff weighed an assisted booking's laundry (V65): the customer pays kg × price per kg before pickup")
+    public AssistedWeightService.WeightCharge recordWeight(@PathVariable UUID bookingId,
+                                                           @Valid @RequestBody RecordWeightRequest request,
+                                                           CurrentUser staff) {
+        return weightCharges.recordWeight(bookingId, request.weightKg(), staff.id());
     }
+
+    @PostMapping("/api/bookings/{bookingId}/weight-charge/payment")
+    @Operation(summary = "Customer pays the weight charge of an assisted booking (wallet first, then payOS)")
+    public PaymentResponse payWeightCharge(@PathVariable UUID bookingId,
+                                           @RequestParam(defaultValue = "true") boolean useWallet,
+                                           CurrentUser customer) {
+        return payments.createWeightChargePayment(bookingId, customer.id(), useWallet);
+    }
+}

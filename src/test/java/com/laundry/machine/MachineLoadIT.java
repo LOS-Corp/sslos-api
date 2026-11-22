@@ -77,75 +77,20 @@ class MachineLoadIT {
     }
 
     @Test
-    @DisplayName("1.6 kg over: START stays locked until 2 kg more are paid, then the washer is told to go on")
-    void overThePaidWeightNeedsATopUp() {
-        Machine washer = washer("10");
+    @DisplayName("V65: self-service is priced per cycle, so any weight is accepted: no top-up, no move")
+    void anyWeightIsAccepted() {
+        Machine washer = washer("7");
         UUID auth = unlock(washer, 5);
 
-        authorizations.handleLoadWeighed(washer, auth, new BigDecimal("6.6"), BOOT);
+        // More than paid and more than the capacity: still accepted.
+        authorizations.handleLoadWeighed(washer, auth, new BigDecimal("9.1"), BOOT);
 
         MachineStartAuthorization row = authorizationRepository.findById(auth).orElseThrow();
-        assertThat(row.getLoadVerdict()).isEqualTo("OVER_BOOKED");
-        assertThat(row.getLoadExtraKg()).isEqualTo(2);
-        assertThat(row.getExpiresAt()).isAfter(OffsetDateTime.now().plusMinutes(5));
-        assertThat(lastSent()).contains("\"accepted\":false").contains("\"extraKg\":2");
-        assertThatThrownBy(() -> authorizations.handleStartRequest(washer, auth, "req-1", BOOT))
-                .isInstanceOf(StaleAuthorizationException.class);
-
-        var load = loads.describe(authorizationRepository.findById(auth).orElseThrow());
-        assertThat(load.extraAmount()).isEqualByComparingTo("20000");
-
-        var payment = loads.payExtra(auth, customerId, false);
-        assertThat(payment.getAmount()).isEqualByComparingTo("20000");
-        payments.simulatePaymentSuccessForCustomer(payment.getPaymentId(), customerId);
-
-        assertThat(jdbc.queryForObject("""
-                SELECT b.declared_load_kg FROM scheduled_bookings b
-                JOIN machine_start_authorizations a ON a.booking_id = b.id WHERE a.id = ?
-                """, BigDecimal.class, auth)).isEqualByComparingTo("7");
-        MachineStartAuthorization paid = authorizationRepository.findById(auth).orElseThrow();
-        assertThat(paid.getLoadVerdict()).isEqualTo("ACCEPTED");
+        assertThat(row.getLoadVerdict()).isEqualTo("ACCEPTED");
+        assertThat(row.getLoadExtraKg()).isZero();
         assertThat(lastSent()).contains("\"accepted\":true");
-        assertThat(authorizations.handleStartRequest(washer, auth, "req-2", BOOT)).isNotNull();
-    }
-
-    @Test
-    @DisplayName("Taking laundry out and weighing again unlocks START without paying")
-    void reweighingAfterRemovingLaundry() {
-        Machine washer = washer("10");
-        UUID auth = unlock(washer, 5);
-
-        authorizations.handleLoadWeighed(washer, auth, new BigDecimal("6.2"), BOOT);
-        assertThat(authorizationRepository.findById(auth).orElseThrow().getLoadVerdict()).isEqualTo("OVER_BOOKED");
-        authorizations.handleLoadWeighed(washer, auth, new BigDecimal("5.3"), BOOT);
-
-        assertThat(authorizationRepository.findById(auth).orElseThrow().getLoadVerdict()).isEqualTo("ACCEPTED");
-    }
-
-    @Test
-    @DisplayName("Over the capacity: the slot moves to a free larger washer and this one locks again")
-    void overCapacityMovesToALargerWasher() {
-        Machine small = washer("7");
-        Machine big = washer("12");
-        washer("8");  // too small for 9 kg
-        UUID auth = unlock(small, 7);
-
-        authorizations.handleLoadWeighed(small, auth, new BigDecimal("9.1"), BOOT);
-        assertThat(authorizationRepository.findById(auth).orElseThrow().getLoadVerdict()).isEqualTo("OVER_CAPACITY");
-        assertThatThrownBy(() -> loads.payExtra(auth, customerId, true))
-                .hasMessageContaining("capacity");
-
-        var larger = loads.largerMachines(auth, customerId);
-        assertThat(larger).extracting(w -> w.machineCode()).containsExactly(big.getMachineCode());
-
-        var moved = loads.move(auth, customerId, big.getId());
-
-        assertThat(moved.machineCode()).isEqualTo(big.getMachineCode());
-        assertThat(authorizationRepository.findById(auth).orElseThrow().getStatus())
-                .isEqualTo(MachineStartAuthorizationStatus.REVOKED);
-        // The customer unlocks the new washer with the same booking.
-        var next = authorizations.checkIn(big.getMachineCode(), customerId);
-        assertThat(next.machineCode()).isEqualTo(big.getMachineCode());
+        assertThatThrownBy(() -> loads.payExtra(auth, customerId, true)).isInstanceOf(RuntimeException.class);
+        assertThat(authorizations.handleStartRequest(washer, auth, "req-1", BOOT)).isNotNull();
     }
 
     // ── Fixtures ──────────────────────────────────────────────────────────────

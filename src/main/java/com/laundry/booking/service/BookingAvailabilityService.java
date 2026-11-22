@@ -60,14 +60,15 @@ public class BookingAvailabilityService {
         // Map rows first, resolve requirements afterwards: a nested query inside the
         // RowMapper runs while the outer ResultSet is still open on the same connection.
         List<ServiceDto> services = jdbc.query("""
-                SELECT code, name, service_mode, description, processing_minutes,
-                       secondary_processing_minutes, check_in_minutes, transfer_minutes,
-                       checkout_minutes, pickup_deadline_hours,
+                SELECT d.code, d.name, d.service_mode, d.description, d.processing_minutes,
+                       d.secondary_processing_minutes, d.pickup_deadline_hours,
                        (SELECT MIN(price) FROM service_offerings
-                        WHERE service_code = booking_service_definitions.code AND enabled = TRUE) starting_price
-                FROM booking_service_definitions
-                WHERE active = TRUE
-                ORDER BY CASE service_mode WHEN 'SELF_SERVICE' THEN 0 ELSE 1 END, name
+                        WHERE service_code = d.code AND enabled = TRUE) starting_price,
+                """ + BookingResourceQueries.STAGE_MINUTES_SQL + """
+
+                FROM booking_service_definitions d CROSS JOIN store_settings s
+                WHERE d.active = TRUE
+                ORDER BY CASE d.service_mode WHEN 'SELF_SERVICE' THEN 0 ELSE 1 END, d.name
                 """, (rs, row) -> {
             String code = rs.getString("code");
             return new ServiceDto(
@@ -85,12 +86,21 @@ public class BookingAvailabilityService {
                     List.<String>of());
         });
         return services.stream()
-                .map(s -> new ServiceDto(
-                        s.code(), s.name(), s.mode(), s.description(),
-                        s.processingMinutes(), s.secondaryProcessingMinutes(),
-                        s.checkInMinutes(), s.transferMinutes(), s.checkoutMinutes(),
-                        s.pickupDeadlineHours(), s.startingPrice(),
-                        queries.requirementsFor(s.code())))
+                .map(s -> {
+                    List<String> requirements = queries.requirementsFor(s.code());
+                    // V68: washers and dryers are priced by their profiles, from the cheapest one.
+                    boolean byMachine = BookingResourceQueries.pricedByMachine(s.mode(), requirements);
+                    BigDecimal startingPrice = byMachine ? queries.startingPrice(requirements) : s.startingPrice();
+                    // V71: machine services have no duration of their own: the longest machine cycle per stage.
+                    Integer primary = byMachine ? queries.longestCycle(requirements.get(0)) : null;
+                    Integer secondary = byMachine && requirements.size() > 1 ? queries.longestCycle(requirements.get(1)) : null;
+                    return new ServiceDto(
+                            s.code(), s.name(), s.mode(), s.description(),
+                            primary != null ? primary : s.processingMinutes(),
+                            secondary != null ? secondary : s.secondaryProcessingMinutes(),
+                            s.checkInMinutes(), s.transferMinutes(), s.checkoutMinutes(),
+                            s.pickupDeadlineHours(), startingPrice, requirements);
+                })
                 .toList();
     }
 
@@ -117,7 +127,8 @@ public class BookingAvailabilityService {
                     offered.secondaryProcessingMinutes(), offered.checkInMinutes(),
                     offered.transferMinutes(), offered.checkoutMinutes(), hours,
                     List.copyOf(offered.requirements()), queries.pricePerKg(service.code()),
-                    maxWasherCapacityKg()));
+                    maxWasherCapacityKg(),
+                    BookingResourceQueries.pricedByMachine(offered.mode(), offered.requirements())));
         }
         return result;
     }
@@ -143,11 +154,6 @@ public class BookingAvailabilityService {
 
         Instant dayStart = date.atStartOfDay(zone).toInstant();
         Instant dayEnd = date.plusDays(1).atStartOfDay(zone).toInstant();
-        SlotPlan lastStartPlan = buildPlan(config, dayEnd.minusSeconds(60));
-        Instant queryEnd = lastStartPlan.allocationPlans().stream()
-                .map(AllocationPlan::until)
-                .max(Comparator.naturalOrder())
-                .orElse(dayEnd);
         Map<DayOfWeek, ScheduleHours> weeklyHours = queries.scheduleHours();
         List<AvailabilityInterval> operatingIntervals =
                 operatingIntervals(weeklyHours, zone, dayStart, dayEnd);
@@ -157,6 +163,9 @@ public class BookingAvailabilityService {
                 queries.resourcesByType(requirements, machinesInStore));
         dropTooSmall(resourcesByType, machinesInStore, loadKg);
         Map<UUID, Resource> resourcesById = byId(resourcesByType);
+        List<Variant> variants = variants(config, resourcesByType);
+        Instant queryEnd = latestAllocationEnd(variants, dayEnd.minusSeconds(60));
+        if (queryEnd.isBefore(dayEnd)) queryEnd = dayEnd;
 
         Map<UUID, List<OccupiedInterval>> occupiedByResource =
                 queries.occupiedIntervals(dayStart, queryEnd, resourcesById, config.bufferMinutes());
@@ -188,15 +197,18 @@ public class BookingAvailabilityService {
             if (start.isBefore(earliest)) {
                 continue;
             }
-            SlotPlan plan = buildPlan(config, start);
-            Instant bookingEnd = "ASSISTED_LOCKER".equals(config.mode())
-                    ? plan.checkInEnd() : plan.expectedEnd();
-            if (!isCoveredByOpeningHours(weeklyHours, zone, start, bookingEnd)
-                    || !hasAvailableResourceCombination(plan.allocationPlans(),
-                    resourcesByType, occupiedByResource)) {
-                continue;
+            // V71: free when some machine (of any cycle) can take the whole service from this minute.
+            for (Variant variant : variants) {
+                SlotPlan plan = buildPlan(variant.config(), start);
+                Instant bookingEnd = "ASSISTED_LOCKER".equals(config.mode())
+                        ? plan.checkInEnd() : plan.expectedEnd();
+                if (isCoveredByOpeningHours(weeklyHours, zone, start, bookingEnd)
+                        && hasAvailableResourceCombination(plan.allocationPlans(),
+                        variant.resourcesByType(), occupiedByResource)) {
+                    availableStarts.add(start);
+                    break;
+                }
             }
-            availableStarts.add(start);
         }
         return new TimelineAvailabilityResponse(date, zone.getId(), 1, dayStart, dayEnd,
                 expectedDurationMinutes, servicePhases, resourceOccupancies,
@@ -217,22 +229,33 @@ public class BookingAvailabilityService {
             throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not offered at the store");
         }
         SlotPlan plan = buildPlan(config, desiredStartTime);
-        boolean preferredEndSatisfied = preferredEndTime == null
-                || !plan.expectedEnd().isAfter(preferredEndTime);
         List<RecommendationDto> recommendations = new ArrayList<>();
-        if (preferredEndSatisfied && queries.isWithinOpeningHours(config, desiredStartTime, plan)) {
+        List<Machine> machinesInStore = machineRepository.findAll();
+        Map<String, List<Resource>> resourcesByType = new java.util.LinkedHashMap<>(
+                queries.resourcesByType(config.requirements(), machinesInStore));
+        dropTooSmall(resourcesByType, machinesInStore, loadKg);
+        Map<UUID, BigDecimal> capacities = new java.util.HashMap<>();
+        machinesInStore.forEach(machine -> {
+            if (machine.getCapacityKg() != null) capacities.put(machine.getId(), machine.getCapacityKg());
+        });
+        // V71: every machine is planned with its own cycle, so a faster machine may end before the preferred time.
+        boolean preferredEndSatisfied = false;
+        for (Variant variant : variants(config, resourcesByType)) {
+            SlotPlan variantPlan = buildPlan(variant.config(), desiredStartTime);
+            boolean endsInTime = preferredEndTime == null || !variantPlan.expectedEnd().isAfter(preferredEndTime);
+            preferredEndSatisfied |= endsInTime;
+            if (!endsInTime || !queries.isWithinOpeningHours(variant.config(), desiredStartTime, variantPlan)) {
+                continue;
+            }
             List<List<Resource>> candidates = new ArrayList<>();
-            List<Machine> machinesInStore = machineRepository.findAll();
-            Map<String, List<Resource>> resourcesByType = new java.util.LinkedHashMap<>(
-                    queries.resourcesByType(config.requirements(), machinesInStore));
-            dropTooSmall(resourcesByType, machinesInStore, loadKg);
             for (int i = 0; i < config.requirements().size(); i++) {
-                AllocationPlan allocation = plan.allocationPlans().get(i);
-                List<Resource> ofType = resourcesByType.get(config.requirements().get(i));
+                AllocationPlan allocation = variantPlan.allocationPlans().get(i);
+                List<Resource> ofType = variant.resourcesByType().getOrDefault(config.requirements().get(i), List.of());
                 Set<UUID> busy = queries.busyResources(ofType, allocation, config.bufferMinutes());
                 candidates.add(ofType.stream().filter(resource -> !busy.contains(resource.id())).toList());
             }
-            collectRecommendations(config, plan, candidates, 0, new ArrayList<>(), recommendations);
+            collectRecommendations(variant.config(), variantPlan, candidates, 0, new ArrayList<>(), recommendations,
+                    loadKg, capacities);
         }
         recommendations.sort(Comparator.comparing(RecommendationDto::price)
                 .thenComparing(recommendation -> recommendation.resources().stream()
@@ -307,35 +330,46 @@ public class BookingAvailabilityService {
             }).toList());
         }
 
-        Instant queryEnd = buildPlan(config, lastStart).allocationPlans().stream()
-                .map(AllocationPlan::until)
-                .max(Comparator.naturalOrder())
-                .orElse(lastStart);
+        List<Variant> variants = variants(config, resourcesByType);
+        Instant queryEnd = latestAllocationEnd(variants, lastStart);
         Map<UUID, List<OccupiedInterval>> occupied = queries.occupiedIntervals(firstStart, queryEnd, resourcesById, config.bufferMinutes());
 
-        // Every whole minute in the window whose service fits the opening hours.
+        // Per variant (V71: one cycle per stage), every whole minute in the window whose service fits the opening hours.
         boolean locker = "ASSISTED_LOCKER".equals(config.mode());
         Map<DayOfWeek, ScheduleHours> weeklyHours = queries.scheduleHours();
-        List<SlotPlan> plans = new ArrayList<>();
-        for (Instant start = firstStart; !start.isAfter(lastStart); start = start.plusSeconds(60)) {
-            SlotPlan plan = buildPlan(config, start);
-            Instant bookingEnd = locker ? plan.checkInEnd() : plan.expectedEnd();
-            if (isCoveredByOpeningHours(weeklyHours, zone, start, bookingEnd)) {
-                plans.add(plan);
+        Map<Variant, List<SlotPlan>> plansByVariant = new java.util.IdentityHashMap<>();
+        for (Variant variant : variants) {
+            List<SlotPlan> plans = new ArrayList<>();
+            for (Instant start = firstStart; !start.isAfter(lastStart); start = start.plusSeconds(60)) {
+                SlotPlan plan = buildPlan(variant.config(), start);
+                Instant bookingEnd = locker ? plan.checkInEnd() : plan.expectedEnd();
+                if (isCoveredByOpeningHours(weeklyHours, zone, start, bookingEnd)) {
+                    plans.add(plan);
+                }
             }
+            plansByVariant.put(variant, plans);
         }
 
         String primaryType = requirements.getFirst();
         List<MachineSearchOptionDto> options = new ArrayList<>();
         List<UnavailableMachineDto> unavailable = new ArrayList<>(tooSmall);
         for (Resource primary : resourcesByType.getOrDefault(primaryType, List.of())) {
+            // The earliest free start of this machine over the variants it belongs to (its own cycle, and each
+            // companion cycle for two-machine services).
+            Variant best = null;
             List<Resource> combo = null;
             SlotPlan earliest = null;
-            for (SlotPlan plan : plans) {
-                combo = freeCombination(primary, plan, requirements, resourcesByType, occupied);
-                if (combo != null) {
-                    earliest = plan;
-                    break;
+            for (Variant variant : variants) {
+                if (!variant.resourcesByType().getOrDefault(primaryType, List.of()).contains(primary)) continue;
+                for (SlotPlan plan : plansByVariant.get(variant)) {
+                    if (earliest != null && !plan.start().isBefore(earliest.start())) break;
+                    List<Resource> found = freeCombination(primary, plan, requirements, variant.resourcesByType(), occupied);
+                    if (found != null) {
+                        best = variant;
+                        combo = found;
+                        earliest = plan;
+                        break;
+                    }
                 }
             }
             if (combo == null) {
@@ -343,11 +377,11 @@ public class BookingAvailabilityService {
                 continue;
             }
             List<Resource> chosen = combo;
-            List<Instant> starts = plans.stream()
+            List<Instant> starts = plansByVariant.get(best).stream()
                     .filter(plan -> isCombinationFree(chosen, plan, occupied))
                     .map(SlotPlan::start)
                     .toList();
-            options.add(searchOption(config, chosen, earliest, starts, machines));
+            options.add(searchOption(best.config(), chosen, earliest, starts, machines, declaredLoadKg));
         }
 
         // Compatible machines that cannot be booked at all right now.
@@ -377,6 +411,53 @@ public class BookingAvailabilityService {
                 durationMinutes, config.bufferMinutes(), options, unavailable);
     }
 
+    /** One way to size the service: one cycle per stage, with only the resources of each stage that run that long. */
+    private record Variant(ServiceConfig config, Map<String, List<Resource>> resourcesByType) {}
+
+    /**
+     * V71: machines of one type may run for different cycles (a 10 kg and a 15 kg washer). The service is planned once
+     * per combination of distinct cycles, each time with only the machines of those cycles, so every machine holds
+     * exactly its own cycle. Resources that are not priced machines keep the service's duration. Stores have few
+     * distinct cycles, so this stays a handful of plans per start time.
+     */
+    private List<Variant> variants(ServiceConfig config, Map<String, List<Resource>> resourcesByType) {
+        Map<UUID, Integer> cycles = queries.machineCycles();
+        List<Map.Entry<List<Integer>, Map<String, List<Resource>>>> partial =
+                List.of(Map.entry(List.of(), Map.of()));
+        for (String type : config.requirements()) {
+            Map<Integer, List<Resource>> groups = new java.util.LinkedHashMap<>();
+            for (Resource resource : resourcesByType.getOrDefault(type, List.of())) {
+                groups.computeIfAbsent(cycles.get(resource.id()), ignored -> new ArrayList<>()).add(resource);
+            }
+            if (groups.isEmpty()) {
+                groups.put(null, List.of());
+            }
+            List<Map.Entry<List<Integer>, Map<String, List<Resource>>>> next = new ArrayList<>();
+            for (var entry : partial) {
+                for (var group : groups.entrySet()) {
+                    List<Integer> minutes = new ArrayList<>(entry.getKey());
+                    minutes.add(group.getKey());
+                    Map<String, List<Resource>> byType = new java.util.LinkedHashMap<>(entry.getValue());
+                    byType.put(type, List.copyOf(group.getValue()));
+                    next.add(new java.util.AbstractMap.SimpleImmutableEntry<>(minutes, byType));
+                }
+            }
+            partial = next;
+        }
+        return partial.stream()
+                .map(entry -> new Variant(BookingResourceQueries.withStageMinutes(config, entry.getKey()), entry.getValue()))
+                .toList();
+    }
+
+    /** Latest end of any machine's allocation for a booking starting at {@code start}, over all variants. */
+    private static Instant latestAllocationEnd(List<Variant> variants, Instant start) {
+        return variants.stream()
+                .flatMap(variant -> buildPlan(variant.config(), start).allocationPlans().stream())
+                .map(AllocationPlan::until)
+                .max(Comparator.naturalOrder())
+                .orElse(start);
+    }
+
     private static Map<UUID, Resource> byId(Map<String, List<Resource>> resourcesByType) {
         Map<UUID, Resource> result = new java.util.HashMap<>();
         resourcesByType.values().forEach(list -> list.forEach(resource -> result.put(resource.id(), resource)));
@@ -387,7 +468,8 @@ public class BookingAvailabilityService {
                                                 List<Resource> resources,
                                                 SlotPlan plan,
                                                 List<Instant> starts,
-                                                Map<UUID, Machine> machines) {
+                                                Map<UUID, Machine> machines,
+                                                BigDecimal loadKg) {
         List<MachineSearchResourceDto> resourceDtos = resources.stream()
                 .map(resource -> {
                     Machine machine = machines.get(resource.id());
@@ -406,7 +488,8 @@ public class BookingAvailabilityService {
                 .orElse(plan.expectedEnd());
         int totalMinutes = Math.toIntExact((plan.expectedEnd().getEpochSecond() - plan.start().getEpochSecond()) / 60);
         return new MachineSearchOptionDto(optionId, resourceDtos, plan.start(), plan.expectedEnd(),
-                reservedUntil, config.price(), "VND", totalMinutes, toStartRanges(starts), plan.timeline());
+                reservedUntil, queries.price(config, resources.stream().map(Resource::id).toList(), loadKg).total(),
+                "VND", totalMinutes, toStartRanges(starts), plan.timeline());
     }
 
     private UnavailableMachineDto unavailableDto(Resource resource, Machine machine, String reason) {
@@ -522,12 +605,14 @@ public class BookingAvailabilityService {
                                         List<List<Resource>> candidates,
                                         int index,
                                         List<Resource> selected,
-                                        List<RecommendationDto> result) {
+                                        List<RecommendationDto> result,
+                                        BigDecimal loadKg,
+                                        Map<UUID, BigDecimal> capacities) {
         if (index == candidates.size()) {
             List<RecommendedResourceDto> resources = selected.stream()
                     .map(resource -> new RecommendedResourceDto(resource.id(), resource.type(),
                             resource.code(), resource.name(), resource.location(),
-                            "AVAILABLE_AT_SELECTED_TIME"))
+                            "AVAILABLE_AT_SELECTED_TIME", capacities.get(resource.id())))
                     .toList();
             String recommendationId = selected.stream()
                     .map(resource -> resource.id().toString())
@@ -538,7 +623,7 @@ public class BookingAvailabilityService {
                     .max(Comparator.naturalOrder())
                     .orElse(plan.expectedEnd());
             result.add(new RecommendationDto(recommendationId, plan.start(), occupiedUntil,
-                    plan.expectedEnd(), config.price(), "VND",
+                    plan.expectedEnd(), queries.price(config, selected.stream().map(Resource::id).toList(), loadKg).total(), "VND",
                     Math.toIntExact((plan.expectedEnd().toEpochMilli() - plan.start().toEpochMilli()) / 60_000),
                     resources, plan.timeline()));
             return;
@@ -546,7 +631,7 @@ public class BookingAvailabilityService {
         for (Resource resource : candidates.get(index)) {
             if (result.size() >= 20) return;
             selected.add(resource);
-            collectRecommendations(config, plan, candidates, index + 1, selected, result);
+            collectRecommendations(config, plan, candidates, index + 1, selected, result, loadKg, capacities);
             selected.removeLast();
         }
     }

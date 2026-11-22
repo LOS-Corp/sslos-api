@@ -34,6 +34,8 @@ class LockerServiceIT {
     @Autowired private ScheduledBookingService bookings;
     @Autowired private AuditLogRepository auditLogs;
     @Autowired private JdbcTemplate jdbc;
+    @Autowired private com.laundry.booking.service.AssistedWeightService weights;
+    @Autowired private com.laundry.payment.service.PaymentService payments;
 
     private Fixtures.Locker locker;
     private CurrentUser owner;
@@ -112,8 +114,60 @@ class LockerServiceIT {
                 Integer.class, bookingId)).isEqualTo(1);
     }
 
+    /** Back in the locker, weighed and its weight charge paid (V65), so the pickup PIN is given. */
     private void readyForPickup() {
         jdbc.update("UPDATE scheduled_bookings SET status = 'READY_FOR_PICKUP' WHERE id = ?", bookingId);
+        jdbc.update("""
+                INSERT INTO booking_weight_charges (booking_id, weight_kg, price_per_kg, amount, status, paid_at)
+                VALUES (?, 2, 80000, 160000, 'PAID', NOW())""", bookingId);
+    }
+
+    @Test
+    @DisplayName("V65: assisted laundry is weighed before it goes back, and picked up only once the weight is paid")
+    void weighedThenPaidBeforePickup() {
+        jdbc.update("UPDATE scheduled_bookings SET status = 'IN_PROGRESS' WHERE id = ?", bookingId);
+        // Not weighed yet: it cannot go back into the locker.
+        assertThatThrownBy(() -> lockers.staffOpen(locker.cabinetId(), 1, "RETURN", null, owner))
+                .isInstanceOf(BusinessException.class);
+
+        var charge = weights.recordWeight(bookingId, new java.math.BigDecimal("2.5"), owner.id());
+        assertThat(charge.amount()).isEqualByComparingTo("200000");   // 2.5 kg × 80 000
+        assertThat(charge.status()).isEqualTo("PENDING");
+        // Re-weighing replaces the unpaid charge.
+        charge = weights.recordWeight(bookingId, new java.math.BigDecimal("3"), owner.id());
+        assertThat(charge.amount()).isEqualByComparingTo("240000");
+
+        lockers.staffOpen(locker.cabinetId(), 1, "RETURN", null, owner);
+        jdbc.update("UPDATE scheduled_bookings SET status = 'READY_FOR_PICKUP' WHERE id = ?", bookingId);
+
+        CustomerLockerAccess due = lockers.customerAccess(customerId, bookingId);
+        assertThat(due.stage()).isEqualTo("PAYMENT_DUE");
+        assertThat(due.pin()).isNull();
+        assertThat(due.weight().amount()).isEqualByComparingTo("240000");
+
+        UUID transactionId = weights.payableTransaction(bookingId, customerId);
+        assertThat(transactionId).isEqualTo(charge.transactionId());
+        payments.confirmTransactionPayment(transactionId);
+
+        CustomerLockerAccess ready = lockers.customerAccess(customerId, bookingId);
+        assertThat(ready.stage()).isEqualTo("PICKUP");
+        assertThat(ready.pin()).isNotBlank();
+        assertThat(ready.weight().status()).isEqualTo("PAID");
+        assertThatThrownBy(() -> weights.recordWeight(bookingId, java.math.BigDecimal.ONE, owner.id()))
+                .isInstanceOf(BusinessException.class);   // paid: cannot be re-weighed
+    }
+
+    @Test
+    @DisplayName("V65: a failed payment leaves the charge due, and paying again gets a fresh transaction")
+    void failedPaymentCanBeRetried() {
+        jdbc.update("UPDATE scheduled_bookings SET status = 'IN_PROGRESS' WHERE id = ?", bookingId);
+        var charge = weights.recordWeight(bookingId, java.math.BigDecimal.ONE, owner.id());
+        weights.cancelForPaymentFailure(charge.transactionId());
+        UUID retry = weights.payableTransaction(bookingId, customerId);
+        assertThat(retry).isNotEqualTo(charge.transactionId());
+        assertThat(jdbc.queryForObject("SELECT total_amount FROM transactions WHERE id = ?", java.math.BigDecimal.class, retry))
+                .isEqualByComparingTo("80000");
+        assertThat(weights.pickupAllowed(bookingId)).isFalse();
     }
 
     private Instant pinValidUntil() {

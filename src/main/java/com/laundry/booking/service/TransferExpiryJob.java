@@ -63,7 +63,7 @@ public class TransferExpiryJob {
     private void close(Expired booking, Instant now) {
         CancellationCause cause = dryerUnavailable(booking.dryerId())
                 ? CancellationCause.SYSTEM_FAILURE : CancellationCause.NO_SHOW;
-        Money stage = stageValues.dryerStage(booking.total());
+        Money stage = stageValues.dryerStage(booking.bookingId(), booking.total());
         Money left = refunds.refundable(booking.transactionId());
         Money eligible = left.compareTo(stage) < 0 ? left : stage;
         RefundDecision decision = new RefundPolicy(props.freeCancellationBefore()).evaluate(cause, now, booking.start(),

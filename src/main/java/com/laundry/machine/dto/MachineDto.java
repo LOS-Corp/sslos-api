@@ -64,6 +64,13 @@ public class MachineDto {
     private String displayName;
     private String locationDescription;
     private java.math.BigDecimal capacityKg;
+    /** Price profile (V64); null = priced by the store's service offering. */
+    private java.util.UUID priceProfileId;
+    private String priceProfileName;
+    /** Retrofit board (V67): pulses that open the third-party machine per cycle; null = 1. */
+    private Integer vendPulses;
+    /** Retrofit dryer (V67): pulses per purchase of extra drying time; null = 1. */
+    private Integer extraVendPulses;
     private OffsetDateTime createdAt;
     private OffsetDateTime updatedAt;
 

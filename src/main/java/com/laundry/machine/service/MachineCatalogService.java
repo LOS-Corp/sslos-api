@@ -47,6 +47,8 @@ public class MachineCatalogService {
     private final MachineWebSocketBroadcaster broadcaster;
     private final DeviceEventRepository deviceEventRepository;
     private final DeviceRegistryService registryService;
+    private final PriceProfileService priceProfiles;
+    private final com.laundry.machine.repository.PriceProfileRepository priceProfileRepository;
 
 // ── Admin CRUD ─────────────────────────────────────────────────────────
 
@@ -119,6 +121,42 @@ public class MachineCatalogService {
 
         if (request.getType() != null && request.getType() != machine.getType()) {
             machine.setType(request.getType());
+            // A profile is for one machine type: a washer profile cannot price a dryer.
+            if (request.getPriceProfileId() == null) {
+                if (machine.getDeploymentStatus() == com.laundry.machine.entity.MachineDeploymentStatus.ACTIVE) {
+                    throw BusinessException.of(ErrorCode.CONFLICT,
+                            "Đổi loại máy đang hoạt động: chọn luôn profile giá của loại mới");
+                }
+                machine.setPriceProfileId(null);
+            }
+            changed = true;
+        }
+        if (Boolean.TRUE.equals(request.getClearPriceProfile()) && machine.getPriceProfileId() != null) {
+            // V68: an active washer or dryer must keep a price profile, otherwise it cannot be booked.
+            if (machine.getDeploymentStatus() == com.laundry.machine.entity.MachineDeploymentStatus.ACTIVE) {
+                throw BusinessException.of(ErrorCode.CONFLICT,
+                        "Máy đang hoạt động phải có profile giá: chọn profile khác thay vì bỏ trống");
+            }
+            machine.setPriceProfileId(null);
+            changed = true;
+        } else if (request.getPriceProfileId() != null && !request.getPriceProfileId().equals(machine.getPriceProfileId())) {
+            priceProfiles.requireFor(request.getPriceProfileId(), machine.getType());
+            machine.setPriceProfileId(request.getPriceProfileId());
+            changed = true;
+        }
+        // V67: pulses of a retrofit board; LaundryOS boards ignore them.
+        if (Boolean.TRUE.equals(request.getClearVendPulses()) && machine.getVendPulses() != null) {
+            machine.setVendPulses(null);
+            changed = true;
+        } else if (request.getVendPulses() != null && !request.getVendPulses().equals(machine.getVendPulses())) {
+            machine.setVendPulses(request.getVendPulses());
+            changed = true;
+        }
+        if (Boolean.TRUE.equals(request.getClearExtraVendPulses()) && machine.getExtraVendPulses() != null) {
+            machine.setExtraVendPulses(null);
+            changed = true;
+        } else if (request.getExtraVendPulses() != null && !request.getExtraVendPulses().equals(machine.getExtraVendPulses())) {
+            machine.setExtraVendPulses(request.getExtraVendPulses());
             changed = true;
         }
         if (request.getDisplayName() != null && !request.getDisplayName().equals(machine.getDisplayName())) {
@@ -217,6 +255,11 @@ public class MachineCatalogService {
                 .displayName(m.getDisplayName())
                 .locationDescription(m.getLocationDescription())
                 .capacityKg(m.getCapacityKg())
+                .priceProfileId(m.getPriceProfileId())
+                .priceProfileName(m.getPriceProfileId() == null ? null
+                        : priceProfileRepository.findById(m.getPriceProfileId()).map(PriceProfile::getName).orElse(null))
+                .vendPulses(m.getVendPulses())
+                .extraVendPulses(m.getExtraVendPulses())
                 .createdAt(m.getCreatedAt())
                 .updatedAt(m.getUpdatedAt())
                 .build();

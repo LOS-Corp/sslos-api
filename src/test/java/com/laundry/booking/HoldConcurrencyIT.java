@@ -56,6 +56,8 @@ class HoldConcurrencyIT {
                 .status(MachineStatus.AVAILABLE)
                 .deploymentStatus(MachineDeploymentStatus.ACTIVE)
                 .online(true)
+                // V68: a washer is bookable only with a price profile.
+                .priceProfileId(Fixtures.priceProfile(jdbc, "WASHER", 30_000))
                 .build()).getId();
         start = LocalDate.now(ZONE).plusDays(1).atTime(10, 0).atZone(ZONE).toInstant().truncatedTo(ChronoUnit.MINUTES);
     }

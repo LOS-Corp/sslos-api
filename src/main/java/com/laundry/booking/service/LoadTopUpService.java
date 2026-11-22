@@ -60,11 +60,15 @@ public class LoadTopUpService {
                 Boolean.class, transactionId));
     }
 
-    /** Kilograms paid for and the per-kg price of the booking's service (both null when not priced by weight). */
+    /**
+     * Kilograms paid for and the per-kg price of the booking (both null when not priced by weight): the price per kg
+     * of the washer's price profile recorded at booking time (V64), else the service's.
+     */
     @Transactional(readOnly = true)
     public BookingLoad bookingLoad(UUID bookingId) {
-        return jdbc.query("SELECT declared_load_kg, service_code FROM scheduled_bookings WHERE id = ?",
-                        (rs, row) -> new BookingLoad(rs.getBigDecimal(1), queries.pricePerKg(rs.getString(2))),
+        return jdbc.query("SELECT declared_load_kg, service_code, price_per_kg FROM scheduled_bookings WHERE id = ?",
+                        (rs, row) -> new BookingLoad(rs.getBigDecimal(1), rs.getBigDecimal(3) != null
+                                ? rs.getBigDecimal(3) : queries.pricePerKg(rs.getString(2))),
                         bookingId).stream()
                 .findFirst().orElse(new BookingLoad(null, null));
     }

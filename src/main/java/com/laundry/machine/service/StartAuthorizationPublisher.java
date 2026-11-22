@@ -2,9 +2,10 @@ package com.laundry.machine.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.laundry.booking.service.MachineProgramService;
 import com.laundry.machine.entity.Machine;
 import com.laundry.machine.entity.MachineStartAuthorization;
+import com.laundry.machine.entity.PriceProfile;
+import com.laundry.machine.repository.PriceProfileRepository;
 import com.laundry.devicelink.DeviceLink;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,21 +26,25 @@ import java.util.UUID;
 public class StartAuthorizationPublisher {
 
     private final DeviceLink deviceLink;
-    private final MachineProgramService programService;
+    private final PriceProfileRepository priceProfiles;
     private final ObjectMapper objectMapper;
     private final int authorizationTtlSeconds;
 
     public StartAuthorizationPublisher(DeviceLink deviceLink,
-                                       MachineProgramService programService,
+                                       PriceProfileRepository priceProfiles,
                                        ObjectMapper objectMapper,
                                        @Value("${app.machine.start-authorization.ttl-seconds:120}") int ttlSeconds) {
         this.deviceLink = deviceLink;
-        this.programService = programService;
+        this.priceProfiles = priceProfiles;
         this.objectMapper = objectMapper;
         this.authorizationTtlSeconds = ttlSeconds;
     }
 
-    /** AUTHORIZE_START with the program the booking paid for (test runs: the default). */
+    /**
+     * AUTHORIZE_START. V69: the machine runs its own firmware program; the backend only sends {@code cycleSeconds},
+     * the cycle of the machine's price profile. A dryer dries exactly that long (the paid package); a washer and a
+     * retrofit board use it as the expected length. Without a profile the firmware uses its own default.
+     */
     public void authorizeStart(Machine machine, MachineStartAuthorization auth) {
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("type", "AUTHORIZE_START");
@@ -50,12 +55,23 @@ public class StartAuthorizationPublisher {
         payload.put("machineId", machine.getMachineCode());
         payload.put("expiresInSeconds", authorizationTtlSeconds);
         payload.put("issuedAt", OffsetDateTime.now().toString());
-        // Without a program the firmware runs its built-in default program.
-        if (machine.getType() != null) {
-            programService.devicePayload(auth.getTransactionId(), machine.getType().name())
-                    .ifPresent(program -> payload.put("program", program));
-        }
+        cycleSeconds(machine).ifPresent(seconds -> payload.put("cycleSeconds", seconds));
+        // V67: pulses that open a third-party machine (retrofit board); LaundryOS boards ignore it.
+        if (machine.getVendPulses() != null) payload.put("vendPulses", machine.getVendPulses());
         send(machine, auth, payload);
+    }
+
+    private java.util.Optional<Integer> cycleSeconds(Machine machine) {
+        if (machine.getPriceProfileId() == null) return java.util.Optional.empty();
+        try {
+            return priceProfiles.findById(machine.getPriceProfileId())
+                    .map(PriceProfile::getCycleMinutes)
+                    .map(minutes -> minutes * 60);
+        } catch (RuntimeException e) {
+            log.warn("[{}] Price profile lookup failed, the board runs its default cycle: {}",
+                    machine.getMachineCode(), e.getMessage());
+            return java.util.Optional.empty();
+        }
     }
 
     public void startApproval(Machine machine, MachineStartAuthorization auth, String startRequestId, UUID runId,

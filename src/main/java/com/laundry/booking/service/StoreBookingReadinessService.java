@@ -33,6 +33,7 @@ public class StoreBookingReadinessService {
     private final JdbcTemplate jdbc;
     private final StoreService store;
     private final MachineRepository machineRepository;
+    private final BookingResourceQueries queries;
 
     /** Whether customers can book at the store, and what is still missing (BR-28). */
     @Transactional
@@ -79,11 +80,13 @@ public class StoreBookingReadinessService {
 
         List<ServiceReadiness> services = jdbc.query("""
                 SELECT d.code, d.name, d.service_mode, d.processing_minutes,
-                       d.secondary_processing_minutes, d.check_in_minutes,
-                       d.transfer_minutes, d.checkout_minutes,
+                       d.secondary_processing_minutes,
                        o.enabled, o.price, o.price_per_kg, o.processing_minutes_override,
-                       o.secondary_processing_minutes_override
+                       o.secondary_processing_minutes_override,
+                """ + BookingResourceQueries.STAGE_MINUTES_SQL + """
+
                 FROM booking_service_definitions d
+                CROSS JOIN store_settings s
                 LEFT JOIN service_offerings o ON o.service_code = d.code
                 WHERE d.active = TRUE
                 ORDER BY CASE d.service_mode WHEN 'SELF_SERVICE' THEN 0 ELSE 1 END, d.name
@@ -99,23 +102,41 @@ public class StoreBookingReadinessService {
                     ? rs.getInt("secondary_processing_minutes")
                     : rs.getInt("secondary_processing_minutes_override");
             String code = rs.getString("code");
+            String mode = rs.getString("service_mode");
+            List<String> requirements = requirements(code);
             List<ValidationIssue> serviceIssues = new ArrayList<>();
-            // V61: a washer service is priced by weight (fixed part >= 0 plus a per-kg price); others by a fixed price.
-            boolean byWeight = requirements(code).contains("WASHER");
-            boolean priceValid = byWeight
-                    ? price != null && price.signum() >= 0 && pricePerKg != null && pricePerKg.signum() > 0
+            // V68: self-service on washers/dryers is priced by the machines' price profiles ("from" the cheapest);
+            // assisted laundry (V65) by a booking fee plus a per-kg price; other services by the offering's price.
+            boolean byMachine = BookingResourceQueries.pricedByMachine(mode, requirements);
+            boolean byWeight = "ASSISTED_LOCKER".equals(mode);
+            if (byMachine) {
+                price = queries.startingPrice(requirements);
+                pricePerKg = null;
+                // V71: no duration of its own; the longest machine cycle of each stage, as customers see it.
+                Integer primary = queries.longestCycle(requirements.get(0));
+                Integer second = requirements.size() > 1 ? queries.longestCycle(requirements.get(1)) : null;
+                processing = primary != null ? primary : 0;
+                secondary = second != null ? second : 0;
+            }
+            boolean priceValid = byMachine ? price != null
+                    : byWeight ? price != null && price.signum() > 0 && pricePerKg != null && pricePerKg.signum() > 0
                     : price != null && price.signum() > 0;
             if (!configured) {
                 serviceIssues.add(issue("SERVICE_NOT_CONFIGURED", "Dịch vụ chưa được cấu hình tại cửa hàng.",
-                        "Bật dịch vụ và đặt giá.", code));
+                        byMachine ? "Bật dịch vụ." : "Bật dịch vụ và đặt giá.", code));
             } else if (enabled) {
-                if (!priceValid) {
+                if (!priceValid && byMachine) {
+                    serviceIssues.add(issue("MACHINE_PRICE_MISSING",
+                            "Chưa có máy " + requirements.stream().map(type -> "WASHER".equals(type) ? "giặt" : "sấy")
+                                    .distinct().reduce((a, b) -> a + "/" + b).orElse("") + " đang hoạt động nào có profile giá.",
+                            "Gắn profile giá cho máy ở Quản lý máy → Sửa máy, rồi đưa máy vào hoạt động.", code));
+                } else if (!priceValid) {
                     serviceIssues.add(issue("SERVICE_PRICE_INVALID", byWeight
-                                    ? "Dịch vụ giặt tính theo kg: đơn giá/kg phải lớn hơn 0."
+                                    ? "Giặt hộ: phí đặt lịch và đơn giá/kg phải lớn hơn 0."
                                     : "Giá dịch vụ phải lớn hơn 0.",
                             "Nhập giá hợp lệ cho dịch vụ.", code));
                 }
-                for (String type : requirements(code)) {
+                for (String type : requirements) {
                     int available = switch (type) {
                         case "WASHER" -> washers;
                         case "DRYER" -> dryers;
@@ -137,7 +158,7 @@ public class StoreBookingReadinessService {
                 }
             }
             boolean serviceReady = configured && enabled && priceValid && serviceIssues.isEmpty();
-            return new ServiceReadiness(code, rs.getString("name"), rs.getString("service_mode"),
+            return new ServiceReadiness(code, rs.getString("name"), mode,
                     configured, enabled, price, pricePerKg, processing, secondary, rs.getInt("check_in_minutes"),
                     rs.getInt("transfer_minutes"), rs.getInt("checkout_minutes"),
                     serviceReady, serviceIssues);

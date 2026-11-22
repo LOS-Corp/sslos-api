@@ -2,10 +2,17 @@ package com.laundry.iot.controller;
 
 import com.laundry.devicelink.mqtt.DeviceTrafficLog;
 import com.laundry.iot.config.IotProvisioningProperties;
+import com.laundry.iot.dto.ProvisioningDtos.ApproveDeviceRequest;
+import com.laundry.iot.dto.ProvisioningDtos.DeviceStats;
 import com.laundry.iot.dto.ProvisioningDtos.DeviceSummary;
 import com.laundry.iot.dto.ProvisioningDtos.ProvisioningSettings;
 import com.laundry.iot.service.DeviceNetworkService;
 import com.laundry.iot.service.DeviceRegistryService;
+import com.laundry.iot.service.DeviceStatsService;
+import com.laundry.iot.service.MachineCatalogAdminService;
+import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
@@ -36,6 +43,8 @@ public class IotDeviceAdminController {
     private final IotProvisioningProperties iotProperties;
     private final DeviceNetworkService networkService;
     private final DeviceTrafficLog trafficLog;
+    private final DeviceStatsService statsService;
+    private final MachineCatalogAdminService catalog;
 
     @GetMapping
     @Operation(summary = "Boards that have said HELLO at least once, and whether they are connected now")
@@ -70,9 +79,23 @@ public class IotDeviceAdminController {
     }
 
     @PostMapping("/{deviceId}/approve")
-    @Operation(summary = "Approve a board (UNCLAIMED or REVOKED → VERIFIED) so it can be attached to a machine")
-    public DeviceSummary approve(@PathVariable String deviceId, Authentication authentication) {
-        return registryService.approve(deviceId, userId(authentication));
+    @Operation(summary = "Approve a board (UNCLAIMED or REVOKED → VERIFIED) after confirming its manufacturer, model, "
+            + "purchase cost and warranty, so it can be attached to a machine")
+    public DeviceSummary approve(@PathVariable String deviceId, @Valid @RequestBody ApproveDeviceRequest asset,
+                                 Authentication authentication) {
+        return registryService.approve(deviceId, catalog.asset(asset), userId(authentication));
+    }
+
+    @PutMapping("/{deviceId}/asset")
+    @Operation(summary = "Correct a device's manufacturer, model, purchase cost, warranty or specs")
+    public DeviceSummary updateAsset(@PathVariable String deviceId, @Valid @RequestBody ApproveDeviceRequest asset) {
+        return registryService.updateAsset(deviceId, catalog.asset(asset));
+    }
+
+    @GetMapping("/{deviceId}/stats")
+    @Operation(summary = "Maintenance count, rentals, revenue and payback of a device on its current machine")
+    public DeviceStats stats(@PathVariable String deviceId) {
+        return statsService.stats(deviceId);
     }
 
     @PostMapping("/{deviceId}/revoke")

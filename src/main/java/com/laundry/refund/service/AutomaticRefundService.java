@@ -1,5 +1,6 @@
 package com.laundry.refund.service;
 
+import com.laundry.kiosk.KioskAccounts;
 import com.laundry.payment.entity.Payment;
 import com.laundry.payment.entity.PaymentStatus;
 import com.laundry.payment.repository.PaymentRepository;
@@ -30,9 +31,13 @@ import java.util.UUID;
 @RequiredArgsConstructor
 public class AutomaticRefundService {
 
+    /** Marks refunds owed to a walk-in customer of the kiosk in the Owner's pending list. */
+    public static final String KIOSK_REASON_PREFIX = "Khách vãng lai (kiosk) — ";
+
     private final PaymentRepository payments;
     private final RefundRequestRepository refunds;
     private final WalletService wallet;
+    private final KioskAccounts kioskAccounts;
     private final Clock clock;
 
     /** What can still go back to the customer: paid payments minus every refund that counts against them. */
@@ -47,10 +52,15 @@ public class AutomaticRefundService {
      * Credits up to {@code amount} to the customer's wallet. Callers guard against running twice with a status
      * change on the locked booking. Returns what was actually credited, which is less than {@code amount} only
      * when earlier refunds already used the rest of the cap.
+     *
+     * <p>A kiosk booking (V72) has no customer wallet: the walk-in customer paid at the kiosk. The amount is then
+     * raised as a refund request waiting for the Owner, who pays the person back in hand; the returned amount is
+     * what was queued.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public Money settle(UUID transactionId, UUID customerId, Money amount, WalletEntryType type,
                         String reason) {
+        boolean walkIn = kioskAccounts.isKiosk(customerId);
         Money credited = Money.ZERO;
         for (Payment listed : paidPayments(transactionId)) {
             Money wanted = amount.minus(credited);
@@ -61,6 +71,13 @@ public class AutomaticRefundService {
             Money left = leftOn(payment);
             Money part = left.compareTo(wanted) < 0 ? left : wanted;
             if (!part.isPositive()) {
+                continue;
+            }
+            if (walkIn) {
+                refunds.save(RefundRequest.raise(payment.getId(), transactionId, customerId,
+                        BigDecimal.valueOf(part.vnd()), KIOSK_REASON_PREFIX + reason, null, OffsetDateTime.now(clock)));
+                log.info("Kiosk refund of {} VND for transaction {} queued for the Owner", part.vnd(), transactionId);
+                credited = credited.plus(part);
                 continue;
             }
             RefundRequest refund = refunds.save(RefundRequest.settled(payment.getId(), transactionId,

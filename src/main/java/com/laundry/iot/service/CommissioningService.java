@@ -202,6 +202,12 @@ public class CommissioningService {
         if (!Boolean.TRUE.equals(device.getLastSelfTestPassed())) {
             throw new ProvisioningRejectedException(HttpStatus.CONFLICT, "Last self-test did not pass");
         }
+        // V68: a washer or dryer is priced by its price profile only; without one customers could not book it.
+        if ((machine.getType() == MachineType.WASHER || machine.getType() == MachineType.DRYER)
+                && machine.getPriceProfileId() == null) {
+            throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
+                    "A price profile is required before the machine goes into service");
+        }
 
         if (machine.isUnderMaintenance()) {
             // Return from repair: the device keeps its original commissioning record.

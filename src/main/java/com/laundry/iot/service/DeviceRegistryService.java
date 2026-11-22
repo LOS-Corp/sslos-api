@@ -6,6 +6,7 @@ import com.laundry.devicelink.DeviceLink;
 import com.laundry.devicelink.DeviceLinkChanged;
 import com.laundry.devicelink.LinkState;
 import com.laundry.iot.dto.ProvisioningDtos.AvailableDevice;
+import com.laundry.iot.dto.ProvisioningDtos.DeviceAsset;
 import com.laundry.iot.dto.ProvisioningDtos.DeviceSummary;
 import com.laundry.iot.dto.ProvisioningDtos.PairDeviceRequest;
 import com.laundry.iot.entity.IotDevice;
@@ -200,16 +201,25 @@ public class DeviceRegistryService {
 
     // ── Admin: approve / revoke ────────────────────────────────────────────
 
-    /** Admin confirms the board is genuine. A revoked board can be approved again. */
+    /**
+     * Admin confirms the board is genuine and records the machine as an asset (V62: manufacturer, model,
+     * purchase cost, warranty). A revoked board can be approved again; approving an approved board only
+     * updates its asset info.
+     */
     @Transactional
-    public DeviceSummary approve(String deviceId, UUID adminId) {
+    public DeviceSummary approve(String deviceId, DeviceAsset asset, UUID adminId) {
         IotDevice device = requireDevice(deviceId);
         switch (device.getStatus()) {
-            case VERIFIED -> { return summary(device); }
+            case VERIFIED -> {
+                applyAsset(device, asset);
+                deviceRepository.save(device);
+                return summary(device);
+            }
             case PROVISIONED, ACTIVE -> throw new ProvisioningRejectedException(HttpStatus.CONFLICT,
                     "Device is already attached to a machine");
             case UNCLAIMED, REVOKED -> { }
         }
+        applyAsset(device, asset);
         device.setStatus(IotDeviceStatus.VERIFIED);
         device.setVerifiedAt(OffsetDateTime.now());
         device.setVerifiedBy(adminId);
@@ -218,6 +228,34 @@ public class DeviceRegistryService {
         events.publishEvent(new DeviceLinkChanged(deviceId));
         log.info("[IOT] Device {} approved by {}", deviceId, adminId);
         return summary(device);
+    }
+
+    /** Corrects the asset info of a device in any state (e.g. the warranty was extended). */
+    @Transactional
+    public DeviceSummary updateAsset(String deviceId, DeviceAsset asset) {
+        IotDevice device = requireDevice(deviceId);
+        applyAsset(device, asset);
+        deviceRepository.save(device);
+        log.info("[IOT] Asset info of {} updated", deviceId);
+        return summary(device);
+    }
+
+    private static void applyAsset(IotDevice device, DeviceAsset asset) {
+        if (asset == null) {
+            throw new ProvisioningRejectedException(HttpStatus.BAD_REQUEST,
+                    "Confirm the manufacturer, model, purchase cost and warranty before approving");
+        }
+        if (asset.machineType() != null && device.getDeviceType() != null && asset.machineType() != device.getDeviceType()) {
+            throw new ProvisioningRejectedException(HttpStatus.BAD_REQUEST,
+                    "Model " + asset.model() + " là " + asset.machineType() + " nhưng bo chạy firmware " + device.getDeviceType());
+        }
+        device.setModelId(asset.modelId());
+        device.setManufacturer(asset.manufacturer().trim());
+        device.setModel(asset.model().trim());
+        device.setPurchaseCost(asset.purchaseCost());
+        device.setWarrantyUntil(asset.warrantyUntil());
+        device.setTechnicalSpecs(asset.technicalSpecs() == null || asset.technicalSpecs().isBlank()
+                ? null : asset.technicalSpecs().trim());
     }
 
     /** Revoke a device by id; unpairs its machine first when it has one. Also rejects an unknown board. */
@@ -367,7 +405,8 @@ public class DeviceRegistryService {
                 d.getCommissionedAt(), d.getRevokedAt(),
                 d.getLastIp(), d.getLastRssi(),
                 DeviceKeys.shortFingerprint(d.getKeyFingerprint()), DeviceKeys.shortFingerprint(d.getPendingKeyFingerprint()),
-                d.getAuthFailures(), d.getLastAuthFailureAt());
+                d.getAuthFailures(), d.getLastAuthFailureAt(),
+                d.getModelId(), d.getManufacturer(), d.getModel(), d.getPurchaseCost(), d.getWarrantyUntil(), d.getTechnicalSpecs());
     }
 
     /** Only a plain IPv4/IPv6 literal from the board is stored. */

@@ -49,7 +49,9 @@ public final class BookingDtos {
             /* Washer services: price per booked kilogram (price is then the 1 kg price); null otherwise. */
             BigDecimal pricePerKg,
             /* Largest washer capacity in the store: the most a customer can book; null when unknown. */
-            BigDecimal maxLoadKg
+            BigDecimal maxLoadKg,
+            /* V68: priced by the chosen machines' price profiles; price is then the cheapest booking ("from"). */
+            boolean priceFromMachines
     ) {}
 
     public record OpeningHoursDto(String dayOfWeek, LocalTime opensAt, LocalTime closesAt) {}
@@ -60,7 +62,10 @@ public final class BookingDtos {
             String resourceCode,
             String displayName,
             String location,
-            String status
+            String status,
+            /* Rated load of the machine, shown on the customer's machine card; null when unknown (and in bookings
+               stored before it existed). */
+            BigDecimal capacityKg
     ) {}
 
     public record RecommendationDto(
@@ -220,7 +225,6 @@ public final class BookingDtos {
             String currency,
             List<SlotPhaseDto> timeline,
             List<RecommendedResourceDto> resources,
-            List<MachineProgramDtos.MachineProgramDto> programs,
             /* Kilograms paid for (booked + extra paid at the machine); null when not priced by weight. */
             BigDecimal loadKg,
             UUID paymentId,
@@ -245,9 +249,10 @@ public final class BookingDtos {
 
     public record ServiceOfferingRequest(
             boolean enabled,
-            /* Fixed part; washer services may set 0 and charge by weight only. */
-            @NotNull @DecimalMin(value = "0") BigDecimal price,
-            /* Washer services (V61): price per booked kilogram, required for them; ignored otherwise. */
+            /* Assisted laundry: paid when booking (V65); other non-machine services: their price. Above 0. Ignored
+               for self-service on washers/dryers, priced by the machines' price profiles (V68). */
+            @DecimalMin(value = "0") BigDecimal price,
+            /* Assisted laundry (V65): price per kilogram charged after weighing, required for it; ignored otherwise. */
             @DecimalMin(value = "1") BigDecimal pricePerKg,
             @Positive Integer processingMinutes,
             @Positive Integer secondaryProcessingMinutes

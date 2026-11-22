@@ -56,13 +56,30 @@ public final class BookingConfigDtos {
             List<ServiceReadiness> services
     ) {}
 
-    /** {@code turnoverBufferMinutes}: idle time kept after every booking before the next one may start. */
-    public record BookingSettingsDto(String timezone, int turnoverBufferMinutes) {}
+    /**
+     * {@code turnoverBufferMinutes}: idle time kept after every booking before the next one may start. V70: the
+     * self-service check-in, check-out and Wash–Dry transfer times of the store.
+     */
+    public record BookingSettingsDto(String timezone, int turnoverBufferMinutes, int checkInMinutes,
+                                     int checkoutMinutes, int transferMinutes) {}
 
+    /** Null fields keep their value. */
     public record BookingSettingsUpdate(
             @NotBlank @Size(max = 80) String timezone,
             @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(120)
-            Integer turnoverBufferMinutes) {}
+            Integer turnoverBufferMinutes,
+            @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(60)
+            Integer checkInMinutes,
+            @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(120)
+            Integer checkoutMinutes,
+            @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(120)
+            Integer transferMinutes) {
+
+        /** Timezone and buffer only. */
+        public BookingSettingsUpdate(String timezone, Integer turnoverBufferMinutes) {
+            this(timezone, turnoverBufferMinutes, null, null, null);
+        }
+    }
 
     public record ServiceOfferingDto(
             String code,
@@ -71,7 +88,8 @@ public final class BookingConfigDtos {
             String description,
             boolean enabled,
             BigDecimal price,
-            /* Washer services (V61): price per kilogram; price is then the fixed part (0 for WASH_ONLY). */
+            /* Assisted laundry (V65): price per kilogram charged after staff weighed it; price is what is paid when
+               booking. Null for self-service, priced per cycle. */
             BigDecimal pricePerKg,
             int processingMinutes,
             int secondaryProcessingMinutes,
@@ -79,8 +97,11 @@ public final class BookingConfigDtos {
             int transferMinutes,
             int checkoutMinutes,
             boolean configured,
-            /* True when the service uses a washer, so it is priced by weight. */
-            boolean priceByWeight
+            /* True for assisted laundry, priced by weight (V65). */
+            boolean priceByWeight,
+            /* V68: self-service on washers/dryers, priced by each machine's price profile; price is then the cheapest
+               booking ("from"), null while no commissioned machine has a profile. */
+            boolean priceByMachine
     ) {}
 
     public record ServiceOfferingUpdate(

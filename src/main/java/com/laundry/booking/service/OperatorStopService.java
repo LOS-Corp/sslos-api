@@ -70,7 +70,7 @@ class OperatorStopService {
         Money left = refunds.refundable(cycle.transactionId());
         Money unused = left;
         if (cycle.earlierStageDone()) {
-            Money stage = stageValues.dryerStage(cycle.total());
+            Money stage = stageValues.dryerStage(cycle.bookingId(), cycle.total());
             unused = left.compareTo(stage) < 0 ? left : stage;
         }
         Money credited = unused.isPositive()

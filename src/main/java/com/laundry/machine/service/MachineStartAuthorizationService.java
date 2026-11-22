@@ -545,15 +545,10 @@ public class MachineStartAuthorizationService {
     /** Evaluates {@code auth}'s last scale reading, saves the verdict and sends LOAD_VERDICT after commit. */
     private void applyLoadVerdict(Machine machine, MachineStartAuthorization auth) {
         OffsetDateTime now = OffsetDateTime.now();
-        LoadPolicy.Verdict verdict;
+        // V65: self-service is priced per cycle, so the weight never blocks START (older firmware still weighs).
+        LoadPolicy.Verdict verdict = new LoadPolicy.Verdict(LoadPolicy.Kind.ACCEPTED, auth.getMeasuredLoadKg(), null,
+                machine.getCapacityKg(), 0);
         java.math.BigDecimal paidKg = null;
-        if (auth.isTestRun() || auth.getBookingId() == null) {
-            verdict = new LoadPolicy.Verdict(LoadPolicy.Kind.ACCEPTED, auth.getMeasuredLoadKg(), null,
-                    machine.getCapacityKg(), 0);
-        } else {
-            paidKg = loadTopUps.bookingLoad(auth.getBookingId()).paidKg();
-            verdict = LoadPolicy.evaluate(auth.getMeasuredLoadKg(), paidKg, machine.getCapacityKg());
-        }
         auth.setLoadVerdict(verdict.kind().name());
         auth.setLoadExtraKg(verdict.extraKg());
         auth.setLoadCheckedAt(now);

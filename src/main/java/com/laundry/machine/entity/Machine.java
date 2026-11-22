@@ -88,6 +88,21 @@ public class Machine {
     @Column(name = "maintenance_since")
     private OffsetDateTime maintenanceSince;
 
+    /** How the machine is priced (V64); null = the store's service offering price. */
+    @Column(name = "price_profile_id")
+    private UUID priceProfileId;
+
+    /**
+     * Retrofit board on a third-party machine (V67): pulses into the machine's payment input that open it for one
+     * paid cycle; null = the firmware's default (1). LaundryOS boards ignore it.
+     */
+    @Column(name = "vend_pulses")
+    private Integer vendPulses;
+
+    /** Retrofit dryer (V67): pulses for each purchase of extra drying time; null = 1. */
+    @Column(name = "extra_vend_pulses")
+    private Integer extraVendPulses;
+
     /** ESP32 identity (e.g. "ESP-24A1B2C3D4E5") bound to this machine; null when unassigned. */
     @Column(name = "device_id", length = 64)
     private String deviceId;

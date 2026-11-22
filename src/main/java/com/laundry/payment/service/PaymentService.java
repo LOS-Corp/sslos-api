@@ -41,6 +41,8 @@ public class PaymentService {
     private final ScheduledBookingService scheduledBookingService;
     private final PayOSProperties payos;
     private final LoadTopUpService loadTopUps;
+    private final com.laundry.booking.service.AssistedWeightService weightCharges;
+    private final com.laundry.booking.service.DryExtensionService dryExtensions;
 
     @Value("${app.payment.callback-base-url:http://localhost:8080}")
     private String callbackBaseUrl;
@@ -159,6 +161,39 @@ public class PaymentService {
                 .or(() -> paymentRepository.findByIdempotencyKey(idempotencyKey + ":wallet"));
         if (previous.isPresent()) {
             ensureCustomerOwnsTransaction(transactionId, customerId);
+            return toResponse(previous.get());
+        }
+        ensureCustomerOwnsTransaction(transactionId, customerId);
+        return payTransaction(transactionId, idempotencyKey, customerId, useWallet);
+    }
+
+    /**
+     * Pays for extra drying time (V66): wallet first, then payOS. Repeating the call returns the payment it already
+     * created for this purchase.
+     */
+    @Transactional
+    public PaymentResponse createDryExtensionPayment(UUID transactionId, UUID customerId, boolean useWallet) {
+        String idempotencyKey = "dry-extension:" + transactionId;
+        ensureCustomerOwnsTransaction(transactionId, customerId);
+        var previous = paymentRepository.findByIdempotencyKey(idempotencyKey)
+                .or(() -> paymentRepository.findByIdempotencyKey(idempotencyKey + ":wallet"));
+        if (previous.isPresent()) {
+            return toResponse(previous.get());
+        }
+        return payTransaction(transactionId, idempotencyKey, customerId, useWallet);
+    }
+
+    /**
+     * Pays the weight charge of the customer's assisted laundry booking (V65): wallet first, then payOS. A failed
+     * payOS payment cancelled the previous transaction, so a fresh one is made for the same amount.
+     */
+    @Transactional
+    public PaymentResponse createWeightChargePayment(UUID bookingId, UUID customerId, boolean useWallet) {
+        UUID transactionId = weightCharges.payableTransaction(bookingId, customerId);
+        String idempotencyKey = "weight-charge:" + transactionId;
+        var previous = paymentRepository.findByIdempotencyKey(idempotencyKey)
+                .or(() -> paymentRepository.findByIdempotencyKey(idempotencyKey + ":wallet"));
+        if (previous.isPresent()) {
             return toResponse(previous.get());
         }
         ensureCustomerOwnsTransaction(transactionId, customerId);
@@ -322,14 +357,33 @@ public class PaymentService {
             loadTopUps.cancelForPaymentFailure(transactionId);
             return;
         }
+        if (weightCharges.isWeightCharge(transactionId)) {
+            weightCharges.cancelForPaymentFailure(transactionId);
+            return;
+        }
+        if (dryExtensions.isExtension(transactionId)) {
+            dryExtensions.cancelForPaymentFailure(transactionId);
+            return;
+        }
         scheduledBookingService.cancelForPaymentFailure(transactionId);
     }
 
-    /** A transaction is a scheduled booking, or extra kilograms paid at the washer (V61). */
+    /**
+     * A transaction is a scheduled booking, extra kilograms paid at the washer (V61), the weight charge of an
+     * assisted laundry booking (V65), or extra drying time (V66).
+     */
     @Transactional
     public void confirmTransactionPayment(UUID transactionId) {
         if (loadTopUps.isTopUp(transactionId)) {
             loadTopUps.confirmPayment(transactionId);
+            return;
+        }
+        if (weightCharges.isWeightCharge(transactionId)) {
+            weightCharges.confirmPayment(transactionId);
+            return;
+        }
+        if (dryExtensions.isExtension(transactionId)) {
+            dryExtensions.confirmPayment(transactionId);
             return;
         }
         scheduledBookingService.confirmPayment(transactionId);

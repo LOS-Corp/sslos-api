@@ -28,8 +28,25 @@ public final class LockerDtos {
             String pin,
             Instant validFrom,
             Instant validUntil,
-            boolean lockerOnline
+            boolean lockerOnline,
+            /* V65: priced by weight. Null until staff weighed the laundry. */
+            WeightInfo weight
     ) {
+    }
+
+    /**
+     * The weight charge of an assisted laundry booking (V65).
+     *
+     * @param pricePerKg the per-kg price recorded when booking
+     * @param status     PENDING (customer must pay before pickup), PAID, WAIVED (nothing due); null = not weighed yet
+     */
+    public record WeightInfo(java.math.BigDecimal pricePerKg, java.math.BigDecimal weightKg,
+                             java.math.BigDecimal amount, String status, Instant weighedAt) {
+    }
+
+    /** Staff weighed the laundry of an assisted booking (kg, e.g. 3.45). */
+    public record RecordWeightRequest(@NotNull @jakarta.validation.constraints.DecimalMin(value = "0", inclusive = false)
+                                      @jakarta.validation.constraints.DecimalMax("100") java.math.BigDecimal weightKg) {
     }
 
     /**
@@ -46,7 +63,9 @@ public final class LockerDtos {
             String customerName,
             String customerPhone,
             String status,
-            Instant startTime
+            Instant startTime,
+            /* V65: assisted laundry priced by weight; null when the service is not. */
+            WeightInfo weight
     ) {
     }
 

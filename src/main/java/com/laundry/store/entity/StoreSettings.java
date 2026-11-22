@@ -55,6 +55,21 @@ public class StoreSettings {
     @Builder.Default
     private int turnoverBufferMinutes = 0;
 
+    /** V70: minutes a self-service customer has to load the machine before it runs. */
+    @Column(name = "check_in_minutes", nullable = false)
+    @Builder.Default
+    private int checkInMinutes = 5;
+
+    /** V70: minutes a self-service customer has to unload the machine after it finished. */
+    @Column(name = "checkout_minutes", nullable = false)
+    @Builder.Default
+    private int checkoutMinutes = 5;
+
+    /** V70: Wash–Dry, minutes to move the laundry from the washer to the dryer. */
+    @Column(name = "transfer_minutes", nullable = false)
+    @Builder.Default
+    private int transferMinutes = 10;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private OffsetDateTime createdAt;
 

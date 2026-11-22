@@ -57,6 +57,31 @@ public class IotDevice {
     @Column(name = "firmware_version", length = 50)
     private String firmwareVersion;
 
+    // ── Asset info, confirmed by the admin on approval (V62) ────────────────
+
+    /** The catalog model (V63); {@link #manufacturer} and {@link #model} keep its names as of approval. */
+    @Column(name = "model_id")
+    private UUID modelId;
+
+    /** Who made the machine, e.g. "Aimi", "LG". */
+    @Column(name = "manufacturer", length = 60)
+    private String manufacturer;
+
+    @Column(name = "model", length = 100)
+    private String model;
+
+    /** Purchase price in VND: the basis of the payback figures. */
+    @Column(name = "purchase_cost", precision = 12, scale = 2)
+    private java.math.BigDecimal purchaseCost;
+
+    /** Last day of the manufacturer warranty; null = no warranty. */
+    @Column(name = "warranty_until")
+    private java.time.LocalDate warrantyUntil;
+
+    /** Free text, e.g. "9 kg, inverter, 1400 rpm". */
+    @Column(name = "technical_specs", length = 500)
+    private String technicalSpecs;
+
     @Column(name = "last_self_test_command_id", length = 80)
     private String lastSelfTestCommandId;
 

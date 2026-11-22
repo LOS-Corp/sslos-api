@@ -1,6 +1,5 @@
 package com.laundry.booking.domain;
 
-import com.laundry.booking.dto.MachineProgramDtos.MachineProgramDto;
 
 import java.math.BigDecimal;
 import java.time.DayOfWeek;
@@ -118,29 +117,6 @@ public final class SlotPlanner {
     public static Instant ceilToMinute(Instant instant) {
         long seconds = instant.getEpochSecond() + (instant.getNano() > 0 ? 1 : 0);
         return Instant.ofEpochSecond(Math.floorDiv(seconds + 59, 60) * 60);
-    }
-
-    /**
-     * A machine program replaces the processing time of its machine (first
-     * requirement = primary, second = secondary). Programs no longer change the
-     * price: washing is priced by weight (V61, {@link LoadPolicy}).
-     */
-    public static ServiceConfig withPrograms(ServiceConfig config, List<MachineProgramDto> programs) {
-        if (programs.isEmpty()) {
-            return config;
-        }
-        int primary = config.processingMinutes();
-        int secondary = config.secondaryProcessingMinutes();
-        BigDecimal price = config.price();
-        for (MachineProgramDto program : programs) {
-            int index = config.requirements().indexOf(program.machineType());
-            if (index == 0) primary = program.totalMinutes();
-            else if (index == 1) secondary = program.totalMinutes();
-        }
-        return new ServiceConfig(config.code(), config.name(), config.mode(), config.description(),
-                primary, secondary, config.checkInMinutes(), config.checkoutMinutes(), config.transferMinutes(),
-                config.pickupDeadlineHours(), price, config.timezone(), config.opensAt(),
-                config.closesAt(), config.requirements(), config.bufferMinutes());
     }
 
     public static boolean hasAvailableResourceCombination(List<AllocationPlan> allocations,

@@ -2,7 +2,6 @@ package com.laundry.booking.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.laundry.booking.dto.MachineProgramDtos.MachineProgramDto;
 import com.laundry.booking.domain.LoadPolicy;
 import com.laundry.machine.repository.MachineRepository;
 import com.laundry.transaction.entity.ServiceType;
@@ -51,7 +50,6 @@ public class ScheduledBookingService {
     private final ObjectMapper objectMapper;
     private final MachineRepository machineRepository;
     private final TransactionRepository transactionRepository;
-    private final MachineProgramService programService;
     private final BookingResourceQueries queries;
     private final AutomaticRefundService refunds;
     private final WalletPaymentService walletPayments;
@@ -80,20 +78,13 @@ public class ScheduledBookingService {
         }
 
         queries.lockStoreConfiguration();
-        // V61: washing is priced by weight. A washer service needs the whole kilograms the customer pays for;
-        // the program is always the machine type's default (customers no longer pick one).
+        // V65: self-service is priced per cycle, so the load is optional (it only rules out smaller machines);
+        // assisted laundry is weighed by staff. V69: machines run their own firmware programs.
         BigDecimal loadKg = request.declaredLoadKg();
-        if (queries.pricePerKg(request.serviceCode()) != null && !LoadPolicy.isBookableKg(loadKg)) {
-            throw BusinessException.of(ErrorCode.INVALID_REQUEST,
-                    "Choose the laundry weight in whole kilograms (%d–%d kg)"
-                            .formatted(LoadPolicy.MIN_BOOKED_KG, LoadPolicy.MAX_BOOKED_KG));
-        }
         ServiceConfig config = queries.customerOffering(request.serviceCode(), loadKg);
         if (config == null) {
             throw BusinessException.of(ErrorCode.NOT_FOUND, "This service is not offered at the store");
         }
-        List<MachineProgramDto> programs = programService.resolve(config.requirements(), null, null);
-        SlotPlan plan = buildPlan(config, request.startTime());
         if (request.resourceIds().size() != config.requirements().size()
                 || request.resourceIds().stream().distinct().count() != request.resourceIds().size()) {
             throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Select exactly one unique resource for each service requirement");
@@ -111,6 +102,9 @@ public class ScheduledBookingService {
             resources.add(selectedResource);
         }
         requireCapacity(resources, request.declaredLoadKg());
+        // V71: each chosen machine holds its own cycle (its price profile), not the slowest machine of its type.
+        config = queries.forResources(config, resources);
+        SlotPlan plan = buildPlan(config, request.startTime());
         if (!queries.isWithinOpeningHours(config, request.startTime(), plan)) {
             throw BusinessException.of(ErrorCode.OUTSIDE_OPENING_HOURS, "The requested time is outside the store opening hours");
         }
@@ -129,11 +123,14 @@ public class ScheduledBookingService {
             requireAdvanceQuota(config, plan);
         }
         Instant holdExpiresAt = now.plus(props.holdDuration());
+        // V64: machines with a price profile price the booking themselves.
+        BookingResourceQueries.Pricing pricing = queries.price(config,
+                resources.stream().map(Resource::id).toList(), loadKg);
         Transaction transaction = Transaction.builder()
                 .customerId(customerId)
                 .serviceType("ASSISTED_LOCKER".equals(config.mode())
                         ? ServiceType.LAUNDRY_SERVICE : ServiceType.SELF_SERVICE)
-                .totalAmount(config.price())
+                .totalAmount(pricing.total())
                 .status(TransactionStatus.PENDING_PAYMENT)
                 .expiresAt(OffsetDateTime.ofInstant(holdExpiresAt, ZoneOffset.UTC))
                 .build();
@@ -149,15 +146,15 @@ public class ScheduledBookingService {
         jdbc.update("""
                 INSERT INTO scheduled_bookings
                   (id, transaction_id, service_code, status, start_time,
-                   expected_end_time, hold_expires_at, timeline, idempotency_key, programs,
-                   advance_booking, declared_load_kg)
-                VALUES (?, ?, ?, 'HELD', ?, ?, ?, CAST(? AS JSONB), ?, CAST(? AS JSONB), ?, ?)
+                   expected_end_time, hold_expires_at, timeline, idempotency_key,
+                   advance_booking, declared_load_kg, price_per_kg)
+                VALUES (?, ?, ?, 'HELD', ?, ?, ?, CAST(? AS JSONB), ?, ?, ?, ?)
                 """, bookingId, transaction.getId(), config.code(),
                 OffsetDateTime.ofInstant(plan.start(), ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(plan.expectedEnd(), ZoneOffset.UTC),
                 OffsetDateTime.ofInstant(holdExpiresAt, ZoneOffset.UTC),
-                timelineJson, request.idempotencyKey(), programService.toJson(programs),
-                advance, request.declaredLoadKg());
+                timelineJson, request.idempotencyKey(),
+                advance, request.declaredLoadKg(), pricing.pricePerKg());
 
         for (int i = 0; i < resources.size(); i++) {
             Resource resource = resources.get(i);
@@ -184,7 +181,7 @@ public class ScheduledBookingService {
                        t.status transaction_status, st.name store_name,
                        st.address store_address, st.phone store_phone, sb.start_time,
                        sb.expected_end_time, sb.hold_expires_at, t.total_amount,
-                       sb.timeline::text timeline, sb.programs::text programs, sb.declared_load_kg,
+                       sb.timeline::text timeline, sb.declared_load_kg,
                        p.payment_id, p.status payment_status, p.checkout_url payment_url, p.qr_code,
                        allocated.booking_resources
                 FROM scheduled_bookings sb
@@ -226,7 +223,7 @@ public class ScheduledBookingService {
                        t.status transaction_status, st.name store_name,
                        st.address store_address, st.phone store_phone, sb.start_time,
                        sb.expected_end_time, sb.hold_expires_at, t.total_amount,
-                       sb.timeline::text timeline, sb.programs::text programs, sb.declared_load_kg,
+                       sb.timeline::text timeline, sb.declared_load_kg,
                        p.payment_id, p.status payment_status, p.checkout_url payment_url, p.qr_code,
                        allocated.booking_resources
                 FROM scheduled_bookings sb
@@ -502,7 +499,6 @@ public class ScheduledBookingService {
                 rs.getString("transaction_status"), rs.getString("store_name"), rs.getString("store_address"),
                 rs.getString("store_phone"), start.value(), end.value(), holdExpires.value(),
                 rs.getBigDecimal("total_amount"), "VND", timeline, resources,
-                programService.fromJson(rs.getString("programs")),
                 rs.getBigDecimal("declared_load_kg"),
                 rs.getObject("payment_id", UUID.class), rs.getString("payment_status"),
                 rs.getString("payment_url"), rs.getString("qr_code"));

@@ -46,7 +46,6 @@ public class BookingResourceQueries {
     private final JdbcTemplate jdbc;
     private final MachineRepository machineRepository;
     private final com.laundry.machine.runtime.MachineRuntimeStateService runtimeStateService;
-    private final MachineProgramService programService;
     private final com.laundry.config.BookingProperties props;
 
     /** Machine states that mean "in use right now" but bookable once the session ends. */
@@ -55,12 +54,26 @@ public class BookingResourceQueries {
             MachineStatus.PAUSED, MachineStatus.COMPLETED);
 
 
+    /**
+     * V70: self-service takes the store's check-in, check-out and (two-machine services) transfer minutes; assisted
+     * laundry keeps the service's own. Needs the aliases {@code d} (booking_service_definitions) and {@code s}
+     * (store_settings).
+     */
+    static final String STAGE_MINUTES_SQL = """
+            CASE WHEN d.service_mode = 'SELF_SERVICE' THEN s.check_in_minutes ELSE d.check_in_minutes END check_in_minutes,
+            CASE WHEN d.service_mode = 'SELF_SERVICE' THEN s.checkout_minutes ELSE d.checkout_minutes END checkout_minutes,
+            CASE WHEN d.service_mode = 'SELF_SERVICE' AND EXISTS (
+                     SELECT 1 FROM booking_service_requirements r2 WHERE r2.service_code = d.code AND r2.sequence_no = 2)
+                 THEN s.transfer_minutes ELSE d.transfer_minutes END transfer_minutes""";
+
     ServiceConfig serviceDefinition(String code) {
         List<ServiceConfig> definitions = jdbc.query("""
-                SELECT code, name, service_mode, description, processing_minutes,
-                       secondary_processing_minutes, check_in_minutes, checkout_minutes,
-                       transfer_minutes, pickup_deadline_hours
-                FROM booking_service_definitions WHERE code = ? AND active = TRUE
+                SELECT d.code, d.name, d.service_mode, d.description, d.processing_minutes,
+                       d.secondary_processing_minutes, d.pickup_deadline_hours,
+                """ + STAGE_MINUTES_SQL + """
+
+                FROM booking_service_definitions d CROSS JOIN store_settings s
+                WHERE d.code = ? AND d.active = TRUE
                 """, (rs, row) -> new ServiceConfig(
                 rs.getString("code"), rs.getString("name"), rs.getString("service_mode"),
                 rs.getString("description"), rs.getInt("processing_minutes"),
@@ -94,39 +107,155 @@ public class BookingResourceQueries {
         if (configured.isEmpty()) {
             return null;
         }
-        return configured.getFirst();
+        ServiceConfig config = configured.getFirst();
+        // V68: a machine-priced service shows its cheapest booking ("from" price) instead of the offering's price.
+        if (!pricedByMachine(config.mode(), config.requirements())) {
+            return config;
+        }
+        return new ServiceConfig(config.code(), config.name(), config.mode(), config.description(),
+                config.processingMinutes(), config.secondaryProcessingMinutes(), config.checkInMinutes(),
+                config.checkoutMinutes(), config.transferMinutes(), config.pickupDeadlineHours(),
+                startingPrice(config.requirements()), config.timezone(), config.opensAt(), config.closesAt(),
+                config.requirements(), config.bufferMinutes());
     }
 
     /**
-     * The store offering as a customer books it: the default wash / dry programs set the durations (customers
-     * no longer pick a program) and, for a washer service, the price is the fixed part plus the per-kg price
-     * times {@code loadKg} (V61). A null load prices the smallest bookable load, the "from" price.
+     * The store offering as a customer books it. V69: the machines' price profiles set the durations (the washer's
+     * and the dryer's stage each take the longest cycle among the commissioned machines of that type, so a booking
+     * always covers the machine it gets); a type without any keeps the service's own duration. The price is what is
+     * paid when booking (V68: from the cheapest machine; assisted laundry its fixed part). {@code loadKg} no longer
+     * changes the price.
      */
     ServiceConfig customerOffering(String serviceCode, BigDecimal loadKg) {
         ServiceConfig config = offering(serviceCode);
         if (config == null) {
             return null;
         }
-        config = withPrograms(config, programService.resolve(config.requirements(), null, null));
-        BigDecimal perKg = pricePerKg(serviceCode);
-        if (perKg == null) {
-            return config;
+        int primary = config.processingMinutes();
+        int secondary = config.secondaryProcessingMinutes();
+        List<String> requirements = config.requirements();
+        for (int i = 0; i < requirements.size() && i < 2; i++) {
+            Integer minutes = longestCycle(requirements.get(i));
+            if (minutes == null) continue;
+            if (i == 0) primary = minutes;
+            else secondary = minutes;
         }
-        BigDecimal kg = loadKg == null ? BigDecimal.valueOf(LoadPolicy.MIN_BOOKED_KG) : loadKg;
-        return new ServiceConfig(config.code(), config.name(), config.mode(), config.description(),
-                config.processingMinutes(), config.secondaryProcessingMinutes(), config.checkInMinutes(),
-                config.checkoutMinutes(), config.transferMinutes(), config.pickupDeadlineHours(),
-                LoadPolicy.price(config.price(), perKg, kg), config.timezone(), config.opensAt(), config.closesAt(),
+        return new ServiceConfig(config.code(), config.name(), config.mode(), config.description(), primary, secondary,
+                config.checkInMinutes(), config.checkoutMinutes(), config.transferMinutes(),
+                config.pickupDeadlineHours(), config.price(), config.timezone(), config.opensAt(), config.closesAt(),
                 config.requirements(), config.bufferMinutes());
     }
 
-    /** Price per kilogram of a washer service; null when the service is not priced by weight. */
+    /** Cycle minutes of each priced washer / dryer (V69: its price profile), by machine id. */
+    Map<UUID, Integer> machineCycles() {
+        Map<UUID, Integer> cycles = new java.util.HashMap<>();
+        jdbc.query("""
+                SELECT m.id, p.cycle_minutes FROM machines m JOIN price_profiles p ON p.id = m.price_profile_id
+                """, rs -> { cycles.put(rs.getObject(1, UUID.class), rs.getInt(2)); });
+        return cycles;
+    }
+
+    /**
+     * {@code config} with its stages sized for one machine per requirement (V71): stage {@code i} runs for
+     * {@code minutes.get(i)}; a null entry (a resource that is not a priced machine) keeps the service's duration.
+     */
+    static ServiceConfig withStageMinutes(ServiceConfig config, List<Integer> minutes) {
+        int primary = !minutes.isEmpty() && minutes.get(0) != null ? minutes.get(0) : config.processingMinutes();
+        int secondary = minutes.size() > 1 && minutes.get(1) != null ? minutes.get(1) : config.secondaryProcessingMinutes();
+        return new ServiceConfig(config.code(), config.name(), config.mode(), config.description(), primary, secondary,
+                config.checkInMinutes(), config.checkoutMinutes(), config.transferMinutes(),
+                config.pickupDeadlineHours(), config.price(), config.timezone(), config.opensAt(), config.closesAt(),
+                config.requirements(), config.bufferMinutes());
+    }
+
+    /** {@code config} sized for exactly these resources, in requirement order: each machine holds its own cycle. */
+    ServiceConfig forResources(ServiceConfig config, List<Resource> resources) {
+        Map<UUID, Integer> cycles = machineCycles();
+        return withStageMinutes(config, resources.stream().map(resource -> cycles.get(resource.id())).toList());
+    }
+
+    /** Longest cycle of the commissioned, priced machines of {@code type}; null for other resources or none. */
+    Integer longestCycle(String type) {
+        if (!"WASHER".equals(type) && !"DRYER".equals(type)) {
+            return null;
+        }
+        return jdbc.queryForObject("""
+                SELECT MAX(p.cycle_minutes) FROM machines m
+                JOIN price_profiles p ON p.id = m.price_profile_id
+                WHERE m.type = ? AND m.deployment_status = 'ACTIVE'
+                """, Integer.class, type);
+    }
+
+    /**
+     * What a booking of {@code config} on these resources costs.
+     *
+     * @param total      the amount to pay when booking
+     * @param pricePerKg assisted laundry (V65): the per-kg price charged once staff weighed the laundry, recorded on
+     *                   the booking; null for self-service
+     */
+    record Pricing(BigDecimal total, BigDecimal pricePerKg) {}
+
+    /**
+     * V68: self-service on washers and dryers only is priced by the machines' price profiles, never by the service
+     * offering (which keeps pricing assisted laundry and services on other resources, e.g. iron stations).
+     */
+    static boolean pricedByMachine(String mode, List<String> requirements) {
+        return "SELF_SERVICE".equals(mode) && !requirements.isEmpty()
+                && requirements.stream().allMatch(type -> "WASHER".equals(type) || "DRYER".equals(type));
+    }
+
+    /**
+     * Cheapest booking of a machine-priced service ("from" price): the cheapest priced, commissioned machine of each
+     * required type. Null when a required type has no such machine: the service cannot be booked.
+     */
+    BigDecimal startingPrice(List<String> requirements) {
+        BigDecimal total = BigDecimal.ZERO;
+        for (String type : requirements) {
+            BigDecimal cheapest = jdbc.queryForObject("""
+                    SELECT MIN(p.base_price) FROM machines m
+                    JOIN price_profiles p ON p.id = m.price_profile_id
+                    WHERE m.type = ? AND m.deployment_status = 'ACTIVE'
+                    """, BigDecimal.class, type);
+            if (cheapest == null) {
+                return null;
+            }
+            total = total.add(cheapest);
+        }
+        return total;
+    }
+
+    /**
+     * Prices a booking. Self-service on washers/dryers costs the sum of the chosen machines' price profiles (V68: every
+     * bookable machine has one, see {@link #resourcesFor}). Assisted laundry pays the offering's price when booking and
+     * its per-kg price after weighing; other services the offering's price.
+     */
+    Pricing price(ServiceConfig config, List<UUID> resourceIds, BigDecimal loadKg) {
+        if ("ASSISTED_LOCKER".equals(config.mode())) {
+            return new Pricing(config.price(), pricePerKg(config.code()));
+        }
+        if (!pricedByMachine(config.mode(), config.requirements())) {
+            return new Pricing(config.price(), null);
+        }
+        List<BigDecimal> profilePrices = resourceIds.isEmpty() ? List.of() : jdbc.query("""
+                SELECT p.base_price FROM machines m
+                JOIN price_profiles p ON p.id = m.price_profile_id
+                WHERE m.id = ANY (?)
+                """, (rs, row) -> rs.getBigDecimal(1), (Object) resourceIds.toArray(new UUID[0]));
+        if (resourceIds.isEmpty() || profilePrices.size() != resourceIds.size()) {
+            throw BusinessException.of(ErrorCode.CONFIG_CONFLICT, "Máy chưa có profile giá nên chưa nhận đặt lịch");
+        }
+        return new Pricing(profilePrices.stream().reduce(BigDecimal.ZERO, BigDecimal::add), null);
+    }
+
+    /**
+     * Price per kilogram of an assisted laundry service (V65), charged once staff weighed the laundry; null for
+     * self-service, which is priced per cycle.
+     */
     BigDecimal pricePerKg(String serviceCode) {
         return jdbc.query("""
                 SELECT o.price_per_kg FROM service_offerings o
-                WHERE o.service_code = ? AND EXISTS (
-                    SELECT 1 FROM booking_service_requirements r
-                    WHERE r.service_code = o.service_code AND r.resource_type = 'WASHER')
+                JOIN booking_service_definitions d ON d.code = o.service_code
+                WHERE o.service_code = ? AND d.service_mode = 'ASSISTED_LOCKER'
                 """, (rs, row) -> rs.getBigDecimal(1), serviceCode).stream()
                 .filter(java.util.Objects::nonNull).findFirst().orElse(null);
     }
@@ -247,8 +376,10 @@ public class BookingResourceQueries {
     List<Resource> resourcesFor(String type, List<Machine> machines) {
         if ("WASHER".equals(type) || "DRYER".equals(type)) {
             MachineType machineType = MachineType.valueOf(type);
+            // V68: a washer or dryer is priced by its price profile; without one it cannot be booked.
             return machines.stream()
-                    .filter(machine -> machine.getType() == machineType && isOperationallyUsable(machine))
+                    .filter(machine -> machine.getType() == machineType && isOperationallyUsable(machine)
+                            && machine.getPriceProfileId() != null)
                     .sorted(Comparator.comparing(Machine::getMachineCode))
                     .map(machine -> new Resource(type, machine.getId(), machine.getMachineCode(),
                             machine.getDisplayName() == null || machine.getDisplayName().isBlank()

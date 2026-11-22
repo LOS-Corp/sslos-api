@@ -40,8 +40,9 @@ public class AdminUserService {
 
     private static final String ENTITY = "USER";
     private static final Map<Role, List<Role>> MANAGEABLE = Map.of(
-            Role.ADMIN, List.of(Role.ADMIN, Role.OWNER),
-            Role.OWNER, List.of(Role.STAFF));
+            Role.ADMIN, List.of(Role.ADMIN, Role.OWNER, Role.KIOSK),
+            // V72: the Owner also creates the store's kiosk accounts.
+            Role.OWNER, List.of(Role.STAFF, Role.KIOSK));
 
     private final UserRepository userRepository;
     private final RoleRepository roleRepository;

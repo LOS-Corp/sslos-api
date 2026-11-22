@@ -28,6 +28,7 @@ public class DeviceCommandDispatcher {
     private final DeviceLink deviceLink;
     private final MachineRepository machines;
     private final DeviceCommandRepository commands;
+    private final org.springframework.context.ApplicationEventPublisher events;
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
     @Transactional(propagation = Propagation.REQUIRES_NEW)
@@ -48,6 +49,10 @@ public class DeviceCommandDispatcher {
                         e.getMessage());
             }
             commands.save(command);
+            if (command.getStatus() == DeviceCommandStatus.FAILED) {
+                events.publishEvent(new DeviceCommandFinished(command.getCommandId(), command.getCommand(),
+                        DeviceCommandStatus.FAILED.name(), command.getAckReason()));
+            }
         });
     }
 }

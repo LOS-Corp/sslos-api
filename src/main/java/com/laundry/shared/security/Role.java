@@ -4,14 +4,16 @@ import java.util.Locale;
 import java.util.Optional;
 
 /**
- * The four roles of SSLOS (BR-01, decision 27/10/2026). There is no MANAGER:
- * the Owner runs the store and manages Staff.
+ * The roles of SSLOS (BR-01, decision 27/10/2026). There is no MANAGER: the Owner runs the store and manages Staff.
+ * KIOSK (V72) is the in-store self-service screen: a device account the Owner creates, which books and pays for
+ * walk-in customers who have no account. Declared last, so it never outranks a person's role.
  */
 public enum Role {
     ADMIN,
     OWNER,
     STAFF,
-    CUSTOMER;
+    CUSTOMER,
+    KIOSK;
 
     private static final String PREFIX = "ROLE_";
 

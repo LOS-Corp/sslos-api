@@ -9,6 +9,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.DayOfWeek;
 import java.time.Instant;
 import java.time.LocalDateTime;
@@ -84,13 +85,19 @@ public class StoreBookingConfigService {
         if (hasFutureReservations(serviceCode) && ((currentlyEnabled && !request.enabled()) || durationChanged)) {
             throw BusinessException.of(ErrorCode.CONFIG_CONFLICT, "Cannot disable or change service duration while future bookings exist");
         }
-        // V61: a washer service is priced by weight and needs a per-kg price; other services a fixed price above 0.
-        boolean byWeight = queries.requirementsFor(serviceCode).contains("WASHER");
+        // V65: self-service is priced per cycle (a fixed price above 0). Assisted laundry is priced by weight: a
+        // per-kg price charged after staff weighed the laundry, plus the fixed part (≥ 0) paid when booking.
+        ServiceConfig definition = queries.serviceDefinition(serviceCode);
+        boolean byWeight = "ASSISTED_LOCKER".equals(definition.mode());
+        // V68: washers and dryers are priced by their price profiles; the offering keeps no price for them.
+        boolean byMachine = BookingResourceQueries.pricedByMachine(definition.mode(), definition.requirements());
+        BigDecimal price = byMachine ? BigDecimal.ZERO : request.price();
         if (byWeight && (request.pricePerKg() == null || request.pricePerKg().signum() <= 0)) {
-            throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Dịch vụ giặt tính theo kg: nhập đơn giá/kg lớn hơn 0");
+            throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Giặt hộ tính theo kg: nhập đơn giá/kg lớn hơn 0");
         }
-        if (!byWeight && request.price().signum() <= 0) {
-            throw BusinessException.of(ErrorCode.INVALID_REQUEST, "Giá dịch vụ phải lớn hơn 0");
+        if (!byMachine && (price == null || price.signum() <= 0)) {
+            throw BusinessException.of(ErrorCode.INVALID_REQUEST, byWeight
+                    ? "Giặt hộ: nhập phí đặt lịch (trả khi đặt) lớn hơn 0" : "Giá dịch vụ phải lớn hơn 0");
         }
         jdbc.update("""
                 INSERT INTO service_offerings
@@ -103,7 +110,7 @@ public class StoreBookingConfigService {
                   price_per_kg = EXCLUDED.price_per_kg,
                   processing_minutes_override = EXCLUDED.processing_minutes_override,
                   secondary_processing_minutes_override = EXCLUDED.secondary_processing_minutes_override
-                """, serviceCode, request.enabled(), request.price(), byWeight ? request.pricePerKg() : null,
+                """, serviceCode, request.enabled(), price, byWeight ? request.pricePerKg() : null,
                 request.processingMinutes(), request.secondaryProcessingMinutes());
     }
 
@@ -152,7 +159,8 @@ public class StoreBookingConfigService {
     @Transactional
     public BookingSettingsDto getBookingSettings() {
         var settings = store.settings();
-        return new BookingSettingsDto(settings.getTimezone(), settings.getTurnoverBufferMinutes());
+        return new BookingSettingsDto(settings.getTimezone(), settings.getTurnoverBufferMinutes(),
+                settings.getCheckInMinutes(), settings.getCheckoutMinutes(), settings.getTransferMinutes());
     }
 
     @Transactional
@@ -163,27 +171,57 @@ public class StoreBookingConfigService {
         if (currentTimezone != null && !currentTimezone.equals(zone.getId()) && hasFutureBookings()) {
             throw BusinessException.of(ErrorCode.CONFLICT, "Cannot change timezone while future holds or confirmed bookings exist");
         }
-        // A changed buffer only affects bookings made from now on; existing
-        // allocations keep the occupancy window they were created with.
-        Integer buffer = request.turnoverBufferMinutes();
+        // A changed buffer or check-in / check-out / transfer time only affects bookings made from now on;
+        // existing allocations keep the occupancy window they were created with.
         jdbc.update("""
                 UPDATE store_settings
-                SET timezone = ?, turnover_buffer_minutes = COALESCE(?, turnover_buffer_minutes), updated_at = NOW()
-                """, zone.getId(), buffer);
-        return getBookingSettings();
+                SET timezone = ?, turnover_buffer_minutes = COALESCE(?, turnover_buffer_minutes),
+                    check_in_minutes = COALESCE(?, check_in_minutes),
+                    checkout_minutes = COALESCE(?, checkout_minutes),
+                    transfer_minutes = COALESCE(?, transfer_minutes),
+                    updated_at = NOW()
+                """, zone.getId(), request.turnoverBufferMinutes(), request.checkInMinutes(),
+                request.checkoutMinutes(), request.transferMinutes());
+        // Read the row back: the StoreSettings entity loaded above still holds the old values.
+        return jdbc.queryForObject("""
+                SELECT timezone, turnover_buffer_minutes, check_in_minutes, checkout_minutes, transfer_minutes
+                FROM store_settings
+                """, (rs, row) -> new BookingSettingsDto(rs.getString(1), rs.getInt(2), rs.getInt(3), rs.getInt(4),
+                rs.getInt(5)));
     }
 
     @Transactional(readOnly = true)
     public List<ServiceOfferingDto> listOfferings() {
+        // Requirements and "from" prices are read after the rows, not inside the RowMapper.
+        return offeringRows().stream().map(row -> {
+            List<String> requirements = queries.requirementsFor(row.code());
+            if (!BookingResourceQueries.pricedByMachine(row.mode(), requirements)) {
+                return row;
+            }
+            // V69: the machines' price profiles set how long each stage holds its machine (the longest cycle of
+            // the commissioned machines of that type), exactly as customers book it.
+            Integer primary = queries.longestCycle(requirements.get(0));
+            Integer secondary = requirements.size() > 1 ? queries.longestCycle(requirements.get(1)) : null;
+            return new ServiceOfferingDto(row.code(), row.name(), row.mode(), row.description(), row.enabled(),
+                    queries.startingPrice(requirements), null,
+                    primary != null ? primary : row.processingMinutes(),
+                    secondary != null ? secondary : row.secondaryProcessingMinutes(),
+                    row.checkInMinutes(), row.transferMinutes(),
+                    row.checkoutMinutes(), row.configured(), false, true);
+        }).toList();
+    }
+
+    private List<ServiceOfferingDto> offeringRows() {
         return jdbc.query("""
                 SELECT d.code, d.name, d.service_mode, d.description,
                        d.processing_minutes, d.secondary_processing_minutes,
-                       d.check_in_minutes, d.transfer_minutes, d.checkout_minutes,
                        o.enabled, o.price, o.price_per_kg, o.processing_minutes_override,
                        o.secondary_processing_minutes_override,
-                       EXISTS (SELECT 1 FROM booking_service_requirements r
-                               WHERE r.service_code = d.code AND r.resource_type = 'WASHER') by_weight
+                       d.service_mode = 'ASSISTED_LOCKER' by_weight,
+                """ + BookingResourceQueries.STAGE_MINUTES_SQL + """
+
                 FROM booking_service_definitions d
+                CROSS JOIN store_settings s
                 LEFT JOIN service_offerings o ON o.service_code = d.code
                 WHERE d.active = TRUE
                 ORDER BY CASE d.service_mode WHEN 'SELF_SERVICE' THEN 0 ELSE 1 END, d.name
@@ -197,7 +235,7 @@ public class StoreBookingConfigService {
                         ? rs.getInt("secondary_processing_minutes")
                         : rs.getInt("secondary_processing_minutes_override"),
                 rs.getInt("check_in_minutes"), rs.getInt("transfer_minutes"),
-                rs.getInt("checkout_minutes"), rs.getObject("enabled") != null, rs.getBoolean("by_weight")));
+                rs.getInt("checkout_minutes"), rs.getObject("enabled") != null, rs.getBoolean("by_weight"), false));
     }
 
     @Transactional

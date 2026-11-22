@@ -5,6 +5,7 @@ import com.laundry.devicelink.DeviceIdentity;
 import com.laundry.devicelink.DeviceLinkChanged;
 import com.laundry.devicelink.TestDeviceKey;
 import com.laundry.devicelink.LinkState;
+import com.laundry.iot.dto.ProvisioningDtos.DeviceAsset;
 import com.laundry.iot.dto.ProvisioningDtos.PairDeviceRequest;
 import com.laundry.iot.entity.IotDevice;
 import com.laundry.iot.entity.IotDeviceStatus;
@@ -44,6 +45,8 @@ class DeviceRegistryServiceTest {
 
     private static final String DEVICE = "ESP-24A1B2C3D4E5";
     private static final UUID ADMIN = UUID.randomUUID();
+    private static final DeviceAsset ASSET = new DeviceAsset(UUID.randomUUID(), "Aimi", "GA25", null,
+            new java.math.BigDecimal("8500000"), java.time.LocalDate.of(2028, 11, 30), "9 kg");
 
     private final Map<String, IotDevice> devices = new HashMap<>();
     private final ApplicationEventPublisher events = mock(ApplicationEventPublisher.class);
@@ -100,7 +103,7 @@ class DeviceRegistryServiceTest {
     @Test
     void approvedBoardIsAttachedAndThenReportsItsMachine() {
         hello(DEVICE, "2.0", "WASHER");
-        service.approve(DEVICE, ADMIN);
+        service.approve(DEVICE, ASSET, ADMIN);
         assertThat(devices.get(DEVICE).getStatus()).isEqualTo(IotDeviceStatus.VERIFIED);
         assertThat(devices.get(DEVICE).getVerifiedBy()).isEqualTo(ADMIN);
         assertThat(service.linkState(DEVICE).state()).isEqualTo(LinkState.State.VERIFIED);
@@ -117,10 +120,31 @@ class DeviceRegistryServiceTest {
     }
 
     @Test
+    void approvalRecordsTheAssetAndRequiresIt() {
+        hello(DEVICE, "2.0", "WASHER");
+        assertThatThrownBy(() -> service.approve(DEVICE, null, ADMIN))
+                .isInstanceOf(ProvisioningRejectedException.class);
+        assertThat(devices.get(DEVICE).getStatus()).isEqualTo(IotDeviceStatus.UNCLAIMED);
+
+        service.approve(DEVICE, new DeviceAsset(UUID.randomUUID(), " LG ", "FV1408S4W", null,
+                new java.math.BigDecimal("12000000"), null, null), ADMIN);
+        IotDevice device = devices.get(DEVICE);
+        assertThat(device.getStatus()).isEqualTo(IotDeviceStatus.VERIFIED);
+        assertThat(device.getManufacturer()).isEqualTo("LG");
+        assertThat(device.getModel()).isEqualTo("FV1408S4W");
+        assertThat(device.getPurchaseCost()).isEqualByComparingTo("12000000");
+        assertThat(device.getWarrantyUntil()).isNull();      // no warranty
+        assertThat(device.getTechnicalSpecs()).isNull();
+
+        service.updateAsset(DEVICE, ASSET);
+        assertThat(devices.get(DEVICE).getWarrantyUntil()).isEqualTo(java.time.LocalDate.of(2028, 11, 30));
+    }
+
+    @Test
     void theBoardGetsItsQrUrlOnlyOnceTheMachineIsActive() {
         org.springframework.test.util.ReflectionTestUtils.setField(service, "qrBaseUrl", "http://192.168.1.12:5173/");
         hello(DEVICE, "2.0", "WASHER");
-        service.approve(DEVICE, ADMIN);
+        service.approve(DEVICE, ASSET, ADMIN);
         service.startPairing("WM01", new PairDeviceRequest(DEVICE), ADMIN);
         assertThat(service.linkState(DEVICE).qrUrl()).isNull();   // not sold to customers yet
 
@@ -146,7 +170,7 @@ class DeviceRegistryServiceTest {
     @Test
     void firmwareOfAnotherKindIsRefused() {
         hello(DEVICE, "2.0", "LOCKER");
-        service.approve(DEVICE, ADMIN);
+        service.approve(DEVICE, ASSET, ADMIN);
 
         assertThatThrownBy(() -> service.startPairing("WM01", new PairDeviceRequest(DEVICE), ADMIN))
                 .isInstanceOf(ProvisioningRejectedException.class)
@@ -157,7 +181,7 @@ class DeviceRegistryServiceTest {
     @Test
     void unpairRevokesTheBoardUntilAnAdminApprovesItAgain() {
         hello(DEVICE, "2.0", "WASHER");
-        service.approve(DEVICE, ADMIN);
+        service.approve(DEVICE, ASSET, ADMIN);
         service.startPairing("WM01", new PairDeviceRequest(DEVICE), ADMIN);
         when(machineRepository.hasActiveBookingAllocation(machine.getId())).thenReturn(false);
 
@@ -168,7 +192,7 @@ class DeviceRegistryServiceTest {
         assertThat(machine.getDeploymentStatus()).isEqualTo(MachineDeploymentStatus.UNASSIGNED);
         assertThat(service.linkState(DEVICE).state()).isEqualTo(LinkState.State.REVOKED);
 
-        service.approve(DEVICE, ADMIN);
+        service.approve(DEVICE, ASSET, ADMIN);
         assertThat(devices.get(DEVICE).getStatus()).isEqualTo(IotDeviceStatus.VERIFIED);
     }
 
@@ -179,8 +203,8 @@ class DeviceRegistryServiceTest {
         hello("ESP-000000000002", "2.0", "DRYER");
         assertThat(service.availableDevices(null)).isEmpty();   // nothing approved yet
 
-        service.approve(DEVICE, ADMIN);
-        service.approve("ESP-000000000002", ADMIN);
+        service.approve(DEVICE, ASSET, ADMIN);
+        service.approve("ESP-000000000002", ASSET, ADMIN);
 
         assertThat(service.availableDevices(MachineType.WASHER)).extracting("deviceId").containsExactly(DEVICE);
         service.startPairing("WM01", new PairDeviceRequest(DEVICE), ADMIN);
@@ -190,7 +214,7 @@ class DeviceRegistryServiceTest {
     @Test
     void unplugMarksTheBoundMachineOffline() {
         hello(DEVICE, "2.0", "WASHER");
-        service.approve(DEVICE, ADMIN);
+        service.approve(DEVICE, ASSET, ADMIN);
         service.startPairing("WM01", new PairDeviceRequest(DEVICE), ADMIN);
 
         service.onDisconnected(DEVICE);

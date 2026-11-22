@@ -397,6 +397,8 @@ public class MachineService {
 
         log.info("[{}] Command ACK processed: commandId={}, accepted={}, status={}",
                 machineCode, correlationId, accepted, cmd.getStatus());
+        this.events.publishEvent(new DeviceCommandFinished(cmd.getCommandId(), cmd.getCommand(),
+                cmd.getStatus().name(), cmd.getAckReason()));
     }
 
     // ── Offline detector scheduler ────────────────────────────────────────
@@ -513,6 +515,8 @@ public class MachineService {
         for (DeviceCommand cmd : timedOut) {
             log.warn("[{}] Command TIMEOUT: commandId={}, command={}",
                     cmd.getMachineCode(), cmd.getCommandId(), cmd.getCommand());
+            this.events.publishEvent(new DeviceCommandFinished(cmd.getCommandId(), cmd.getCommand(),
+                    DeviceCommandStatus.TIMEOUT.name(), "No ACK within " + commandTimeoutSeconds + "s"));
         }
     }
 

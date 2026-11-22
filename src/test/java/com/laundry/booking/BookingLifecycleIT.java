@@ -35,9 +35,10 @@ import static org.mockito.Mockito.verify;
 @IntegrationTest
 class BookingLifecycleIT {
 
-    private static final long COMBO = 70_000;
-    /** BR-10: 70,000 × 30,000 / (50,000 + 30,000). */
-    private static final long DRYER_STAGE = 26_250;
+    /** V68: a Wash–Dry order costs the washer's profile (50,000) plus the dryer's (30,000). */
+    private static final long COMBO = 80_000;
+    /** BR-10: 80,000 × 30,000 / (50,000 + 30,000), i.e. the dryer's own profile price. */
+    private static final long DRYER_STAGE = 30_000;
 
     @Autowired private ScheduledBookingService bookings;
     @Autowired private BookingLifecycleService lifecycle;

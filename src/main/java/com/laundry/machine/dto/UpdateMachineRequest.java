@@ -45,4 +45,26 @@ public class UpdateMachineRequest {
     @jakarta.validation.constraints.DecimalMin(value = "0.1", message = "capacityKg must be greater than 0")
     @jakarta.validation.constraints.DecimalMax(value = "9999.9", message = "capacityKg is too large")
     private java.math.BigDecimal capacityKg;
+
+    /** Price profile to apply (V64); must be of the machine's type. Null leaves it unchanged. */
+    private UUID priceProfileId;
+
+    /** True removes the price profile: the machine is priced by the service offering again. */
+    private Boolean clearPriceProfile;
+
+    /** Retrofit board (V67): pulses that open the third-party machine for one cycle. Null leaves it unchanged. */
+    @jakarta.validation.constraints.Min(value = 1, message = "vendPulses must be 1-50")
+    @jakarta.validation.constraints.Max(value = 50, message = "vendPulses must be 1-50")
+    private Integer vendPulses;
+
+    /** True goes back to the firmware default (1 pulse). */
+    private Boolean clearVendPulses;
+
+    /** Retrofit dryer (V67): pulses for each purchase of extra drying time. Null leaves it unchanged. */
+    @jakarta.validation.constraints.Min(value = 1, message = "extraVendPulses must be 1-50")
+    @jakarta.validation.constraints.Max(value = 50, message = "extraVendPulses must be 1-50")
+    private Integer extraVendPulses;
+
+    /** True goes back to 1 pulse per purchase. */
+    private Boolean clearExtraVendPulses;
 }

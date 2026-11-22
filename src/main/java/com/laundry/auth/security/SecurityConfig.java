@@ -39,6 +39,7 @@ public class SecurityConfig {
     private static final String STAFF = Role.STAFF.name();
     private static final String OWNER = Role.OWNER.name();
     private static final String ADMIN = Role.ADMIN.name();
+    private static final String KIOSK = Role.KIOSK.name();
 
     @Value("${app.cors.allowed-origins:}")
     private String allowedOrigins;
@@ -101,10 +102,15 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/api/machines/*/events", "/api/machines/*/commands")
                                 .hasAnyRole(STAFF, OWNER, ADMIN)
                         .requestMatchers("/api/machines/check-in", "/api/machines/check-in/**").hasRole(CUSTOMER)
+                        // V66: buy extra drying time on the customer's running dryer.
+                        .requestMatchers("/api/machines/*/extension", "/api/machines/*/extension/**").hasRole(CUSTOMER)
                         // Who may send which command is decided per command in RemoteCommandAuthorizer.
                         .requestMatchers(HttpMethod.POST, "/api/machines/*/commands").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/machines", "/api/machines/*",
                                 "/api/machines/*/status", "/api/machines/*/qr").permitAll()
+
+                        // ── In-store kiosk (V72): walk-in customers without an account ───────
+                        .requestMatchers("/api/kiosk/**").hasRole(KIOSK)
 
                         // ── Customer self-service ────────────────────────────────────────────
                         .requestMatchers("/api/bookings/**", "/api/users/me/bookings").hasRole(CUSTOMER)
@@ -130,6 +136,8 @@ public class SecurityConfig {
 
                         // ── Machines & IoT ──────────────────────────────────────────────────
                         .requestMatchers("/api/admin/iot-devices", "/api/admin/iot-devices/**").hasRole(ADMIN)
+                        .requestMatchers("/api/admin/machine-brands", "/api/admin/machine-brands/**").hasRole(ADMIN)
+                        .requestMatchers("/api/admin/price-profiles", "/api/admin/price-profiles/**").hasAnyRole(OWNER, ADMIN)
                         .requestMatchers("/api/admin/machines", "/api/admin/machines/**").hasAnyRole(OWNER, ADMIN)
 
                         // ── Store staff work ─────────────────────────────────────────────────────
