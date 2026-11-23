@@ -1,6 +1,7 @@
 package com.laundry.device;
 
 import com.laundry.common.Reasons;
+import com.laundry.device.asset.DeviceAssetService;
 import com.laundry.device.link.DeviceIds;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -74,8 +75,10 @@ public final class DeviceControllers {
     public static class AdminDeviceController {
         private final DeviceAdminService service;
         private final DeviceCommandService commands;
+        private final DeviceAssetService assets;
 
-        public record ApproveBody(@NotBlank String fingerprint) {
+        /** asset (tùy chọn): xác nhận tài sản ngay khi duyệt, cùng một giao dịch. */
+        public record ApproveBody(@NotBlank String fingerprint, @Valid DeviceAssetService.AssetInput asset) {
         }
 
         public record BindBody(UUID machineId, UUID lockerId, @NotBlank String reason) {
@@ -95,9 +98,9 @@ public final class DeviceControllers {
         }
 
         @PostMapping("/api/admin/devices/{id}/approve")
-        @Operation(summary = "Duyệt khóa của bo; fingerprint là mã XT A1B2-C3D4 hiện trên màn hình bo")
+        @Operation(summary = "Duyệt khóa của bo; fingerprint là mã XT A1B2-C3D4 hiện trên màn hình bo; asset tùy chọn")
         public DeviceAdminService.DeviceView approve(@PathVariable String id, @Valid @RequestBody ApproveBody body) {
-            return service.approve(id, body.fingerprint());
+            return assets.approve(id, body.fingerprint(), body.asset());
         }
 
         @PostMapping("/api/admin/devices/{id}/bind")
