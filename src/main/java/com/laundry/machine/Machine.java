@@ -36,6 +36,8 @@ public class Machine extends AssignedIdEntity<UUID> {
     private int cycleMinutes;
     /** null = chưa có giá, không bán (§4.1). */
     private Long priceVnd;
+    /** Profile giá đang gắn; khi có thì priceVnd/cycleMinutes luôn bằng profile (V3). null = giá riêng của máy. */
+    private UUID priceProfileId;
     private boolean autoDosing;
     @Enumerated(EnumType.STRING)
     private AdminStatus adminStatus = AdminStatus.ACTIVE;

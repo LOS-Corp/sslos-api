@@ -53,11 +53,23 @@ public class DeviceRegistry {
             log.info("[IOT] New board {} ({}) key {} waiting for approval", deviceId, d.getDeviceType(), d.getKeyFingerprint());
         } else {
             d = found.get();
-            if (!Arrays.equals(DeviceKeys.decode(d.getPublicKey()), publicKey)) {
+            boolean sameKey = Arrays.equals(DeviceKeys.decode(d.getPublicKey()), publicKey);
+            if (!sameKey && d.getLinkState() == Device.LinkState.REVOKED) {
+                // Thiết bị đã thu hồi (ví dụ đem bảo hành, về bị thay chip/xóa flash): ghim khóa mới nhưng vẫn REVOKED,
+                // nên chưa nhận được tài khoản MQTT cho tới khi admin duyệt lại và đối chiếu mã XT mới trên màn hình.
+                // Giữ nguyên dòng devices để không mất hãng, model, giá mua, bảo hành.
+                d.setPublicKey(DeviceKeys.encode(publicKey));
+                d.setKeyFingerprint(DeviceKeys.shortFingerprint(DeviceKeys.fingerprint(publicKey)));
+                log.warn("[IOT] Revoked board {} presented a new key {}; waiting for re-approval", deviceId, d.getKeyFingerprint());
+            } else if (!sameKey) {
                 log.warn("[IOT] {} presented a key other than the pinned one", deviceId);
                 return HelloResult.AUTH_FAILED;
             }
-            if (d.getLinkState() == Device.LinkState.REVOKED) return HelloResult.REVOKED;
+            if (d.getLinkState() == Device.LinkState.REVOKED) {
+                d.setLastSeenAt(clock.instant());
+                devices.save(d);
+                return HelloResult.REVOKED;
+            }
         }
         d.setFirmwareVersion(trim(firmware, 40));
         d.setLastIp(trim(ip, 45));

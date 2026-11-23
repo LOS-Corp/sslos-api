@@ -11,6 +11,8 @@ import com.laundry.locker.LockerRepository;
 import com.laundry.machine.Machine;
 import com.laundry.machine.MachineAvailabilityChanged;
 import com.laundry.machine.MachineRepository;
+import com.laundry.order.OrderLeg;
+import com.laundry.order.OrderLegRepository;
 import com.laundry.security.Actor;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.ApplicationEventPublisher;
@@ -31,6 +33,7 @@ public class DeviceAdminService {
     private final DeviceRepository devices;
     private final MachineRepository machines;
     private final LockerRepository lockers;
+    private final OrderLegRepository legs;
     private final MqttAccountService accounts;
     private final DeviceCommandRepository commandRepository;
     private final DeviceLinkHub hub;
@@ -104,6 +107,7 @@ public class DeviceAdminService {
             });
         }
         UUID oldMachine = d.getMachineId();
+        if (oldMachine != null && !oldMachine.equals(machineId)) requireIdle(oldMachine);
         d.setMachineId(machineId);
         d.setLockerId(lockerId);
         d.setLinkState(Device.LinkState.BOUND);
@@ -121,6 +125,7 @@ public class DeviceAdminService {
         Device d = locked(id);
         if (d.getLinkState() != Device.LinkState.BOUND) throw new BusinessException(ErrorCode.DEVICE_STATE, "Bo chưa gắn");
         UUID machineId = d.getMachineId();
+        if (machineId != null) requireIdle(machineId);
         d.setMachineId(null);
         d.setLockerId(null);
         d.setLinkState(Device.LinkState.VERIFIED);
@@ -128,6 +133,58 @@ public class DeviceAdminService {
         if (machineId != null) events.publishEvent(new MachineAvailabilityChanged(machineId, false, "Gỡ bo mạch"));
         notifyBoard(id);
         return view(d);
+    }
+
+    /**
+     * Thay thiết bị (máy thật) đang đứng ở một máy/tủ trong hệ thống bằng thiết bị dự phòng, trong một giao dịch:
+     * máy trong hệ thống giữ nguyên mã, QR, giá, lịch đặt và không bị đánh dấu ngừng phục vụ; thiết bị cũ về trạng thái
+     * đã duyệt, chưa gắn (đem đi bảo hành, sửa). Từ chối khi máy đang có khách.
+     */
+    @Transactional
+    public DeviceView replace(String oldId, String newId, String rawReason) {
+        String reason = Reasons.require(rawReason);
+        if (oldId.equals(newId)) throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Chọn thiết bị dự phòng khác thiết bị đang gắn");
+        // Khóa theo thứ tự cố định để hai yêu cầu thay chéo nhau không deadlock.
+        Device first = locked(oldId.compareTo(newId) < 0 ? oldId : newId);
+        Device second = locked(oldId.compareTo(newId) < 0 ? newId : oldId);
+        Device old = first.getId().equals(oldId) ? first : second;
+        Device spare = old == first ? second : first;
+        if (old.getLinkState() != Device.LinkState.BOUND) throw new BusinessException(ErrorCode.DEVICE_STATE, "Thiết bị " + oldId + " chưa gắn vào máy/tủ nào");
+        if (spare.getLinkState() != Device.LinkState.VERIFIED) {
+            throw new BusinessException(ErrorCode.DEVICE_STATE, spare.getLinkState() == Device.LinkState.BOUND
+                    ? "Thiết bị dự phòng " + newId + " đang gắn ở chỗ khác; gỡ ra trước"
+                    : "Thiết bị dự phòng " + newId + " cần được duyệt trước");
+        }
+        if (spare.getDeviceType() != old.getDeviceType()) {
+            throw new BusinessException(ErrorCode.MACHINE_TYPE_MISMATCH, "Thiết bị " + spare.getDeviceType()
+                    + " không thay được cho thiết bị " + old.getDeviceType());
+        }
+        UUID machineId = old.getMachineId(), lockerId = old.getLockerId();
+        if (machineId != null) requireIdle(machineId);
+        old.setMachineId(null);
+        old.setLockerId(null);
+        old.setLinkState(Device.LinkState.VERIFIED);
+        devices.saveAndFlush(old); // machine_id/locker_id là UNIQUE: nhả chỗ trước khi thiết bị dự phòng nhận.
+        spare.setMachineId(machineId);
+        spare.setLockerId(lockerId);
+        spare.setLinkState(Device.LinkState.BOUND);
+        Map<String, String> target = Map.of("machineId", String.valueOf(machineId), "lockerId", String.valueOf(lockerId));
+        audit.user("DEVICE_UNBOUND", "device", oldId, reason + " (thay bằng " + newId + ")", target, null);
+        audit.user("DEVICE_BOUND", "device", newId, reason + " (thay cho " + oldId + ")", null, target);
+        notifyBoard(oldId);
+        notifyBoard(newId);
+        return view(spare);
+    }
+
+    /** Máy có khách đang chờ bấm START, đang chạy hoặc chờ lấy đồ: không đổi thiết bị, kẻo lượt đó không còn ai báo kết thúc. */
+    private void requireIdle(UUID machineId) {
+        List<OrderLeg> busy = legs.onMachine(machineId, List.of(OrderLeg.Status.ACTIVATED, OrderLeg.Status.RUNNING,
+                OrderLeg.Status.AWAITING_UNLOAD));
+        if (!busy.isEmpty()) {
+            String code = machines.findById(machineId).map(Machine::getCode).orElse("?");
+            throw new BusinessException(ErrorCode.DEVICE_STATE, "Máy " + code + " đang có khách (chờ bấm START, đang chạy"
+                    + " hoặc chờ lấy đồ). Đợi xong lượt, hoặc chuyển máy sang Bảo trì cho các đơn chưa chạy, rồi thử lại.");
+        }
     }
 
     /** Thu hồi: tài khoản broker bị khóa, bo phải được duyệt lại. */

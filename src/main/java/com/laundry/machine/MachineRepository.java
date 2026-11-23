@@ -23,6 +23,11 @@ public interface MachineRepository extends JpaRepository<Machine, UUID> {
 
     List<Machine> findByMachineTypeOrderByDisplayOrderAscCodeAsc(Machine.Type type);
 
+    List<Machine> findByPriceProfileIdOrderByCode(UUID priceProfileId);
+
+    @Query("select m.priceProfileId, count(m) from Machine m where m.priceProfileId is not null group by m.priceProfileId")
+    List<Object[]> countByProfile();
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select m from Machine m where m.id = :id")
     Optional<Machine> lock(UUID id);

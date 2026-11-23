@@ -87,6 +87,9 @@ public final class DeviceControllers {
         public record ReasonBody(@NotBlank String reason) {
         }
 
+        public record ReplaceBody(@NotBlank @Pattern(regexp = DeviceIds.REGEX) String replacementId, @NotBlank String reason) {
+        }
+
         @GetMapping("/api/admin/devices")
         public List<DeviceAdminService.DeviceView> list() {
             return service.list();
@@ -111,6 +114,12 @@ public final class DeviceControllers {
         @PostMapping("/api/admin/devices/{id}/unbind")
         public DeviceAdminService.DeviceView unbind(@PathVariable String id, @Valid @RequestBody ReasonBody body) {
             return service.unbind(id, body.reason());
+        }
+
+        @PostMapping("/api/admin/devices/{id}/replace")
+        @Operation(summary = "Thay thiết bị đang gắn bằng thiết bị dự phòng đã duyệt, cùng loại; máy/tủ giữ nguyên; từ chối khi máy có khách")
+        public DeviceAdminService.DeviceView replace(@PathVariable String id, @Valid @RequestBody ReplaceBody body) {
+            return service.replace(id, body.replacementId(), body.reason());
         }
 
         @PostMapping("/api/admin/devices/{id}/revoke")

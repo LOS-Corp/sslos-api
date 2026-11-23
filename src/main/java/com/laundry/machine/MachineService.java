@@ -29,6 +29,7 @@ import java.util.UUID;
 public class MachineService {
 
     private final MachineRepository machines;
+    private final PriceProfileRepository profiles;
     private final DryerTimePackRepository packs;
     private final MachineReservationRepository reservations;
     private final MachineStatusResolver statusResolver;
@@ -45,13 +46,17 @@ public class MachineService {
     public List<MachineView> list(boolean includeRetired) {
         List<Machine> all = includeRetired ? machines.listAll() : machines.listInService();
         Map<UUID, MachineStatusResolver.Live> live = statusResolver.resolve(all);
-        return all.stream().map(m -> MachineView.of(m, live.get(m.getId()), packViews(m))).toList();
+        Map<UUID, String> names = new java.util.HashMap<>();
+        profiles.findAll().forEach(p -> names.put(p.getId(), p.getName()));
+        return all.stream().map(m -> MachineView.of(m, live.get(m.getId()), packViews(m), names.get(m.getPriceProfileId()))).toList();
     }
 
     @Transactional(readOnly = true)
     public MachineView view(UUID id) {
         Machine m = get(id);
-        return MachineView.of(m, statusResolver.resolve(m), packViews(m));
+        String profileName = m.getPriceProfileId() == null ? null
+                : profiles.findById(m.getPriceProfileId()).map(PriceProfile::getName).orElse(null);
+        return MachineView.of(m, statusResolver.resolve(m), packViews(m), profileName);
     }
 
     // ---- Danh mục máy ----
@@ -86,6 +91,7 @@ public class MachineService {
             before.put("cycleMinutes", m.getCycleMinutes());
             after.put("cycleMinutes", body.cycleMinutes());
             m.setCycleMinutes(body.cycleMinutes());
+            detachProfile(m, before, after);
         }
         if (body.autoDosing() != null) m.setAutoDosing(body.autoDosing());
         if (body.displayOrder() != null) m.setDisplayOrder(body.displayOrder());
@@ -97,11 +103,20 @@ public class MachineService {
     @Transactional
     public MachineView setPrice(UUID id, Long price, String reason) {
         Machine m = get(id);
-        Long before = m.getPriceVnd();
+        Map<String, Object> before = mapOf("priceVnd", m.getPriceVnd());
+        Map<String, Object> after = mapOf("priceVnd", price);
         m.setPriceVnd(price);
-        audit.user("MACHINE_PRICE_CHANGED", "machine", id.toString(), Reasons.require(reason),
-                mapOf("priceVnd", before), mapOf("priceVnd", price));
+        if (!java.util.Objects.equals(before.get("priceVnd"), price)) detachProfile(m, before, after);
+        audit.user("MACHINE_PRICE_CHANGED", "machine", id.toString(), Reasons.require(reason), before, after);
         return view(id);
+    }
+
+    /** Đặt giá/số phút riêng cho một máy đang gắn profile: máy tách khỏi profile, sửa profile sau này không đổi máy này. */
+    private static void detachProfile(Machine m, Map<String, Object> before, Map<String, Object> after) {
+        if (m.getPriceProfileId() == null) return;
+        before.put("priceProfileId", m.getPriceProfileId());
+        after.put("priceProfileId", null);
+        m.setPriceProfileId(null);
     }
 
     /**
@@ -138,8 +153,10 @@ public class MachineService {
         p.setPriceVnd(body.priceVnd());
         p.setActive(body.active());
         packs.saveAndFlush(p);
-        audit.user("DRYER_PACK_ADDED", "machine", machineId.toString(), Reasons.require(body.reason()), null,
-                Map.of("minutes", body.minutes(), "priceVnd", body.priceVnd()));
+        Map<String, Object> before = new LinkedHashMap<>();
+        Map<String, Object> after = new LinkedHashMap<>(Map.of("minutes", body.minutes(), "priceVnd", body.priceVnd()));
+        detachProfile(m, before, after);
+        audit.user("DRYER_PACK_ADDED", "machine", machineId.toString(), Reasons.require(body.reason()), before, after);
         return PackView.of(p);
     }
 
@@ -147,12 +164,13 @@ public class MachineService {
     public PackView updatePack(UUID machineId, UUID packId, MachineDtos.PackBody body) {
         DryerTimePack p = packs.findById(packId).filter(x -> x.getMachineId().equals(machineId))
                 .orElseThrow(() -> BusinessException.notFound("gói sấy"));
-        Map<String, Object> before = Map.of("minutes", p.getMinutes(), "priceVnd", p.getPriceVnd(), "active", p.isActive());
+        Map<String, Object> before = new LinkedHashMap<>(Map.of("minutes", p.getMinutes(), "priceVnd", p.getPriceVnd(), "active", p.isActive()));
+        Map<String, Object> after = new LinkedHashMap<>(Map.of("minutes", body.minutes(), "priceVnd", body.priceVnd(), "active", body.active()));
         p.setMinutes(body.minutes());
         p.setPriceVnd(body.priceVnd());
         p.setActive(body.active());
-        audit.user("DRYER_PACK_CHANGED", "machine", machineId.toString(), Reasons.require(body.reason()), before,
-                Map.of("minutes", body.minutes(), "priceVnd", body.priceVnd(), "active", body.active()));
+        detachProfile(get(machineId), before, after);
+        audit.user("DRYER_PACK_CHANGED", "machine", machineId.toString(), Reasons.require(body.reason()), before, after);
         return PackView.of(p);
     }
 

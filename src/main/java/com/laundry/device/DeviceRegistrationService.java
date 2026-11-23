@@ -90,7 +90,7 @@ public class DeviceRegistrationService {
         DeviceRegistry.HelloResult result = registry.onHello(deviceId, firmware, deviceType, key, clientAddress, rssi);
         switch (result) {
             case AUTH_FAILED -> {
-                return new Refused("AUTH_FAILED", "Bo đã được ghim một khóa khác; admin cần xóa bo rồi duyệt lại");
+                return new Refused("AUTH_FAILED", "Bo đã được ghim một khóa khác; admin cần thu hồi rồi duyệt lại");
             }
             case REVOKED -> {
                 return new Refused("REVOKED", "Bo đã bị thu hồi; admin cần duyệt lại");
