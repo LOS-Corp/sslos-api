@@ -36,6 +36,14 @@ public interface MachineReservationRepository extends JpaRepository<MachineReser
     List<MachineReservation> upcomingMaintenance(UUID machineId, Instant from);
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
+    /** Máy đang trong một khoảng bảo trì đã lên lịch. */
+    @Query("""
+            select distinct r.machineId from MachineReservation r
+            where r.kind = com.laundry.machine.MachineReservation.Kind.MAINTENANCE and r.active
+              and r.startsAt <= :now and r.endsAt > :now
+            """)
+    List<UUID> inMaintenanceWindow(Instant now);
+
     @Query("select r from MachineReservation r where r.id = :id")
     Optional<MachineReservation> lock(UUID id);
 }

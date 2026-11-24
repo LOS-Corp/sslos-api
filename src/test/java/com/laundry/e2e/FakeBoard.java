@@ -108,7 +108,7 @@ public final class FakeBoard implements AutoCloseable {
             case "link" -> {
                 linkState = body.path("state").asString();
                 machineCode = body.path("machineCode").asString("");
-                // Như firmware: đã gắn máy thì báo trạng thái (backend tự gửi self-test lắp đặt khi nhận heartbeat đầu).
+                // Như firmware: đã gắn máy thì báo trạng thái (backend ghi nhận bo online trước khi self-test).
                 if ("BOUND".equals(linkState)) up("heartbeat", identity().put("status", "AVAILABLE").put("running", false));
                 if ("HELLO_REQUIRED".equals(linkState)) {
                     up("hello", JSON.createObjectNode().put("deviceId", deviceId).put("firmwareVersion", "fake-1.0")

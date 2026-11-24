@@ -54,6 +54,26 @@ public class AvailabilityService {
     public record Slot(Instant start, int washers, int dryers, boolean bookable) {
     }
 
+    /** Một giờ bắt đầu đặt được cùng máy đề xuất (combo: máy sấy tính theo đúng máy giặt đó). */
+    public record Suggestion(Instant start, Option washer, Option dryer, long totalVnd) {
+    }
+
+    public record SuggestResult(Instant from, Instant to, List<Suggestion> suggestions, String message) {
+    }
+
+    /** Một máy và giờ sớm nhất nó còn trống trong khoảng khách chọn; {@code start} null = không còn (lý do ở {@code machine.reason}). */
+    public record MachineSlot(Option machine, Instant start) {
+    }
+
+    /** Khoảng giờ khách chọn tối đa 24 giờ (quét từng mốc 15 phút như {@link #slots}). */
+    static final int MAX_SUGGEST_HOURS = 24;
+
+    /** Máy tốt nhất ở cùng giờ: rẻ nhất, rồi chạy nhanh nhất, rồi theo số hiệu. */
+    private static final Comparator<Option> BEST = Comparator
+            .comparing((Option o) -> o.priceVnd() == null ? Long.MAX_VALUE : o.priceVnd())
+            .thenComparingInt(Option::cycleMinutes)
+            .thenComparing(Option::code);
+
     /** Máy cần cho dịch vụ. */
     public static boolean needs(Order.Service service, Machine.Type type) {
         return switch (service) {
@@ -122,6 +142,113 @@ public class AvailabilityService {
             }
         }
         return out;
+    }
+
+    /**
+     * Khách chọn khoảng giờ có thể đến [{@code from}, {@code to}]; trả các giờ bắt đầu sớm nhất (mốc 15 phút) còn đủ máy,
+     * mỗi giờ kèm máy tốt nhất, không trùng lượt khác (cùng kiểm tra với {@link #advance}). Tối đa {@code limit} giờ.
+     */
+    @Transactional(readOnly = true)
+    public SuggestResult suggest(Order.Service service, Instant from, Instant to, int limit) {
+        return suggest(service, from, to, limit, null, null, null);
+    }
+
+    /**
+     * Như trên nhưng chỉ xét đúng máy {@code washerId}/{@code dryerId} khi có (đổi giờ giữ nguyên máy), và bỏ qua lượt
+     * của đơn {@code ignoreOrderId} (lượt cũ sẽ được nhả khi đổi).
+     */
+    @Transactional(readOnly = true)
+    public SuggestResult suggest(Order.Service service, Instant from, Instant to, int limit, UUID washerId, UUID dryerId,
+                                 UUID ignoreOrderId) {
+        if (service == Order.Service.LAUNDRY) throw new BusinessException(ErrorCode.SERVICE_DISABLED);
+        if (from == null || to == null || to.isBefore(from)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Giờ kết thúc phải sau giờ bắt đầu");
+        }
+        if (Duration.between(from, to).toHours() > MAX_SUGGEST_HOURS) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Chọn khoảng giờ tối đa " + MAX_SUGGEST_HOURS + " giờ");
+        }
+        Instant now = clock.instant();
+        List<Suggestion> out = new ArrayList<>();
+        int max = Math.max(1, Math.min(limit, 10));
+        for (Instant t = roundUp(from.isBefore(now) ? now : from); !t.isAfter(to) && out.size() < max;
+             t = t.plus(Duration.ofMinutes(SLOT_MINUTES))) {
+            Suggestion s = bestAt(service, t, washerId, dryerId, ignoreOrderId);
+            if (s != null) out.add(s);
+        }
+        String message = out.isEmpty() ? "Không còn máy trống trong khoảng giờ này; thử khoảng khác hoặc ngày khác" : null;
+        return new SuggestResult(from, to, out, message);
+    }
+
+    /**
+     * Khách chọn khoảng giờ có thể đến rồi tự chọn máy: mỗi máy cần cho dịch vụ kèm giờ sớm nhất (mốc 15 phút) nó còn trống
+     * trong khoảng, không trùng lượt khác. Combo giặt + sấy: máy giặt chỉ tính là trống khi lúc đó còn máy sấy cho nó
+     * (máy sấy chọn sau, theo giờ của máy giặt). Máy trống xếp trước theo giờ, rồi tải trọng.
+     */
+    @Transactional(readOnly = true)
+    public List<MachineSlot> machineWindow(Order.Service service, Instant from, Instant to) {
+        if (service == Order.Service.LAUNDRY) throw new BusinessException(ErrorCode.SERVICE_DISABLED);
+        if (from == null || to == null || to.isBefore(from)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Giờ kết thúc phải sau giờ bắt đầu");
+        }
+        if (Duration.between(from, to).toHours() > MAX_SUGGEST_HOURS) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Chọn khoảng giờ tối đa " + MAX_SUGGEST_HOURS + " giờ");
+        }
+        Machine.Type type = service == Order.Service.DRY ? Machine.Type.DRYER : Machine.Type.WASHER;
+        java.util.Map<UUID, MachineSlot> found = new java.util.LinkedHashMap<>();
+        java.util.Map<UUID, Option> lastSeen = new java.util.LinkedHashMap<>();
+        Instant now = clock.instant();
+        for (Instant t = roundUp(from.isBefore(now) ? now : from); !t.isAfter(to); t = t.plus(Duration.ofMinutes(SLOT_MINUTES))) {
+            AdvanceResult r = advance(service, t, null, null);
+            List<Option> list = type == Machine.Type.DRYER ? r.dryers() : r.washers();
+            for (Option o : list) {
+                if (found.containsKey(o.machineId())) continue;
+                lastSeen.put(o.machineId(), o);
+                if (!o.available()) continue;
+                if (service == Order.Service.WASH_DRY && advance(service, t, o.machineId(), null).dryers().stream()
+                        .noneMatch(Option::available)) {
+                    continue;
+                }
+                found.put(o.machineId(), new MachineSlot(o, t));
+            }
+            if (!lastSeen.isEmpty() && found.size() == lastSeen.size()) break;
+        }
+        List<MachineSlot> out = new ArrayList<>(found.values());
+        out.sort(Comparator.comparing(MachineSlot::start).thenComparing(m -> m.machine().capacityKg())
+                .thenComparing(m -> m.machine().code()));
+        for (Option o : lastSeen.values()) {
+            if (found.containsKey(o.machineId())) continue;
+            String reason = o.reason() != null && !o.available() && o.reason().startsWith("Chỉ đặt") ? o.reason()
+                    : service == Order.Service.WASH_DRY ? "Không còn máy giặt + máy sấy trống trong khoảng giờ này"
+                    : "Không còn trống trong khoảng giờ này";
+            out.add(new MachineSlot(new Option(o.machineId(), o.code(), o.type(), o.capacityKg(), o.cycleMinutes(),
+                    o.priceVnd(), false, reason, null, false), null));
+        }
+        return out;
+    }
+
+    private Suggestion bestAt(Order.Service service, Instant t, UUID washerId, UUID dryerId, UUID ignoreOrderId) {
+        AdvanceResult r = advance(service, t, washerId, ignoreOrderId);
+        java.util.function.Predicate<Option> washerOk = o -> o.available() && (washerId == null || o.machineId().equals(washerId));
+        java.util.function.Predicate<Option> dryerOk = o -> o.available() && (dryerId == null || o.machineId().equals(dryerId));
+        return switch (service) {
+            case WASH -> r.washers().stream().filter(washerOk).min(BEST)
+                    .map(w -> new Suggestion(t, w, null, price(w))).orElse(null);
+            case DRY -> r.dryers().stream().filter(dryerOk).min(BEST)
+                    .map(d -> new Suggestion(t, null, d, price(d))).orElse(null);
+            case WASH_DRY -> {
+                for (Option w : r.washers().stream().filter(washerOk).sorted(BEST).toList()) {
+                    Option d = advance(service, t, w.machineId(), ignoreOrderId).dryers().stream()
+                            .filter(dryerOk).min(BEST).orElse(null);
+                    if (d != null) yield new Suggestion(t, w, d, price(w) + price(d));
+                }
+                yield null;
+            }
+            case LAUNDRY -> null;
+        };
+    }
+
+    private static long price(Option o) {
+        return o.priceVnd() == null ? 0 : o.priceVnd();
     }
 
     /** Kiosk: mỗi máy rảnh ngay hay rảnh lúc nào (trong {@code kioskMaxWaitMinutes}). */

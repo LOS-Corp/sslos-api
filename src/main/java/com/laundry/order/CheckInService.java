@@ -162,7 +162,7 @@ public class CheckInService {
         }
         // Máy được gán hỏng / mất kết nối / bảo trì: chuyển máy hoặc hoàn 100% (§12).
         Machine m = machines.findById(leg.getMachineId()).orElseThrow();
-        if (m.getAdminStatus() != Machine.AdminStatus.ACTIVE || !devices.isOnline(m.getId())) {
+        if (!m.inService() || !devices.isOnline(m.getId())) {
             if (!reassignment.reassign(o, leg, "Máy " + m.getCode() + " không dùng được lúc check-in")) {
                 return new Result(Outcome.REFUNDED, o, m.getCode(), null, null, List.of(),
                         "Máy gặp sự cố và không có máy thay thế; đã hoàn 100% số tiền");

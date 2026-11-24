@@ -49,6 +49,10 @@ public class ActivationService {
         if (m.getAdminStatus() != Machine.AdminStatus.ACTIVE) {
             return new Result(false, m.getCode(), null, "Máy " + m.getCode() + " đang " + m.getAdminStatus());
         }
+        if (!m.inService()) {
+            return new Result(false, m.getCode(), null, "Máy " + m.getCode() + " chưa được đưa vào hoạt động lại ("
+                    + m.getDeploymentStatus() + ")");
+        }
         // Check-in sớm: máy chạy sớm nhưng lượt không được kéo dài (§6.2): kéo đầu khoảng giữ về hiện tại.
         if (now.isBefore(support.reservation(leg).getStartsAt())
                 && !support.tryResize(leg, now, support.reservation(leg).getEndsAt())) {

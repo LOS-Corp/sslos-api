@@ -132,6 +132,8 @@ public class MachineService {
         m.setAdminStatus(status);
         m.setStatusReason(status == Machine.AdminStatus.ACTIVE ? null : reason);
         m.setStatusChangedAt(clock.instant());
+        // Lỗi / bảo trì / ngừng dùng: muốn cho thuê lại phải self-test đạt rồi đưa vào hoạt động (mục Lắp đặt).
+        if (status != Machine.AdminStatus.ACTIVE) m.requireRetest(clock.instant());
         m.setStatusChangedBy(Actor.userId());
         audit.user("MACHINE_STATUS_CHANGED", "machine", id.toString(), reason, Map.of("status", before),
                 Map.of("status", status));

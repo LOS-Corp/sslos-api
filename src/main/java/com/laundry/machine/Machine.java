@@ -67,9 +67,33 @@ public class Machine extends AssignedIdEntity<UUID> {
     @Version
     private long version;
 
-    /** Bán được: đang dùng, đã đưa vào hoạt động (V4) và có giá. */
+    /** Khách dùng được: đang dùng và đã đưa vào hoạt động (self-test đạt rồi xác nhận, V4). */
+    public boolean inService() {
+        return adminStatus == AdminStatus.ACTIVE && deploymentStatus == DeploymentStatus.ACTIVE;
+    }
+
+    /** Bán được: dùng được và có giá. */
     public boolean sellable() {
-        return adminStatus == AdminStatus.ACTIVE && deploymentStatus == DeploymentStatus.ACTIVE && priceVnd != null;
+        return inService() && priceVnd != null;
+    }
+
+    /**
+     * Bảo trì / lỗi / ngừng dùng: máy chỉ cho thuê lại sau khi self-test đạt và được đưa vào hoạt động lại.
+     * Máy chưa từng đưa vào hoạt động (đang lắp đặt) giữ nguyên bước.
+     */
+    public void requireRetest(Instant now) {
+        if (deploymentStatus != DeploymentStatus.ACTIVE && deploymentStatus != DeploymentStatus.TEST_PASSED) return;
+        deploymentStatus = DeploymentStatus.MAINTENANCE;
+        if (maintenanceSince == null) maintenanceSince = now;
+    }
+
+    /** Đổi bo khác: kết quả self-test của bo cũ bỏ đi, bo mới phải self-test (bấm tay) rồi được xác nhận lại. */
+    public void deviceSwapped(Instant now) {
+        if (deploymentStatus == DeploymentStatus.UNASSIGNED) return;
+        boolean wasInService = commissionedAt != null || maintenanceSince != null;
+        deploymentStatus = DeploymentStatus.PROVISIONED;
+        clearSelfTest();
+        if (wasInService && maintenanceSince == null) maintenanceSince = now;
     }
 
     /** Vừa gắn bo mới: bắt đầu lại từ self-test, kết quả cũ (của bo khác) bỏ đi. */

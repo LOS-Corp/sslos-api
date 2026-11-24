@@ -40,7 +40,7 @@ public class MachineDeploymentController {
     }
 
     @PostMapping("/pairing")
-    @Operation(summary = "Gắn bo đã duyệt vào máy chưa có bo; self-test tự chạy khi bo gửi heartbeat")
+    @Operation(summary = "Gắn bo đã duyệt vào máy chưa có bo; self-test chạy khi người vận hành bấm (POST /self-test)")
     public ProvisioningView pair(@PathVariable String code, @Valid @RequestBody PairBody body) {
         return deployment.pair(code, body.deviceId());
     }

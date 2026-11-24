@@ -88,7 +88,12 @@ public class SecurityConfig {
                                 "/api/admin/machines/*/maintenance", "/api/admin/machines/*/unpair")
                         .hasAnyRole(Role.ADMIN.name(), Role.OWNER.name())
                         .requestMatchers("/api/admin/**").hasRole(Role.ADMIN.name())
+                        // Máy (giá, gói sấy thêm, lịch bảo trì, profile giá): Quản trị viên làm được như chủ cửa hàng.
+                        .requestMatchers("/api/owner/machines/**").hasAnyRole(Role.OWNER.name(), Role.ADMIN.name())
                         .requestMatchers("/api/owner/**").hasRole(Role.OWNER.name())
+                        // Gửi lệnh / đổi trạng thái máy: thêm Quản trị viên (trang Chi tiết máy).
+                        .requestMatchers("/api/staff/machines/*/commands", "/api/staff/machines/*/status")
+                        .hasAnyRole(Role.STAFF.name(), Role.OWNER.name(), Role.ADMIN.name())
                         .requestMatchers("/api/staff/**").hasAnyRole(Role.STAFF.name(), Role.OWNER.name())
                         .requestMatchers("/api/**").hasAnyRole(Role.CUSTOMER.name(), Role.STAFF.name(),
                                 Role.OWNER.name(), Role.ADMIN.name())

@@ -41,6 +41,21 @@ public final class OrderControllers {
             return availability.advance(service, start, washerId, null);
         }
 
+        @GetMapping("/api/public/availability/machines")
+        @Operation(summary = "Khách chọn khoảng giờ có thể đến: mọi máy của dịch vụ kèm giờ sớm nhất nó còn trống (khách tự chọn máy)")
+        public List<AvailabilityService.MachineSlot> machineWindow(@RequestParam Order.Service service,
+                                                                  @RequestParam Instant from, @RequestParam Instant to) {
+            return availability.machineWindow(service, from, to);
+        }
+
+        @GetMapping("/api/public/availability/suggest")
+        @Operation(summary = "Khách chọn khoảng giờ có thể đến; trả giờ sớm nhất còn máy (kèm máy đề xuất) và vài giờ dự phòng")
+        public AvailabilityService.SuggestResult suggest(@RequestParam Order.Service service, @RequestParam Instant from,
+                                                         @RequestParam Instant to,
+                                                         @RequestParam(defaultValue = "4") int limit) {
+            return availability.suggest(service, from, to, limit);
+        }
+
         @GetMapping("/api/public/availability/slots")
         @Operation(summary = "Các khung 15 phút của một ngày (giờ cửa hàng) và số máy còn trống")
         public List<AvailabilityService.Slot> slots(@RequestParam Order.Service service, @RequestParam LocalDate date) {
@@ -53,6 +68,8 @@ public final class OrderControllers {
     @Tag(name = "Khách · Đơn đặt trước")
     public static class CustomerOrderController {
         private final BookingService booking;
+        private final AvailabilityService availability;
+        private final OrderLegRepository legs;
         private final DryerExtensionService extensions;
         private final OrderRepository orders;
         private final OrderViews views;
@@ -102,6 +119,19 @@ public final class OrderControllers {
         @Operation(summary = "Hủy: trước T−60' hoặc 10' sau khi đặt hoàn 100%; muộn hơn mất tiền giữ chỗ")
         public OrderViews.OrderView cancel(@PathVariable UUID id) {
             return views.view(booking.cancelByCustomer(Actor.userId(), id), true);
+        }
+
+        @GetMapping("/api/orders/{id}/reschedule-options")
+        @Operation(summary = "Đổi giờ: khách chọn khoảng giờ có thể đến; trả giờ sớm nhất mà chính máy của đơn còn trống")
+        public AvailabilityService.SuggestResult rescheduleOptions(@PathVariable UUID id, @RequestParam Instant from,
+                                                                   @RequestParam Instant to) {
+            Order o = owned(id);
+            List<OrderLeg> ls = legs.findByOrderIdOrderByLegNo(o.getId());
+            UUID washer = ls.stream().filter(l -> l.getMachineType() == com.laundry.machine.Machine.Type.WASHER)
+                    .map(OrderLeg::getMachineId).findFirst().orElse(null);
+            UUID dryer = ls.stream().filter(l -> l.getMachineType() == com.laundry.machine.Machine.Type.DRYER)
+                    .map(OrderLeg::getMachineId).findFirst().orElse(null);
+            return availability.suggest(o.getService(), from, to, 4, washer, dryer, o.getId());
         }
 
         @PostMapping("/api/orders/{id}/reschedule")

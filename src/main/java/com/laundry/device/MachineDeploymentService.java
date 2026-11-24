@@ -10,6 +10,8 @@ import com.laundry.machine.Machine;
 import com.laundry.machine.Machine.DeploymentStatus;
 import com.laundry.machine.MachineAvailabilityChanged;
 import com.laundry.machine.MachineRepository;
+import com.laundry.machine.MachineReservationRepository;
+import com.laundry.security.Actor;
 import com.laundry.order.OrderLeg;
 import com.laundry.order.OrderLegRepository;
 import lombok.RequiredArgsConstructor;
@@ -55,6 +57,7 @@ public class MachineDeploymentService {
     private final DeviceAdminService deviceAdmin;
     private final DeviceCommandService commands;
     private final OrderLegRepository legs;
+    private final MachineReservationRepository reservations;
     private final DeviceLinkHub hub;
     private final AuditService audit;
     private final ApplicationEventPublisher events;
@@ -81,7 +84,10 @@ public class MachineDeploymentService {
         return view(byCode(code));
     }
 
-    /** Gắn bo đã duyệt vào máy chưa có bo; self-test tự chạy khi bo gửi heartbeat đầu tiên (xem {@link #onSnapshot}). */
+    /**
+     * Gắn bo đã duyệt vào máy chưa có bo. Self-test không tự chạy (động cơ/quạt sẽ quay): người vận hành đứng cạnh máy
+     * rồi bấm "Chạy self-test" ({@link #selfTest}).
+     */
     @Transactional
     public ProvisioningView pair(String code, String deviceId) {
         if (deviceId == null || deviceId.isBlank()) throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Chọn thiết bị");
@@ -124,11 +130,25 @@ public class MachineDeploymentService {
         Device d = boundDevice(m.getId()).orElseThrow(() -> new BusinessException(ErrorCode.DEVICE_STATE,
                 "Máy " + m.getCode() + " chưa gắn thiết bị"));
         if (!hub.isConnected(d.getId())) throw new DeviceNotConnectedException("Thiết bị của máy " + m.getCode() + " đang ngoại tuyến");
+        if (m.getAdminStatus() == Machine.AdminStatus.RETIRED) {
+            throw new BusinessException(ErrorCode.DEVICE_STATE, "Máy " + m.getCode() + " đã ngừng dùng");
+        }
+        if (m.getPriceVnd() == null) {
+            throw new BusinessException(ErrorCode.MACHINE_NOT_SELLABLE, "Máy " + m.getCode()
+                    + " chưa có giá; đặt giá hoặc gắn profile giá trước khi đưa ra bán");
+        }
         boolean fromMaintenance = m.getMaintenanceSince() != null;
         Instant now = clock.instant();
         m.setDeploymentStatus(DeploymentStatus.ACTIVE);
         m.setMaintenanceSince(null);
         if (m.getCommissionedAt() == null) m.setCommissionedAt(now);
+        // Máy bị đánh Lỗi / Bảo trì rồi self-test lại đạt: xác nhận này cũng trả máy về dùng được.
+        if (m.getAdminStatus() != Machine.AdminStatus.ACTIVE) {
+            m.setAdminStatus(Machine.AdminStatus.ACTIVE);
+            m.setStatusReason(null);
+            m.setStatusChangedAt(now);
+            m.setStatusChangedBy(Actor.userId());
+        }
         audit.user(fromMaintenance ? "MACHINE_MAINTENANCE_FINISHED" : "MACHINE_COMMISSIONED", "machine",
                 m.getId().toString(), fromMaintenance ? "Hoàn tất bảo trì" : "Đưa vào hoạt động",
                 null, Map.of("deviceId", d.getId(), "selfTestAt", String.valueOf(m.getLastSelfTestAt())));
@@ -164,23 +184,6 @@ public class MachineDeploymentService {
     }
 
     // ---- Tin từ bo ----
-
-    /** Heartbeat/status đầu tiên sau khi gắn bo: tự gửi self-test (máy PROVISIONED, chưa từng gửi). */
-    @EventListener
-    public void onSnapshot(DeviceEvents.Snapshot e) {
-        if (e.machineId() == null) return;
-        Optional<Machine> found = machines.findById(e.machineId());
-        if (found.isEmpty() || !awaitingFirstTest(found.get())) return;
-        Machine m = machines.lock(e.machineId()).orElseThrow();
-        if (!awaitingFirstTest(m)) return;
-        try {
-            sendSelfTest(m, DeviceCommand.Source.SYSTEM, null);
-            audit.system("MACHINE_SELF_TEST_REQUESTED", "machine", m.getId().toString(), "Tự chạy sau khi gắn thiết bị",
-                    null, Map.of("commandId", m.getSelfTestCommandId().toString(), "deviceId", e.deviceId()));
-        } catch (DeviceNotConnectedException ex) {
-            log.warn("[DEPLOY] auto self-test for {} not sent: {}", m.getCode(), ex.getMessage());
-        }
-    }
 
     @EventListener
     public void onEvent(DeviceEvents.Event e) {
@@ -226,12 +229,22 @@ public class MachineDeploymentService {
         return stale.size();
     }
 
-    // ---- Nội bộ ----
-
-    private boolean awaitingFirstTest(Machine m) {
-        return m.getDeploymentStatus() == DeploymentStatus.PROVISIONED && m.getSelfTestCommandId() == null
-                && m.getLastSelfTestAt() == null;
+    /** Tới giờ một khoảng bảo trì đã lên lịch: máy đang hoạt động chuyển sang bảo trì, hết giờ vẫn phải self-test lại. */
+    @Transactional
+    public int startScheduledMaintenance() {
+        int changed = 0;
+        for (UUID id : reservations.inMaintenanceWindow(clock.instant())) {
+            Machine m = machines.lock(id).orElse(null);
+            if (m == null || m.getDeploymentStatus() != DeploymentStatus.ACTIVE) continue;
+            m.requireRetest(clock.instant());
+            audit.system("MACHINE_MAINTENANCE_STARTED", "machine", m.getId().toString(), "Tới lịch bảo trì",
+                    Map.of("deploymentStatus", DeploymentStatus.ACTIVE), Map.of("deploymentStatus", m.getDeploymentStatus()));
+            changed++;
+        }
+        return changed;
     }
+
+    // ---- Nội bộ ----
 
     /** Gửi SELF_TEST rồi chuyển máy sang TESTING; bo offline thì ném lỗi và máy giữ nguyên bước. */
     private DeviceCommand sendSelfTest(Machine m, DeviceCommand.Source source, String reason) {

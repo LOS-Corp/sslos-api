@@ -262,8 +262,12 @@ class LiveFlowTest {
         api.post("/api/admin/devices/" + b.deviceId + "/bind", Api.bearer(owner),
                 Map.of("machineId", machineId, "reason", "E2E gắn bo"));
         await(() -> "BOUND".equals(b.linkState), b.deviceId + " BOUND");
-        // Lắp đặt: gắn bo -> self-test tự chạy (bo giả đạt ngay) -> đưa vào hoạt động; chưa ACTIVE thì máy không bán.
+        // Lắp đặt: gắn bo -> bấm self-test (bo giả đạt ngay) -> đưa vào hoạt động; chưa ACTIVE thì máy không bán.
         String provisioning = "/api/admin/machines/" + code + "/provisioning";
+        await(() -> "PROVISIONED".equals(api.get(provisioning, Api.bearer(owner)).path("deploymentStatus").asString()),
+                code + " PROVISIONED");
+        JsonNode receipt = api.post("/api/admin/machines/" + code + "/self-test", Api.bearer(owner), Map.of());
+        assertThat(receipt.path("commandId").asString()).startsWith("SELFTEST-");
         await(() -> "TEST_PASSED".equals(api.get(provisioning, Api.bearer(owner)).path("deploymentStatus").asString()),
                 code + " TEST_PASSED");
         JsonNode active = api.post("/api/admin/machines/" + code + "/commission", Api.bearer(owner), Map.of());

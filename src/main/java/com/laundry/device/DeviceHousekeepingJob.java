@@ -19,6 +19,7 @@ public class DeviceHousekeepingJob {
     public void timeoutCommands() {
         commands.timeoutStale();
         deployment.timeoutSelfTests();
+        deployment.startScheduledMaintenance();
     }
 
     /** Nhật ký kỹ thuật của bo chỉ giữ 30 ngày. */

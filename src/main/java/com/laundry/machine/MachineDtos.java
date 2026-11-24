@@ -22,12 +22,15 @@ public final class MachineDtos {
                               Long priceVnd, boolean autoDosing, Machine.AdminStatus adminStatus, String statusReason,
                               MachineStatusResolver.DisplayStatus displayStatus, boolean online, String deviceId,
                               Integer remainingSeconds, Instant busyUntil, int displayOrder,
-                              List<PackView> timePacks, UUID priceProfileId, String priceProfileName) {
+                              List<PackView> timePacks, UUID priceProfileId, String priceProfileName,
+                              Machine.DeploymentStatus deploymentStatus, Instant lastSelfTestAt,
+                              Boolean lastSelfTestPassed, Instant maintenanceSince) {
         static MachineView of(Machine m, MachineStatusResolver.Live live, List<PackView> packs, String profileName) {
             return new MachineView(m.getId(), m.getCode(), m.getMachineType(), m.getCapacityKg(), m.getCycleMinutes(),
                     m.getPriceVnd(), m.isAutoDosing(), m.getAdminStatus(), m.getStatusReason(), live.status(),
                     live.online(), live.deviceId(), live.remainingSeconds(), live.busyUntil(), m.getDisplayOrder(),
-                    packs, m.getPriceProfileId(), profileName);
+                    packs, m.getPriceProfileId(), profileName, m.getDeploymentStatus(), m.getLastSelfTestAt(),
+                    m.getLastSelfTestPassed(), m.getMaintenanceSince());
         }
     }
 

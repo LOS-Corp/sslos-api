@@ -1,10 +1,11 @@
 package com.laundry.payment;
 
+import com.laundry.common.error.BusinessException;
+
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -73,13 +74,17 @@ public final class PaymentControllers {
         }
     }
 
-    /** Chỉ có khi PAYMENT_SIMULATION_ENABLED=true: giả lập khách đã chuyển khoản đúng QR. */
+    /**
+     * Giả lập khách đã chuyển khoản đúng QR. Chỉ nhận khi cổng thanh toán đang giả lập
+     * (PAYMENT_SIMULATION_ENABLED=true hoặc chưa cấu hình khóa payOS), khớp với lúc phiếu thu được tạo QR giả;
+     * có khóa payOS thật thì luôn trả 404.
+     */
     @RestController
     @RequiredArgsConstructor
-    @ConditionalOnProperty(prefix = "app.payment", name = "simulation-enabled", havingValue = "true")
     @Tag(name = "Dev · Giả lập thanh toán")
     public static class SimulationController {
         private final PaymentService payments;
+        private final PayOsGateway gateway;
 
         public record SimulateBody(Long amount) {
         }
@@ -87,6 +92,7 @@ public final class PaymentControllers {
         @PostMapping("/api/dev/payments/{intentId}/simulate")
         @Operation(summary = "Giả lập tiền về cho phiếu thu (mặc định đúng số tiền)")
         public Map<String, Object> simulate(@PathVariable UUID intentId, @RequestBody(required = false) SimulateBody body) {
+            if (!gateway.simulated()) throw BusinessException.notFound("chức năng giả lập thanh toán");
             PaymentIntent i = payments.intent(intentId);
             if (i.getPayosOrderCode() == null) return Map.of("result", "NO_GATEWAY_PART");
             long amount = body != null && body.amount() != null ? body.amount() : i.getGatewayAmount();

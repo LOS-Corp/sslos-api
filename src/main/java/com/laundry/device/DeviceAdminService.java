@@ -172,6 +172,8 @@ public class DeviceAdminService {
         spare.setMachineId(machineId);
         spare.setLockerId(lockerId);
         spare.setLinkState(Device.LinkState.BOUND);
+        // Bo mới phải self-test đạt rồi được xác nhận đưa vào hoạt động lại trước khi cho thuê.
+        if (machineId != null) machines.findById(machineId).ifPresent(m -> m.deviceSwapped(clock.instant()));
         Map<String, String> target = Map.of("machineId", String.valueOf(machineId), "lockerId", String.valueOf(lockerId));
         audit.user("DEVICE_UNBOUND", "device", oldId, reason + " (thay bằng " + newId + ")", target, null);
         audit.user("DEVICE_BOUND", "device", newId, reason + " (thay cho " + oldId + ")", null, target);

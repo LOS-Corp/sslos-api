@@ -218,7 +218,7 @@ public class MachineRunService {
     /** Combo: máy sấy được giữ từ lúc máy giặt xong; khách có {@code transferMinutes} để bấm START (§9). */
     private void openDryer(Order o, OrderLeg dryer, OrderPolicy p, Instant now) {
         Machine m = machines.findById(dryer.getMachineId()).orElseThrow();
-        if (m.getAdminStatus() != Machine.AdminStatus.ACTIVE || !commands.isOnline(m.getId())) {
+        if (!m.inService() || !commands.isOnline(m.getId())) {
             if (!reassignment.reassign(o, dryer, "Máy sấy " + m.getCode() + " không dùng được")) return;
         }
         var r = support.reservation(dryer);
@@ -255,6 +255,7 @@ public class MachineRunService {
         Machine m = machines.lock(leg.getMachineId()).orElseThrow();
         if (m.getAdminStatus() == Machine.AdminStatus.ACTIVE) {
             m.setAdminStatus(Machine.AdminStatus.ERROR);
+            m.requireRetest(clock.instant());
             m.setStatusReason("Máy tự báo lỗi: " + error);
             m.setStatusChangedAt(clock.instant());
             audit.system("MACHINE_STATUS_CHANGED", "machine", m.getId().toString(), "Máy tự báo lỗi: " + error,
