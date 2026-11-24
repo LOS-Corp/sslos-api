@@ -30,8 +30,9 @@ import java.util.UUID;
 /**
  * Thu tiền (§14).
  * <ul>
- *   <li>Phiếu thu có số tiền cố định và hạn; ví trừ trước (ghi nhận ngay), phần thiếu qua QR payOS.</li>
- *   <li>Tiền payOS về đúng hạn, đúng số mới ghi nhận; về muộn / sai số / phiếu đã đóng: không ghi nhận, tự hoàn.</li>
+ *   <li>Phiếu thu có số tiền cố định và hạn; ví trừ trước (ghi nhận ngay), phần thiếu chuyển khoản qua QR của cổng
+ *       đang dùng (payOS hoặc SePay, {@link PaymentGateways}).</li>
+ *   <li>Tiền chuyển khoản về đúng hạn, đúng số mới ghi nhận; về muộn / sai số / phiếu đã đóng: không ghi nhận, tự hoàn.</li>
  *   <li>Mỗi khoản chỉ thu một lần: webhook lặp bị chặn ở payment_webhook_events và UNIQUE(method, reference).</li>
  * </ul>
  */
@@ -49,7 +50,7 @@ public class PaymentService {
     private final OrderRepository orders;
     private final WalletService wallets;
     private final RefundService refunds;
-    private final PayOsGateway gateway;
+    private final PaymentGateways gateways;
     private final ApplicationEventPublisher events;
     private final JdbcTemplate jdbc;
     private final Clock clock;
@@ -99,25 +100,37 @@ public class PaymentService {
         }
         Long code = jdbc.queryForObject("select nextval('payos_order_code_seq')", Long.class);
         intent.setPayosOrderCode(code);
-        PayOsGateway.Link link = gateway.create(code, intent.getGatewayAmount(), "SSLOS " + order.getCode(), expiresAt);
+        PaymentGateways.Created link = gateways.create(code, intent.getGatewayAmount(), "SSLOS " + order.getCode(), expiresAt);
+        intent.setGateway(link.gateway());
         intent.setCheckoutUrl(link.checkoutUrl());
         intent.setQrCode(link.qrCode());
         intent.setPayosPaymentLinkId(link.paymentLinkId());
         return intent;
     }
 
-    /** Tiền payOS về (webhook hoặc giả lập). Trả về payment đã ghi (CAPTURED hoặc REJECTED). */
+    /** Tiền payOS về (webhook). */
     @Transactional
     public Optional<Payment> onGatewayPaid(long orderCode, long amount, String reference, String payerBin,
                                            String payerAccount, String payerName, Long webhookEventId) {
+        return onGatewayPaid(Payment.Method.PAYOS, orderCode, amount, reference, payerBin, payerAccount, payerName,
+                webhookEventId);
+    }
+
+    /**
+     * Tiền chuyển khoản về cho phiếu có mã {@code orderCode} (webhook / API đối soát / giả lập), qua cổng {@code method}.
+     * {@code reference} là mã giao dịch của cổng: cùng mã chỉ ghi một lần. Trả về payment đã ghi (CAPTURED hoặc REJECTED).
+     */
+    @Transactional
+    public Optional<Payment> onGatewayPaid(Payment.Method method, long orderCode, long amount, String reference,
+                                           String payerBin, String payerAccount, String payerName, Long webhookEventId) {
         if (amount <= 0 || reference == null || reference.isBlank()) return Optional.empty();
-        List<UUID> seen = jdbc.queryForList("select id from payments where method = 'PAYOS' and provider_reference = ?",
-                UUID.class, reference);
+        List<UUID> seen = jdbc.queryForList("select id from payments where method = ? and provider_reference = ?",
+                UUID.class, method.name(), reference);
         if (!seen.isEmpty()) return Optional.empty();   // cùng giao dịch ngân hàng: đã xử lý
         Instant now = clock.instant();
         Optional<PaymentIntent> found = intents.lockByOrderCode(orderCode);
         Payment p = newPayment(found.map(PaymentIntent::getOrderId).orElse(null),
-                found.map(PaymentIntent::getId).orElse(null), Payment.Method.PAYOS, amount, now);
+                found.map(PaymentIntent::getId).orElse(null), method, amount, now);
         p.setProviderReference(reference);
         p.setPayerBankBin(payerBin);
         p.setPayerAccountNumber(payerAccount);
@@ -145,13 +158,42 @@ public class PaymentService {
         return Optional.of(p);
     }
 
-    /** Phiếu quá hạn: EXPIRED, hủy link payOS, báo module đơn. */
+    /**
+     * Khách đổi cổng thanh toán của phiếu đang chờ (payOS ↔ SePay): phiếu giữ nguyên số tiền, phần ví đã trừ và hạn;
+     * phần chuyển khoản được tạo lại ở cổng mới với mã mới, link ở cổng cũ bị hủy. Tiền về theo mã cũ sau đó không khớp
+     * phiếu nào nên tự bị từ chối và hoàn.
+     */
+    @Transactional
+    public PaymentIntent switchGateway(UUID intentId, PaymentIntent.Gateway gateway) {
+        if (gateway == null || !gateways.available().contains(gateway)) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Cổng thanh toán này chưa được bật");
+        }
+        PaymentIntent i = intents.lock(intentId).orElseThrow(() -> BusinessException.notFound("phiếu thu"));
+        if (i.getStatus() != PaymentIntent.Status.PENDING) {
+            throw new BusinessException(ErrorCode.ORDER_STATE, "Phiếu thanh toán không còn chờ trả");
+        }
+        if (i.getGatewayAmount() == 0 || gateway == i.getGateway()) return i;
+        if (!clock.instant().isBefore(i.getExpiresAt())) throw new BusinessException(ErrorCode.PAYMENT_EXPIRED);
+        PaymentIntent.Gateway oldGateway = i.getGateway();
+        Long oldCode = i.getPayosOrderCode();
+        String orderCode = orders.findById(i.getOrderId()).map(Order::getCode).orElse("");
+        Long code = jdbc.queryForObject("select nextval('payos_order_code_seq')", Long.class);
+        PaymentGateways.Created link = gateways.create(gateway, code, i.getGatewayAmount(), "SSLOS " + orderCode, i.getExpiresAt());
+        i.setPayosOrderCode(code);
+        i.setGateway(link.gateway());
+        i.setCheckoutUrl(link.checkoutUrl());
+        i.setQrCode(link.qrCode());
+        i.setPayosPaymentLinkId(link.paymentLinkId());
+        AfterCommit.run(() -> gateways.cancel(oldGateway, oldCode, "Khách đổi cổng thanh toán"));
+        return i;
+    }
+
+    /** Phiếu quá hạn: EXPIRED, hủy link payOS (SePay không có link), báo module đơn. */
     @Transactional
     public void expire(UUID intentId) {
         intents.lock(intentId).filter(i -> i.getStatus() == PaymentIntent.Status.PENDING).ifPresent(i -> {
             i.setStatus(PaymentIntent.Status.EXPIRED);
-            Long code = i.getPayosOrderCode();
-            if (code != null) AfterCommit.run(() -> gateway.cancel(code, "Hết hạn"));
+            AfterCommit.run(() -> gateways.cancel(i, "Hết hạn"));
             events.publishEvent(new PaymentEvents.IntentExpired(i.getId(), i.getOrderId(), i.getPurpose()));
         });
     }
@@ -202,8 +244,7 @@ public class PaymentService {
     private void cancelInternal(PaymentIntent i) {
         if (i.getStatus() != PaymentIntent.Status.PENDING) return;
         i.setStatus(PaymentIntent.Status.CANCELLED);
-        Long code = i.getPayosOrderCode();
-        if (code != null) AfterCommit.run(() -> gateway.cancel(code, "Thay bằng phiếu mới"));
+        AfterCommit.run(() -> gateways.cancel(i, "Thay bằng phiếu mới"));
     }
 
     private Payment newPayment(UUID orderId, UUID intentId, Payment.Method method, long amount, Instant now) {

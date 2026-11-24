@@ -7,6 +7,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
@@ -74,6 +75,23 @@ public final class PaymentControllers {
         }
     }
 
+    /** Cổng thanh toán khách chọn được (cổng mặc định đứng đầu). */
+    @RestController
+    @RequiredArgsConstructor
+    @Tag(name = "Công khai · Thanh toán")
+    public static class PaymentMethodsController {
+        private final PaymentGateways gateways;
+
+        public record PaymentMethods(PaymentIntent.Gateway defaultGateway, java.util.List<PaymentIntent.Gateway> gateways) {
+        }
+
+        @GetMapping("/api/public/payment-methods")
+        @Operation(summary = "Các cổng thanh toán đang bật và cổng mặc định")
+        public PaymentMethods methods() {
+            return new PaymentMethods(gateways.active(), gateways.available());
+        }
+    }
+
     /**
      * Giả lập khách đã chuyển khoản đúng QR. Chỉ nhận khi cổng thanh toán đang giả lập
      * (PAYMENT_SIMULATION_ENABLED=true hoặc chưa cấu hình khóa payOS), khớp với lúc phiếu thu được tạo QR giả;
@@ -84,7 +102,7 @@ public final class PaymentControllers {
     @Tag(name = "Dev · Giả lập thanh toán")
     public static class SimulationController {
         private final PaymentService payments;
-        private final PayOsGateway gateway;
+        private final PaymentGateways gateway;
 
         public record SimulateBody(Long amount) {
         }
@@ -92,11 +110,11 @@ public final class PaymentControllers {
         @PostMapping("/api/dev/payments/{intentId}/simulate")
         @Operation(summary = "Giả lập tiền về cho phiếu thu (mặc định đúng số tiền)")
         public Map<String, Object> simulate(@PathVariable UUID intentId, @RequestBody(required = false) SimulateBody body) {
-            if (!gateway.simulated()) throw BusinessException.notFound("chức năng giả lập thanh toán");
             PaymentIntent i = payments.intent(intentId);
+            if (!gateway.simulated(i.getGateway())) throw BusinessException.notFound("chức năng giả lập thanh toán");
             if (i.getPayosOrderCode() == null) return Map.of("result", "NO_GATEWAY_PART");
             long amount = body != null && body.amount() != null ? body.amount() : i.getGatewayAmount();
-            return payments.onGatewayPaid(i.getPayosOrderCode(), amount, "SIM" + UUID.randomUUID().toString()
+            return payments.onGatewayPaid(PaymentGateways.methodOf(i), i.getPayosOrderCode(), amount, "SIM" + UUID.randomUUID().toString()
                             .substring(0, 12), "970436", "0123456789", "NGUYEN VAN A", null)
                     .<Map<String, Object>>map(p -> Map.of("result", p.getStatus().name(), "receiptNo", p.getReceiptNo()))
                     .orElse(Map.of("result", "IGNORED"));

@@ -34,6 +34,7 @@ import java.util.UUID;
 @Tag(name = "Kiosk")
 public class KioskController {
 
+    private final com.laundry.payment.PaymentService payments;
     private final AvailabilityService availability;
     private final BookingService booking;
     private final CheckInService checkIn;
@@ -50,6 +51,9 @@ public class KioskController {
     }
 
     public record SwitchBody(@NotNull UUID machineId) {
+    }
+
+    public record GatewayBody(@NotNull com.laundry.payment.PaymentIntent.Gateway gateway) {
     }
 
     public record ExtensionBody(int legNo, @NotNull UUID packId) {
@@ -94,6 +98,12 @@ public class KioskController {
     @Operation(summary = "Hủy đơn đặt ngay: chưa trả miễn phí; đã trả mà máy chưa chạy hoàn 100%")
     public OrderViews.OrderView cancel(@PathVariable UUID id) {
         return views.view(booking.cancelAtKiosk(id), false);
+    }
+
+    @PostMapping("/payments/{intentId}/gateway")
+    @Operation(summary = "Khách đổi cổng thanh toán (payOS / SePay) của phiếu đang hiện trên kiosk")
+    public OrderViews.IntentView switchGateway(@PathVariable UUID intentId, @Valid @RequestBody GatewayBody body) {
+        return OrderViews.IntentView.of(payments.switchGateway(intentId, body.gateway()));
     }
 
     @PostMapping("/scan")

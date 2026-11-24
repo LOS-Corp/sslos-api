@@ -26,6 +26,9 @@ public class PaymentIntent extends AssignedIdEntity<UUID> {
 
     public enum Status { PENDING, PAID, EXPIRED, CANCELLED, FAILED }
 
+    /** Cổng nhận chuyển khoản của phiếu (V5); null = ví trả hết. */
+    public enum Gateway { PAYOS, SEPAY }
+
     @Id
     private UUID id = UUID.randomUUID();
     private UUID orderId;
@@ -37,6 +40,8 @@ public class PaymentIntent extends AssignedIdEntity<UUID> {
     @Enumerated(EnumType.STRING)
     private Status status = Status.PENDING;
     private Long payosOrderCode;
+    @Enumerated(EnumType.STRING)
+    private Gateway gateway;
     private String payosPaymentLinkId;
     private String checkoutUrl;
     private String qrCode;

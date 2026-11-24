@@ -67,6 +67,7 @@ public final class OrderControllers {
     @RequiredArgsConstructor
     @Tag(name = "Khách · Đơn đặt trước")
     public static class CustomerOrderController {
+        private final com.laundry.payment.PaymentService payments;
         private final BookingService booking;
         private final AvailabilityService availability;
         private final OrderLegRepository legs;
@@ -84,6 +85,9 @@ public final class OrderControllers {
         }
 
         public record ExtensionBody(int legNo, @NotNull UUID packId, boolean useWallet) {
+        }
+
+        public record GatewayBody(@NotNull com.laundry.payment.PaymentIntent.Gateway gateway) {
         }
 
         public record ExtensionView(UUID extensionId, int minutes, long price, OrderViews.IntentView payment) {
@@ -113,6 +117,15 @@ public final class OrderControllers {
         @Operation(summary = "Tạo phiếu thu: DEPOSIT / FULL lúc giữ chỗ, BALANCE trả nốt trước check-in. Ví trừ trước")
         public OrderViews.IntentView pay(@PathVariable UUID id, @Valid @RequestBody PayBody body) {
             return OrderViews.IntentView.of(booking.pay(Actor.userId(), id, body.option(), body.useWallet()));
+        }
+
+        @PostMapping("/api/orders/{id}/payments/{intentId}/gateway")
+        @Operation(summary = "Đổi cổng thanh toán (payOS / SePay) của phiếu đang chờ trả")
+        public OrderViews.IntentView switchGateway(@PathVariable UUID id, @PathVariable UUID intentId,
+                                                   @Valid @RequestBody GatewayBody body) {
+            Order o = owned(id);
+            if (!o.getId().equals(payments.intent(intentId).getOrderId())) throw BusinessException.notFound("phiếu thu");
+            return OrderViews.IntentView.of(payments.switchGateway(intentId, body.gateway()));
         }
 
         @PostMapping("/api/orders/{id}/cancel")

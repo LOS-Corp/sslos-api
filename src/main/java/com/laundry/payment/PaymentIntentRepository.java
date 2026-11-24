@@ -16,6 +16,9 @@ public interface PaymentIntentRepository extends JpaRepository<PaymentIntent, UU
     @Query("select i from PaymentIntent i where i.id = :id")
     Optional<PaymentIntent> lock(UUID id);
 
+    /** Đọc phiếu theo mã (không khóa), cho trang chuyển sang SePay. */
+    Optional<PaymentIntent> findByPayosOrderCode(Long payosOrderCode);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("select i from PaymentIntent i where i.payosOrderCode = :code")
     Optional<PaymentIntent> lockByOrderCode(long code);

@@ -31,7 +31,7 @@ import java.util.List;
  * Quyền theo tiền tố đường dẫn; quyền chi tiết (đơn của ai, hạn mức hoàn tiền...) kiểm trong service.
  * <pre>
  * /api/public/**, /api/auth/(register|login|refresh|forgot-password|reset-password)   ai cũng gọi được
- * /api/devices/register/**   bo mạch tự đăng ký      /api/payments/payos/webhook   payOS
+ * /api/devices/register/**   bo mạch tự đăng ký      /api/payments/payos/webhook, /api/payments/sepay/(ipn|checkout/*)
  * /api/kiosk/**   kiosk          /api/staff/**  nhân viên + chủ cửa hàng
  * /api/owner/**   chủ cửa hàng   /api/admin/**  quản trị hệ thống
  * /api/admin/machines/{code}/(provisioning|pairing|self-test|commission|maintenance|unpair)   quản trị + chủ cửa hàng
@@ -77,7 +77,9 @@ public class SecurityConfig {
                         .requestMatchers("/api/public/**").permitAll()
                         .requestMatchers(HttpMethod.POST, "/api/devices/register", "/api/devices/register/challenge")
                         .permitAll()
-                        .requestMatchers(HttpMethod.POST, "/api/payments/payos/webhook").permitAll()
+                        .requestMatchers(HttpMethod.POST, "/api/payments/payos/webhook", "/api/payments/sepay/ipn").permitAll()
+                        // Trang khách mở để chuyển sang SePay (link trong phiếu thu, mở trên trình duyệt / điện thoại).
+                        .requestMatchers(HttpMethod.GET, "/api/payments/sepay/checkout/*").permitAll()
                         .requestMatchers("/api/dev/**").permitAll()
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**",
                                 "/actuator/health").permitAll()

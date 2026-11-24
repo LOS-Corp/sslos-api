@@ -23,7 +23,7 @@ import java.util.UUID;
 @Setter
 public class Payment extends AssignedIdEntity<UUID> {
 
-    public enum Method { WALLET, PAYOS }
+    public enum Method { WALLET, PAYOS, SEPAY }
 
     public enum Status { CAPTURED, REJECTED }
 

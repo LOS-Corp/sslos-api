@@ -55,6 +55,11 @@ public class PayOsGateway {
         return simulationEnabled || !props.configured();
     }
 
+    /** Đủ 3 khóa payOS. */
+    public boolean configured() {
+        return props.configured();
+    }
+
     /** Tạo link thanh toán có số tiền cố định và hạn {@code expiresAt}. */
     public Link create(long orderCode, long amount, String description, Instant expiresAt) {
         if (simulated()) {

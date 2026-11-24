@@ -38,10 +38,11 @@ public class OrderViews {
 
     public record IntentView(UUID id, PaymentIntent.Purpose purpose, long amount, long walletAmount, long gatewayAmount,
                              PaymentIntent.Status status, String qrCode, String checkoutUrl, Instant expiresAt,
-                             Instant paidAt) {
+                             Instant paidAt, PaymentIntent.Gateway gateway) {
         public static IntentView of(PaymentIntent i) {
             return i == null ? null : new IntentView(i.getId(), i.getPurpose(), i.getAmount(), i.getWalletAmount(),
-                    i.getGatewayAmount(), i.getStatus(), i.getQrCode(), i.getCheckoutUrl(), i.getExpiresAt(), i.getPaidAt());
+                    i.getGatewayAmount(), i.getStatus(), i.getQrCode(), i.getCheckoutUrl(), i.getExpiresAt(), i.getPaidAt(),
+                    i.getGateway());
         }
     }
 
