@@ -111,6 +111,9 @@ public class DeviceAdminService {
         d.setMachineId(machineId);
         d.setLockerId(lockerId);
         d.setLinkState(Device.LinkState.BOUND);
+        // Bo mới ở máy này: máy làm lại self-test trước khi đưa vào hoạt động; máy cũ của bo về chưa gán thiết bị.
+        if (machineId != null && !machineId.equals(oldMachine)) machines.findById(machineId).ifPresent(Machine::provisioned);
+        if (oldMachine != null && !oldMachine.equals(machineId)) machines.findById(oldMachine).ifPresent(Machine::unassigned);
         audit.user("DEVICE_BOUND", "device", id, Reasons.require(reason), Map.of("machineId", String.valueOf(oldMachine)),
                 Map.of("machineId", String.valueOf(machineId), "lockerId", String.valueOf(lockerId)));
         if (oldMachine != null && !oldMachine.equals(machineId)) {
@@ -129,6 +132,7 @@ public class DeviceAdminService {
         d.setMachineId(null);
         d.setLockerId(null);
         d.setLinkState(Device.LinkState.VERIFIED);
+        if (machineId != null) machines.findById(machineId).ifPresent(Machine::unassigned);
         audit.user("DEVICE_UNBOUND", "device", id, Reasons.require(reason), Map.of("machineId", String.valueOf(machineId)), null);
         if (machineId != null) events.publishEvent(new MachineAvailabilityChanged(machineId, false, "Gỡ bo mạch"));
         notifyBoard(id);
@@ -196,6 +200,7 @@ public class DeviceAdminService {
         d.setMachineId(null);
         d.setLockerId(null);
         d.setLinkState(Device.LinkState.REVOKED);
+        if (machineId != null) machines.findById(machineId).ifPresent(Machine::unassigned);
         d.setRevokedBy(Actor.userId());
         d.setRevokedAt(clock.instant());
         d.setRevokeReason(reason);

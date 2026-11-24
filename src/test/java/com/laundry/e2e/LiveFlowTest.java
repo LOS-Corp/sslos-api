@@ -69,9 +69,9 @@ class LiveFlowTest {
         api.post("/api/owner/machines/" + dryer + "/time-packs", Api.bearer(owner),
                 Map.of("minutes", 10, "priceVnd", 8000, "active", true, "reason", "E2E gói sấy"));
 
-        washerBoard = board("WASHER", washer);
-        dryerBoard = board("DRYER", dryer);
-        washer2Board = board("WASHER", washer2);
+        washerBoard = board("WASHER", washer, "W" + run);
+        dryerBoard = board("DRYER", dryer, "D" + run);
+        washer2Board = board("WASHER", washer2, "X" + run);
 
         kioskKey = api.post("/api/admin/kiosks", Api.bearer(owner), Map.of("code", "K" + run, "name", "Kiosk E2E"))
                 .path("apiKey").asString();
@@ -248,7 +248,7 @@ class LiveFlowTest {
         return id;
     }
 
-    static FakeBoard board(String type, String machineId) throws Exception {
+    static FakeBoard board(String type, String machineId, String code) throws Exception {
         byte[] mac = new byte[6];
         new Random().nextBytes(mac);
         FakeBoard b = new FakeBoard("ESP-" + HexFormat.of().withUpperCase().formatHex(mac), type);
@@ -262,6 +262,13 @@ class LiveFlowTest {
         api.post("/api/admin/devices/" + b.deviceId + "/bind", Api.bearer(owner),
                 Map.of("machineId", machineId, "reason", "E2E gắn bo"));
         await(() -> "BOUND".equals(b.linkState), b.deviceId + " BOUND");
+        // Lắp đặt: gắn bo -> self-test tự chạy (bo giả đạt ngay) -> đưa vào hoạt động; chưa ACTIVE thì máy không bán.
+        String provisioning = "/api/admin/machines/" + code + "/provisioning";
+        await(() -> "TEST_PASSED".equals(api.get(provisioning, Api.bearer(owner)).path("deploymentStatus").asString()),
+                code + " TEST_PASSED");
+        JsonNode active = api.post("/api/admin/machines/" + code + "/commission", Api.bearer(owner), Map.of());
+        assertThat(active.path("deploymentStatus").asString()).isEqualTo("ACTIVE");
+        assertThat(active.path("deviceId").asString()).isEqualTo(b.deviceId);
         return b;
     }
 

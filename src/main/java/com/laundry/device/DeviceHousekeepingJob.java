@@ -13,10 +13,12 @@ public class DeviceHousekeepingJob {
 
     private final DeviceCommandService commands;
     private final DeviceMessageLog messages;
+    private final MachineDeploymentService deployment;
 
     @Scheduled(fixedDelay = 30_000)
     public void timeoutCommands() {
         commands.timeoutStale();
+        deployment.timeoutSelfTests();
     }
 
     /** Nhật ký kỹ thuật của bo chỉ giữ 30 ngày. */

@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -14,6 +15,10 @@ public interface MachineRepository extends JpaRepository<Machine, UUID> {
     Optional<Machine> findByCode(String code);
 
     boolean existsByCode(String code);
+
+    Optional<Machine> findBySelfTestCommandId(UUID commandId);
+
+    List<Machine> findByDeploymentStatusAndSelfTestRequestedAtBefore(Machine.DeploymentStatus status, Instant before);
 
     @Query("select m from Machine m where m.adminStatus <> com.laundry.machine.Machine.AdminStatus.RETIRED order by m.machineType, m.displayOrder, m.code")
     List<Machine> listInService();

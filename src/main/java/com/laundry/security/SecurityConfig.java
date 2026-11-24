@@ -34,6 +34,7 @@ import java.util.List;
  * /api/devices/register/**   bo mạch tự đăng ký      /api/payments/payos/webhook   payOS
  * /api/kiosk/**   kiosk          /api/staff/**  nhân viên + chủ cửa hàng
  * /api/owner/**   chủ cửa hàng   /api/admin/**  quản trị hệ thống
+ * /api/admin/machines/{code}/(provisioning|pairing|self-test|commission|maintenance|unpair)   quản trị + chủ cửa hàng
  * /api/**         người dùng đã đăng nhập (khách hàng: /api/me, /api/orders, /api/wallet...)
  * </pre>
  * Không khớp luật nào thì từ chối.
@@ -81,6 +82,11 @@ public class SecurityConfig {
                         .requestMatchers("/swagger-ui.html", "/swagger-ui/**", "/v3/api-docs/**",
                                 "/actuator/health").permitAll()
                         .requestMatchers("/api/kiosk/**").hasRole("KIOSK")
+                        // Lắp đặt máy (MachineDeploymentController): web quản lý gọi /api/admin cho cả chủ cửa hàng.
+                        .requestMatchers("/api/admin/machines/*/provisioning", "/api/admin/machines/*/pairing",
+                                "/api/admin/machines/*/self-test", "/api/admin/machines/*/commission",
+                                "/api/admin/machines/*/maintenance", "/api/admin/machines/*/unpair")
+                        .hasAnyRole(Role.ADMIN.name(), Role.OWNER.name())
                         .requestMatchers("/api/admin/**").hasRole(Role.ADMIN.name())
                         .requestMatchers("/api/owner/**").hasRole(Role.OWNER.name())
                         .requestMatchers("/api/staff/**").hasAnyRole(Role.STAFF.name(), Role.OWNER.name())

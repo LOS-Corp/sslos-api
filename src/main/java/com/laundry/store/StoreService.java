@@ -168,13 +168,14 @@ public class StoreService {
         checks.add(new ReadinessCheck("OPENING_HOURS", hasHours, hasHours ? "Đã có giờ mở cửa" : "Chưa đặt giờ mở cửa"));
         boolean service = s.isWashEnabled() || s.isDryEnabled() || s.isWashDryEnabled() || s.isLaundryServiceEnabled();
         checks.add(new ReadinessCheck("SERVICE_ENABLED", service, service ? "Có dịch vụ đang bật" : "Chưa bật dịch vụ nào"));
-        Integer priced = jdbc.queryForObject("select count(*) from machines where admin_status = 'ACTIVE' and price_vnd is not null",
+        Integer priced = jdbc.queryForObject("select count(*) from machines where admin_status = 'ACTIVE' and deployment_status = 'ACTIVE'"
+                        + " and price_vnd is not null",
                 Integer.class);
         checks.add(new ReadinessCheck("PRICED_MACHINE", priced != null && priced > 0,
                 priced != null && priced > 0 ? priced + " máy đã có giá" : "Chưa có máy nào có giá"));
         Integer online = jdbc.queryForObject("""
                 select count(*) from machines m join devices d on d.machine_id = m.id
-                where m.admin_status = 'ACTIVE' and d.link_state = 'BOUND' and d.online
+                where m.admin_status = 'ACTIVE' and m.deployment_status = 'ACTIVE' and d.link_state = 'BOUND' and d.online
                 """, Integer.class);
         checks.add(new ReadinessCheck("ONLINE_MACHINE", online != null && online > 0,
                 online != null && online > 0 ? online + " máy đang online" : "Chưa có máy nào online"));

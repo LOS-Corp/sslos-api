@@ -108,6 +108,8 @@ public final class FakeBoard implements AutoCloseable {
             case "link" -> {
                 linkState = body.path("state").asString();
                 machineCode = body.path("machineCode").asString("");
+                // Như firmware: đã gắn máy thì báo trạng thái (backend tự gửi self-test lắp đặt khi nhận heartbeat đầu).
+                if ("BOUND".equals(linkState)) up("heartbeat", identity().put("status", "AVAILABLE").put("running", false));
                 if ("HELLO_REQUIRED".equals(linkState)) {
                     up("hello", JSON.createObjectNode().put("deviceId", deviceId).put("firmwareVersion", "fake-1.0")
                             .put("deviceType", deviceType).put("publicKey", publicKeyB64).put("ip", "127.0.0.1")
@@ -139,6 +141,16 @@ public final class FakeBoard implements AutoCloseable {
                     }
                     case "REVOKE_START" -> authorizationId = null;
                     case "LOAD_VERDICT" -> {
+                    }
+                    case "SELF_TEST" -> {
+                        String commandId = body.path("commandId").asString();
+                        up("command/ack", JSON.createObjectNode().put("commandId", commandId).put("command", type)
+                                .put("success", true).put("reason", ""));
+                        ObjectNode result = identity().put("event", "SELF_TEST_RESULT").put("commandId", commandId)
+                                .put("passed", true);
+                        result.putObject("checks").put("doorClosed", true).put("motorDriven", true)
+                                .put("startButton", true).put("loadCell", "DISABLED").put("oled", true);
+                        up("event", result);
                     }
                     default -> up("command/ack", JSON.createObjectNode().put("commandId", body.path("commandId").asString())
                             .put("command", type).put("success", true).put("reason", ""));

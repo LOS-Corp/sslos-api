@@ -1,5 +1,6 @@
 package com.laundry.user;
 
+import com.laundry.common.error.BusinessException;
 import com.laundry.security.Role;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -37,7 +38,13 @@ public class AdminBootstrap {
         if (repository.findByEmail(email.trim()).isPresent()) return;
         Set<Role> set = Arrays.stream(roles.split(",")).map(String::trim).filter(s -> !s.isEmpty())
                 .map(Role::valueOf).collect(Collectors.toCollection(() -> EnumSet.noneOf(Role.class)));
-        users.create("Quản trị", email.trim(), phone, password, set);
-        log.info("Bootstrap account {} created with roles {}", email, set);
+        try {
+            users.create("Quản trị", email.trim(), phone, password, set);
+            log.info("Bootstrap account {} created with roles {}", email, set);
+        } catch (BusinessException e) {
+            // Ví dụ số điện thoại mặc định đã thuộc tài khoản khác: không làm sập ứng dụng, chỉ báo để sửa .env.
+            log.warn("Bootstrap account {} not created: {}. Set BOOTSTRAP_ADMIN_PHONE to an unused number"
+                    + " or use an existing admin email.", email, e.getMessage());
+        }
     }
 }

@@ -77,6 +77,7 @@ public class MachineStatusResolver {
             if (m.getAdminStatus() == Machine.AdminStatus.RETIRED) status = DisplayStatus.RETIRED;
             else if (m.getAdminStatus() == Machine.AdminStatus.ERROR) status = DisplayStatus.ERROR;
             else if (m.getAdminStatus() == Machine.AdminStatus.MAINTENANCE
+                    || m.getDeploymentStatus() == Machine.DeploymentStatus.MAINTENANCE
                     || (r != null && "MAINTENANCE".equals(r[0]))) status = DisplayStatus.MAINTENANCE;
             else if (!online) status = DisplayStatus.OFFLINE;
             else {
