@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.lang.reflect.RecordComponent;
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
@@ -55,8 +56,20 @@ public class StoreService {
     /**
      * Đổi tham số không ảnh hưởng đơn đã xác nhận (§16): mỗi đơn đã chụp tham số lúc đặt (orders.policy_snapshot).
      */
+    /** Ai đổi tham số: Chủ cửa hàng đổi vận hành, dịch vụ, giá; Quản trị viên đổi chính sách hệ thống. */
+    public enum SettingsScope { OWNER, ADMIN }
+
     @Transactional
     public StoreSettings update(UpdateSettings body) {
+        return update(body, SettingsScope.OWNER);
+    }
+
+    /**
+     * Đổi tham số không ảnh hưởng đơn đã xác nhận (§16). Trường chính sách ({@link StoreDtos#POLICY_FIELDS}) chỉ
+     * Quản trị viên đổi; Quản trị viên chỉ đổi trường chính sách.
+     */
+    @Transactional
+    public StoreSettings update(UpdateSettings body, SettingsScope scope) {
         String reason = Reasons.require(body.reason());
         StoreSettings s = settings();
         Map<String, Object> before = new LinkedHashMap<>();
@@ -70,7 +83,29 @@ public class StoreService {
                 field.setAccessible(true);
                 Object old = field.get(s);
                 if (value instanceof String str) value = str.trim();
-                if (!value.equals(old)) {
+                boolean same = value instanceof BigDecimal d && old instanceof BigDecimal o ? d.compareTo(o) == 0 : value.equals(old);
+                // Gửi lại đúng giá trị đang lưu thì bỏ qua; chỉ chặn khi thật sự đổi trường ngoài quyền.
+                boolean policy = StoreDtos.POLICY_FIELDS.contains(c.getName());
+                if (!same && policy && scope == SettingsScope.OWNER) {
+                    throw new BusinessException(ErrorCode.FORBIDDEN,
+                            "Quy định đặt lịch, hủy đơn, hoàn tiền là chính sách hệ thống: Quản trị viên chỉnh");
+                }
+                if (!same && !policy && scope == SettingsScope.ADMIN) {
+                    throw new BusinessException(ErrorCode.BAD_REQUEST,
+                            "Trang Chính sách hệ thống chỉ đổi quy định đặt lịch, hủy đơn, hoàn tiền");
+                }
+                // Tắt một dịch vụ: còn khách đang dùng thì từ chối; chỉ còn đơn đặt sắp tới thì cho tắt (đơn đó vẫn phục vụ).
+                String service = SERVICE_FLAGS.get(c.getName());
+                if (!same && service != null && Boolean.FALSE.equals(value) && Boolean.TRUE.equals(old)) {
+                    StoreDtos.ServiceImpact impact = serviceImpact(service);
+                    if (!impact.inUse().isEmpty()) {
+                        throw new BusinessException(ErrorCode.SERVICE_IN_USE, "Đang có " + impact.inUse().size()
+                                + " khách dùng dịch vụ này (" + String.join(", ", impact.inUse().stream().limit(10)
+                                .map(StoreDtos.ImpactItem::code).toList()) + "); chờ xong hoặc xử lý các đơn đó rồi tắt",
+                                Map.of("orders", impact.inUse().stream().map(StoreDtos.ImpactItem::code).toList()));
+                    }
+                }
+                if (!same) {
                     before.put(c.getName(), old);
                     after.put(c.getName(), value);
                     field.set(s, value);
@@ -85,10 +120,61 @@ public class StoreService {
         }
         s.setUpdatedBy(Actor.userId());
         boolean priceRelated = after.keySet().stream().anyMatch(k -> k.startsWith("deposit") || k.startsWith("laundry")
-                || k.endsWith("Vnd") || k.endsWith("PerDay"));
-        audit.user(priceRelated ? "STORE_PRICING_CHANGED" : "STORE_SETTINGS_CHANGED", "store_settings", "1", reason,
-                before, after);
+                || k.endsWith("Vnd") || k.endsWith("PerDay") || k.endsWith("PerKg"));
+        String action = scope == SettingsScope.ADMIN ? "SYSTEM_POLICY_CHANGED"
+                : priceRelated ? "STORE_PRICING_CHANGED" : "STORE_SETTINGS_CHANGED";
+        audit.user(action, "store_settings", "1", reason, before, after);
         return s;
+    }
+
+    /** Cờ bật/tắt trong store_settings → mã dịch vụ (orders.service hoặc service_jobs.service). */
+    static final Map<String, String> SERVICE_FLAGS = Map.of(
+            "washEnabled", "WASH", "dryEnabled", "DRY", "washDryEnabled", "WASH_DRY",
+            "laundryServiceEnabled", "LAUNDRY", "ironingEnabled", "IRON", "washDryIronEnabled", "WASH_DRY_IRON");
+
+    /**
+     * Ảnh hưởng nếu tắt một dịch vụ. inUse: khách đang dùng ngay lúc này (máy đã kích hoạt / đang chạy / chờ lấy đồ;
+     * đồ tại quầy đã nhận hoặc đang làm) — có thì không cho tắt. upcoming: đơn đã đặt chưa tới giờ, đồ tại quầy đã xong
+     * chờ khách lấy — vẫn được phục vụ sau khi tắt, chỉ để cảnh báo.
+     */
+    @Transactional(readOnly = true)
+    public StoreDtos.ServiceImpact serviceImpact(String service) {
+        if (!SERVICE_FLAGS.containsValue(service)) throw new BusinessException(ErrorCode.BAD_REQUEST, "Dịch vụ không hợp lệ");
+        // Đơn bắt đầu trong 1 giờ qua vẫn có thể đang trong ân hạn check-in: tính là sắp tới.
+        java.sql.Timestamp now = java.sql.Timestamp.from(clock.instant().minusSeconds(3600));
+        List<StoreDtos.ImpactItem> inUse;
+        List<StoreDtos.ImpactItem> upcoming;
+        if (service.equals("IRON") || service.equals("WASH_DRY_IRON")) {
+            inUse = jdbc.query("""
+                    select code, status, due_at from service_jobs
+                    where service = ? and status in ('RECEIVED', 'PROCESSING') order by due_at
+                    """, (rs, i) -> new StoreDtos.ImpactItem(rs.getString(1),
+                    rs.getString(2).equals("RECEIVED") ? "Đã nhận đồ" : "Đang làm", rs.getTimestamp(3).toInstant()), service);
+            upcoming = jdbc.query("""
+                    select code, due_at from service_jobs where service = ? and status = 'READY' order by due_at
+                    """, (rs, i) -> new StoreDtos.ImpactItem(rs.getString(1), "Xong, chờ khách lấy",
+                    rs.getTimestamp(2).toInstant()), service);
+        } else {
+            inUse = jdbc.query("""
+                    select o.code, min(l.status), o.scheduled_start_at from orders o join order_legs l on l.order_id = o.id
+                    where o.service = ? and o.status in ('CONFIRMED', 'IN_PROGRESS')
+                      and l.status in ('ACTIVATED', 'RUNNING', 'AWAITING_UNLOAD')
+                    group by o.code, o.scheduled_start_at order by o.scheduled_start_at
+                    """, (rs, i) -> new StoreDtos.ImpactItem(rs.getString(1), switch (rs.getString(2)) {
+                case "ACTIVATED" -> "Chờ bấm START";
+                case "RUNNING" -> "Máy đang chạy";
+                default -> "Chờ lấy đồ";
+            }, rs.getTimestamp(3).toInstant()), service);
+            java.util.Set<String> busy = new java.util.HashSet<>(inUse.stream().map(StoreDtos.ImpactItem::code).toList());
+            upcoming = jdbc.query("""
+                    select code, status, scheduled_start_at from orders
+                    where service = ? and status in ('HOLD', 'CONFIRMED', 'IN_PROGRESS') and scheduled_start_at >= ?
+                    order by scheduled_start_at limit 500
+                    """, (rs, i) -> new StoreDtos.ImpactItem(rs.getString(1),
+                    rs.getString(2).equals("HOLD") ? "Đang thanh toán" : "Đã đặt", rs.getTimestamp(3).toInstant()), service, now)
+                    .stream().filter(x -> !busy.contains(x.code())).toList();
+        }
+        return new StoreDtos.ServiceImpact(service, inUse, upcoming);
     }
 
     // ---- Giờ mở cửa ----
@@ -197,7 +283,8 @@ public class StoreService {
                 readiness().ready(), cal.isOpen(clock.instant()), hours(StoreHour.Kind.OPEN), upcomingClosures(),
                 s.getMaxAdvanceBookingHours(), s.getDepositPercent(), s.getGraceMinutes(), s.getEarlyCheckinMinutes(),
                 s.getStartWindowMinutes(), s.getFreeCancelBeforeMinutes(), s.getFreeCancelAfterBookingMinutes(),
-                s.getKioskMaxWaitMinutes());
+                s.getKioskMaxWaitMinutes(), s.isIroningEnabled(), s.isWashDryIronEnabled(),
+                s.getIroningPricePerKg(), s.getWashDryIronPricePerKg());
     }
 
     /**

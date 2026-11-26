@@ -23,11 +23,13 @@ public enum ErrorCode {
     EMAIL_TAKEN(HttpStatus.CONFLICT, "Email đã được sử dụng"),
     PHONE_TAKEN(HttpStatus.CONFLICT, "Số điện thoại đã được sử dụng"),
     WRONG_PASSWORD(HttpStatus.BAD_REQUEST, "Mật khẩu hiện tại không đúng"),
+    BOOKING_BANNED(HttpStatus.FORBIDDEN, "Tài khoản đang bị tạm khóa quyền đặt lịch do vi phạm"),
 
     // Cửa hàng / máy
     STORE_NOT_READY(HttpStatus.CONFLICT, "Cửa hàng chưa sẵn sàng nhận đặt"),
     STORE_CLOSED(HttpStatus.CONFLICT, "Ngoài giờ mở cửa"),
     SERVICE_DISABLED(HttpStatus.CONFLICT, "Dịch vụ đang tạm ngừng"),
+    SERVICE_IN_USE(HttpStatus.CONFLICT, "Đang có khách dùng dịch vụ này, chưa tắt được"),
     CONFIG_BREAKS_ORDERS(HttpStatus.CONFLICT, "Thay đổi làm một số đơn đã xác nhận không chạy được"),
     MACHINE_NOT_SELLABLE(HttpStatus.CONFLICT, "Máy chưa có giá hoặc đang không bán"),
     MACHINE_UNAVAILABLE(HttpStatus.CONFLICT, "Máy không còn trống trong khoảng thời gian này"),

@@ -126,6 +126,75 @@ public class UserService {
         audit.user("USER_PASSWORD_RESET", "user", id.toString(), Reasons.require(reason), null, null);
     }
 
+    /**
+     * Quản trị viên khóa (until trong tương lai) hoặc gỡ khóa (until null) quyền đặt trước của khách vì vi phạm.
+     * Khách vẫn đăng nhập, xem đơn, dùng ví; đơn đã đặt giữ nguyên.
+     */
+    @Transactional
+    public UserView setBookingBan(UUID id, java.time.Instant until, String rawReason) {
+        String reason = Reasons.require(rawReason);
+        User u = get(id);
+        if (!u.getRoles().contains(Role.CUSTOMER)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "Chỉ khóa quyền đặt lịch của tài khoản khách hàng");
+        }
+        if (until != null && !until.isAfter(clock.instant())) {
+            throw new BusinessException(ErrorCode.VALIDATION_FAILED, "Thời hạn khóa phải ở tương lai");
+        }
+        Map<String, Object> before = new LinkedHashMap<>();
+        before.put("bookingBannedUntil", u.getBookingBannedUntil());
+        Map<String, Object> after = new LinkedHashMap<>();
+        after.put("bookingBannedUntil", until);
+        u.setBookingBannedUntil(until);
+        u.setBookingBanReason(until == null ? null : reason);
+        u.setBookingBannedBy(until == null ? null : Actor.userId());
+        audit.user(until == null ? "USER_BOOKING_UNBANNED" : "USER_BOOKING_BANNED", "user", id.toString(), reason,
+                before, after);
+        return UserView.of(u);
+    }
+
+    // ---- Chủ cửa hàng: nhân viên ----
+
+    @Transactional(readOnly = true)
+    public java.util.List<UserView> staff() {
+        return users.search(Role.STAFF, "", PageRequest.of(0, 200, Sort.by("fullName"))).stream()
+                .map(UserView::of).toList();
+    }
+
+    @Transactional
+    public UserView ownerCreateStaff(UserDtos.CreateStaff body) {
+        User u = create(body.fullName(), body.email(), body.phone(), body.password(), EnumSet.of(Role.STAFF));
+        audit.user("STAFF_CREATED", "user", u.getId().toString(), "Tạo tài khoản nhân viên " + u.getEmail(), null,
+                Map.of("roles", u.roleSet()));
+        return UserView.of(u);
+    }
+
+    /** Chủ cửa hàng khóa / mở tài khoản nhân viên; tài khoản có quyền Chủ cửa hàng hoặc Quản trị viên thì không. */
+    @Transactional
+    public UserView ownerUpdateStaffStatus(UUID id, User.Status status, String reason) {
+        requireStaffOnly(get(id));
+        return updateStatus(id, status, reason);
+    }
+
+    @Transactional
+    public void ownerResetStaffPassword(UUID id, String password, String reason) {
+        requireStaffOnly(get(id));
+        adminResetPassword(id, password, reason);
+    }
+
+    public User requireStaff(UUID id) {
+        User u = get(id);
+        if (!u.getRoles().contains(Role.STAFF) && !u.getRoles().contains(Role.OWNER)) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "Tài khoản này không phải nhân viên");
+        }
+        return u;
+    }
+
+    private static void requireStaffOnly(User u) {
+        if (!u.getRoles().contains(Role.STAFF) || u.getRoles().contains(Role.OWNER) || u.getRoles().contains(Role.ADMIN)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Chủ cửa hàng chỉ quản lý tài khoản nhân viên");
+        }
+    }
+
     @Transactional
     public UserView updateStatus(UUID id, User.Status status, String reason) {
         User u = get(id);

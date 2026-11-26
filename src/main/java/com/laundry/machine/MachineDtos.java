@@ -7,6 +7,7 @@ import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
+import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.time.Instant;
@@ -18,13 +19,13 @@ public final class MachineDtos {
     private MachineDtos() {
     }
 
-    public record MachineView(UUID id, String code, Machine.Type type, BigDecimal capacityKg, int cycleMinutes,
+    public record MachineView(UUID id, String code, String displayName, Machine.Type type, BigDecimal capacityKg, int cycleMinutes,
                               Long priceVnd, boolean autoDosing, Machine.AdminStatus adminStatus, String statusReason,
                               MachineStatusResolver.DisplayStatus displayStatus, boolean online, String deviceId,
                               Integer remainingSeconds, Instant busyUntil, int displayOrder,
                               List<PackView> timePacks, UUID priceProfileId, String priceProfileName) {
         static MachineView of(Machine m, MachineStatusResolver.Live live, List<PackView> packs, String profileName) {
-            return new MachineView(m.getId(), m.getCode(), m.getMachineType(), m.getCapacityKg(), m.getCycleMinutes(),
+            return new MachineView(m.getId(), m.getCode(), m.getDisplayName(), m.getMachineType(), m.getCapacityKg(), m.getCycleMinutes(),
                     m.getPriceVnd(), m.isAutoDosing(), m.getAdminStatus(), m.getStatusReason(), live.status(),
                     live.online(), live.deviceId(), live.remainingSeconds(), live.busyUntil(), m.getDisplayOrder(),
                     packs, m.getPriceProfileId(), profileName);
@@ -43,10 +44,13 @@ public final class MachineDtos {
                                 @NotNull @DecimalMin("1.0") @DecimalMax("99.9") BigDecimal capacityKg,
                                 @Min(1) @Max(240) int cycleMinutes,
                                 boolean autoDosing,
-                                int displayOrder) {
+                                int displayOrder,
+                                @Size(max = 60, message = "Tên hiển thị tối đa 60 ký tự") String displayName) {
     }
 
-    public record UpdateMachine(@DecimalMin("1.0") @DecimalMax("99.9") BigDecimal capacityKg,
+    /** displayName: null = giữ nguyên, chuỗi rỗng = xóa tên (màn hình hiện số hiệu). */
+    public record UpdateMachine(@Size(max = 60, message = "Tên hiển thị tối đa 60 ký tự") String displayName,
+                                @DecimalMin("1.0") @DecimalMax("99.9") BigDecimal capacityKg,
                                 @Min(1) @Max(240) Integer cycleMinutes,
                                 Boolean autoDosing,
                                 Integer displayOrder,

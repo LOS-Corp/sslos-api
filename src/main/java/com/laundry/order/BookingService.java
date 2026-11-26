@@ -55,6 +55,7 @@ public class BookingService {
     private final OrderEventLog events;
     private final AuditService audit;
     private final QrCodes qr;
+    private final com.laundry.user.UserRepository users;
     private final Clock clock;
 
     public enum PayOption { DEPOSIT, FULL, BALANCE }
@@ -74,6 +75,10 @@ public class BookingService {
         if (timeProblem != null) throw new BusinessException(ErrorCode.ADVANCE_LIMIT, timeProblem);
 
         Instant now = clock.instant();
+        users.findById(customerId).filter(u -> u.bookingBanned(now)).ifPresent(u -> {
+            throw new BusinessException(ErrorCode.BOOKING_BANNED, ErrorCode.BOOKING_BANNED.message(),
+                    Map.of("until", u.getBookingBannedUntil().toString()));
+        });
         boolean penalty = ViolationPolicy.penaltyActive(
                 orders.violationTimes(customerId, now.minus(Duration.ofDays(s.getViolationWindowDays() + s.getViolationPenaltyDays()))),
                 now, s.getViolationThreshold(), s.getViolationWindowDays(), s.getViolationPenaltyDays());

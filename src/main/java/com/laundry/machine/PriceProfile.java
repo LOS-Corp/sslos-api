@@ -30,6 +30,8 @@ public class PriceProfile extends AssignedIdEntity<UUID> {
     private Machine.Type machineType;
     private long priceVnd;
     private int cycleMinutes;
+    /** V5: công suất (kg) của máy dùng profile này; null = mọi công suất. */
+    private java.math.BigDecimal capacityKg;
     @CreationTimestamp
     private Instant createdAt;
     @UpdateTimestamp

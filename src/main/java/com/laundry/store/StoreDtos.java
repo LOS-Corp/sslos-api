@@ -56,8 +56,26 @@ public final class StoreDtos {
             @Min(0) Integer laundryCompensationMultiplier,
             @Min(0) Integer laundryComplaintWindowHours,
             @Min(0) Long staffRefundLimitVnd,
+            Boolean ironingEnabled, Boolean washDryIronEnabled,
+            @Min(1000) Long ironingPricePerKg,
+            @Min(1000) Long washDryIronPricePerKg,
+            @DecimalMin("0.1") BigDecimal counterMinWeightKg,
+            @Min(1) @Max(168) Integer counterTurnaroundHours,
+            @Min(0) Long washCostPerRunVnd,
+            @Min(0) Long dryCostPerRunVnd,
             @NotBlank String reason) {
     }
+
+    /**
+     * Chính sách hệ thống (Quản trị viên chỉnh, Chủ cửa hàng chỉ xem): quy định đặt lịch, hủy đơn, tiền giữ chỗ,
+     * vi phạm và hoàn tiền. Tên trùng trường của {@link UpdateSettings} / {@link StoreSettings}.
+     */
+    public static final java.util.Set<String> POLICY_FIELDS = java.util.Set.of(
+            "maxAdvanceBookingHours", "earlyCheckinMinutes", "graceMinutes", "startWindowMinutes",
+            "advanceQuotaPercent", "kioskMaxWaitMinutes",
+            "depositPercent", "depositRoundingVnd", "freeCancelBeforeMinutes", "freeCancelAfterBookingMinutes",
+            "violationThreshold", "violationWindowDays", "violationPenaltyDays",
+            "staffRefundLimitVnd", "laundryCompensationMultiplier", "laundryComplaintWindowHours");
 
     public record HourSlot(@Min(1) @Max(7) int dayOfWeek, @NotNull LocalTime opensAt, @NotNull LocalTime closesAt) {
     }
@@ -81,6 +99,13 @@ public final class StoreDtos {
         }
     }
 
+    /** Một đơn bị ảnh hưởng khi tắt dịch vụ: mã đơn, tình trạng, giờ bắt đầu / hẹn trả. */
+    public record ImpactItem(String code, String state, Instant at) {
+    }
+
+    public record ServiceImpact(String service, List<ImpactItem> inUse, List<ImpactItem> upcoming) {
+    }
+
     public record ReadinessCheck(String key, boolean ok, String message) {
     }
 
@@ -94,6 +119,8 @@ public final class StoreDtos {
                               List<HourView> openingHours, List<ClosureView> upcomingClosures,
                               int maxAdvanceBookingHours, int depositPercent, int graceMinutes,
                               int earlyCheckinMinutes, int startWindowMinutes, int freeCancelBeforeMinutes,
-                              int freeCancelAfterBookingMinutes, int kioskMaxWaitMinutes) {
+                              int freeCancelAfterBookingMinutes, int kioskMaxWaitMinutes,
+                              boolean ironingEnabled, boolean washDryIronEnabled,
+                              long ironingPricePerKg, long washDryIronPricePerKg) {
     }
 }

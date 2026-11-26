@@ -84,9 +84,55 @@ public final class StoreControllers {
             service.removeClosure(id, reason);
         }
 
+        @GetMapping("/api/owner/store/services/{service}/impact")
+        @Operation(summary = "Trước khi tắt dịch vụ: khách đang dùng (có thì không tắt được) và đơn đặt sắp tới (vẫn phục vụ)")
+        public StoreDtos.ServiceImpact impact(@PathVariable String service) {
+            return service.isBlank() ? null : this.service.serviceImpact(service.trim().toUpperCase());
+        }
+
         @GetMapping("/api/owner/store/readiness")
         public StoreDtos.Readiness readiness() {
             return service.readiness();
+        }
+    }
+
+    /**
+     * Chính sách hệ thống: quy định đặt lịch, hủy đơn, tiền giữ chỗ, vi phạm, hoàn tiền chung. Quản trị viên chỉnh;
+     * Chủ cửa hàng đọc qua GET /api/owner/store/settings (cùng bảng tham số) nhưng không đổi được các trường này.
+     */
+    @RestController
+    @RequiredArgsConstructor
+    @Tag(name = "Admin · Chính sách hệ thống")
+    public static class AdminPolicyController {
+        private final StoreService service;
+
+        public record PolicyView(java.util.Map<String, Object> values, java.time.Instant updatedAt) {
+        }
+
+        @GetMapping("/api/admin/policies")
+        @Operation(summary = "Các tham số chính sách hiện hành (tên trường như bảng tham số cửa hàng)")
+        public PolicyView policies() {
+            return view(service.settings());
+        }
+
+        @PutMapping("/api/admin/policies")
+        @Operation(summary = "Đổi chính sách; chỉ gửi trường cần đổi, kèm lý do. Đơn đã xác nhận giữ chính sách cũ")
+        public PolicyView update(@Valid @RequestBody StoreDtos.UpdateSettings body) {
+            return view(service.update(body, StoreService.SettingsScope.ADMIN));
+        }
+
+        private static PolicyView view(StoreSettings s) {
+            java.util.Map<String, Object> values = new java.util.TreeMap<>();
+            try {
+                for (String name : StoreDtos.POLICY_FIELDS) {
+                    var field = StoreSettings.class.getDeclaredField(name);
+                    field.setAccessible(true);
+                    values.put(name, field.get(s));
+                }
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalStateException("POLICY_FIELDS does not match StoreSettings", e);
+            }
+            return new PolicyView(values, s.getUpdatedAt());
         }
     }
 }
