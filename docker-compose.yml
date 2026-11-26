@@ -1,0 +1,109 @@
+# LaundryOS · backend + EMQX (+ PostgreSQL cho backend và cho EMQX xác thực bo mạch)
+#   docker compose up -d --build
+# Biến lấy từ .env (copy từ .env.example). Cổng chỉ dành cho máy chủ được bind 127.0.0.1;
+# 8080 (bo đăng ký) và 8883 (MQTT TLS) mở ra LAN cửa hàng.
+
+name: sslos
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      EMQX_AUTH_DB_PASSWORD: ${EMQX_AUTH_DB_PASSWORD}
+      TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Sinh chứng chỉ TLS tự ký cho broker một lần (bo mạch ghim SHA-256 chứng chỉ ở lần nối đầu).
+  # Đổi chứng chỉ = mọi bo phải cài lại, nên volume này không được xóa tùy tiện.
+  emqx-certs:
+    image: alpine:3.20
+    environment:
+      EMQX_TLS_SAN: ${EMQX_TLS_SAN}
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        if [ -s /certs/cert.pem ] && [ -s /certs/key.pem ]; then echo "certificate exists"; exit 0; fi
+        apk add --no-cache openssl >/dev/null
+        openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
+          -subj "/CN=LaundryOS store broker" -addext "subjectAltName=$${EMQX_TLS_SAN}" \
+          -keyout /certs/key.pem -out /certs/cert.pem
+        chmod 644 /certs/cert.pem /certs/key.pem
+        openssl x509 -in /certs/cert.pem -noout -fingerprint -sha256
+    volumes:
+      - emqx_certs:/certs
+
+  emqx:
+    image: emqx/emqx:5.8.6
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      emqx-certs:
+        condition: service_completed_successfully
+    environment:
+      # Ghi đè docker/emqx/emqx.conf (EMQX_<khóa>, "__" = dấu chấm, mảng đánh số từ 1)
+      EMQX_NODE__COOKIE: ${EMQX_NODE_COOKIE}   # không bọc "...": emqx ctl đọc biến này nguyên văn
+      EMQX_AUTHENTICATION__1__SERVER: postgres:5432
+      EMQX_AUTHENTICATION__1__DATABASE: ${POSTGRES_DB}
+      # Bọc "..." để EMQX (đọc giá trị theo HOCON) luôn hiểu là chuỗi, kể cả mật khẩu toàn số
+      EMQX_AUTHENTICATION__1__PASSWORD: '"${EMQX_AUTH_DB_PASSWORD}"'
+      EMQX_DASHBOARD__DEFAULT_USERNAME: admin
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: '"${EMQX_DASHBOARD_PASSWORD}"'
+      TZ: Asia/Ho_Chi_Minh
+    volumes:
+      - ./docker/emqx/emqx.conf:/opt/emqx/etc/emqx.conf:ro
+      - ./docker/emqx/acl.conf:/opt/emqx/etc/acl.conf:ro
+      - emqx_certs:/opt/emqx/etc/certs/store:ro
+      - emqx_data:/opt/emqx/data
+      - emqx_log:/opt/emqx/log
+    ports:
+      - "127.0.0.1:1883:1883"     # backend chạy ngoài docker (run-be.ps1)
+      - "8883:8883"               # bo mạch, MQTT over TLS
+      - "127.0.0.1:18083:18083"   # dashboard
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ctl", "status"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+
+  backend:
+    build: .
+    image: ghcr.io/los-corp/sslos-api:local
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      emqx:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Ghi đè địa chỉ trong .env (vốn dành cho chạy ngoài docker) bằng tên service.
+      DB_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      DB_USERNAME: ${POSTGRES_USER}
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      MQTT_HOST: emqx
+      MQTT_PORT: 1883
+      TZ: Asia/Ho_Chi_Minh
+    ports:
+      - "${BACKEND_HOST_PORT:-8080}:8080"
+
+volumes:
+  postgres_data:
+  emqx_certs:
+  emqx_data:
+  emqx_log:
