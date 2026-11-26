@@ -3,6 +3,8 @@ package com.laundry.machine;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.DecimalMax;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotBlank;
@@ -39,14 +41,21 @@ public class PriceProfileController {
         }
     }
 
+    /** capacityKg: giá thuê theo công suất, profile chỉ gắn cho máy đúng số kg này; null = mọi công suất. */
     public record CreateBody(@NotBlank @Size(max = 80) String name, @Size(max = 300) String description,
                              @NotNull Machine.Type machineType, @Min(1000) long priceVnd, @Min(1) @Max(240) int cycleMinutes,
-                             @Valid List<PackBody> packs) {
+                             @Valid List<PackBody> packs,
+                             @DecimalMin("1.0") @DecimalMax("99.9") java.math.BigDecimal capacityKg) {
     }
 
     public record UpdateBody(@NotBlank @Size(max = 80) String name, @Size(max = 300) String description,
                              Machine.Type machineType, @Min(1000) long priceVnd, @Min(1) @Max(240) int cycleMinutes,
-                             @Valid List<PackBody> packs, @NotBlank String reason) {
+                             @Valid List<PackBody> packs,
+                             @DecimalMin("1.0") @DecimalMax("99.9") java.math.BigDecimal capacityKg,
+                             @NotBlank String reason) {
+    }
+
+    public record ReasonBody(@NotBlank String reason) {
     }
 
     private static List<PriceProfileService.PackView> packs(List<PackBody> packs) {
@@ -66,14 +75,20 @@ public class PriceProfileController {
     @ResponseStatus(HttpStatus.CREATED)
     public PriceProfileService.ProfileView create(@Valid @RequestBody CreateBody body) {
         return service.create(new PriceProfileService.ProfileInput(body.name(), body.description(), body.machineType(),
-                body.priceVnd(), body.cycleMinutes(), packs(body.packs())));
+                body.priceVnd(), body.cycleMinutes(), packs(body.packs()), body.capacityKg()));
+    }
+
+    @PostMapping("/api/owner/price-profiles/{id}/apply-by-capacity")
+    @Operation(summary = "Gắn profile cho mọi máy cùng loại, cùng công suất (profile phải đặt công suất)")
+    public PriceProfileService.ApplyResult applyByCapacity(@PathVariable UUID id, @Valid @RequestBody ReasonBody body) {
+        return service.applyByCapacity(id, body.reason());
     }
 
     @PutMapping("/api/owner/price-profiles/{id}")
     @Operation(summary = "Sửa profile: mọi máy gắn profile đổi giá, số phút, gói sấy thêm theo ngay; lượt đã đặt giữ giá cũ")
     public PriceProfileService.ProfileView update(@PathVariable UUID id, @Valid @RequestBody UpdateBody body) {
         return service.update(id, new PriceProfileService.ProfileInput(body.name(), body.description(), body.machineType(),
-                body.priceVnd(), body.cycleMinutes(), packs(body.packs())), body.reason());
+                body.priceVnd(), body.cycleMinutes(), packs(body.packs()), body.capacityKg()), body.reason());
     }
 
     @DeleteMapping("/api/owner/price-profiles/{id}")

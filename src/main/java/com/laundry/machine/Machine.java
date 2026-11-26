@@ -35,6 +35,8 @@ public class Machine extends AssignedIdEntity<UUID> {
     @Id
     private UUID id = UUID.randomUUID();
     private String code;
+    /** Tên khách thấy khi chọn máy; null = chưa đặt (hiện số hiệu). */
+    private String displayName;
     @Enumerated(EnumType.STRING)
     private Type machineType;
     private BigDecimal capacityKg;

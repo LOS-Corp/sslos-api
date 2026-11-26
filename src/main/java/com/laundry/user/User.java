@@ -42,6 +42,10 @@ public class User extends AssignedIdEntity<UUID> {
     private Status status = Status.ACTIVE;
     private Instant emailVerifiedAt;
     private Instant lastLoginAt;
+    /** V5: Quản trị viên khóa quyền đặt trước tới mốc này (vi phạm); null = không khóa. */
+    private Instant bookingBannedUntil;
+    private String bookingBanReason;
+    private UUID bookingBannedBy;
     @CreationTimestamp
     private Instant createdAt;
     @UpdateTimestamp
@@ -61,5 +65,9 @@ public class User extends AssignedIdEntity<UUID> {
 
     public boolean isActive() {
         return status == Status.ACTIVE;
+    }
+
+    public boolean bookingBanned(Instant now) {
+        return bookingBannedUntil != null && bookingBannedUntil.isAfter(now);
     }
 }

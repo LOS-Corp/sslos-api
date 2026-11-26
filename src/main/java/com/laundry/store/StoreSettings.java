@@ -73,6 +73,17 @@ public class StoreSettings {
 
     private long staffRefundLimitVnd;
 
+    // V5: dịch vụ tại quầy do nhân viên làm (ủi, giặt-sấy-ủi), tính theo kg
+    private boolean ironingEnabled;
+    private boolean washDryIronEnabled;
+    private long ironingPricePerKg;
+    private long washDryIronPricePerKg;
+    private BigDecimal counterMinWeightKg;
+    private int counterTurnaroundHours;
+    // V5: chi phí trung bình một lượt máy, chỉ dùng ước tính lợi nhuận
+    private long washCostPerRunVnd;
+    private long dryCostPerRunVnd;
+
     @UpdateTimestamp
     private Instant updatedAt;
     private UUID updatedBy;

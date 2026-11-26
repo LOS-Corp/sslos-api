@@ -90,12 +90,13 @@ public final class DeviceControllers {
         public record ReplaceBody(@NotBlank @Pattern(regexp = DeviceIds.REGEX) String replacementId, @NotBlank String reason) {
         }
 
-        @GetMapping("/api/admin/devices")
+        /** Chủ cửa hàng xem (chỉ đọc) bo của cửa hàng: kết nối, phần mềm, máy/tủ đang gắn. Duyệt/gắn/thu hồi chỉ Admin. */
+        @GetMapping({"/api/admin/devices", "/api/owner/devices"})
         public List<DeviceAdminService.DeviceView> list() {
             return service.list();
         }
 
-        @GetMapping("/api/admin/devices/{id}")
+        @GetMapping({"/api/admin/devices/{id}", "/api/owner/devices/{id}"})
         public DeviceAdminService.DeviceView get(@PathVariable String id) {
             return service.get(id);
         }

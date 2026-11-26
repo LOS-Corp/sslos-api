@@ -35,6 +35,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwt;
     private final EmailSender email;
+    private final LoginEventService loginEvents;
     private final Clock clock;
 
     @Value("${app.jwt.refresh-expiration-seconds}")
@@ -60,15 +61,22 @@ public class AuthService {
         Optional<User> found = users.findByEmail(rawEmail.trim());
         if (found.isEmpty()) {
             passwordEncoder.matches(password, DUMMY_HASH);
+            loginEvents.record(null, rawEmail, LoginEventService.Failure.UNKNOWN_EMAIL, ip, userAgent);
             throw new BusinessException(ErrorCode.INVALID_CREDENTIALS);
         }
         User user = found.get();
         if (!passwordEncoder.matches(password, user.getPasswordHash())) {
+            loginEvents.record(user.getId(), user.getEmail(), LoginEventService.Failure.WRONG_PASSWORD, ip, userAgent);
             throw new BusinessException(ErrorCode.INVALID_CREDENTIALS);
         }
-        if (!user.isActive()) throw new BusinessException(ErrorCode.ACCOUNT_LOCKED);
+        if (!user.isActive()) {
+            loginEvents.record(user.getId(), user.getEmail(), LoginEventService.Failure.ACCOUNT_LOCKED, ip, userAgent);
+            throw new BusinessException(ErrorCode.ACCOUNT_LOCKED);
+        }
         user.setLastLoginAt(clock.instant());
-        return issue(user, UUID.randomUUID(), userAgent, ip);
+        AuthTokens tokens = issue(user, UUID.randomUUID(), userAgent, ip);
+        loginEvents.record(user.getId(), user.getEmail(), null, ip, userAgent);
+        return tokens;
     }
 
     /** Xoay vòng: token cũ bị thu hồi; dùng lại một token đã thu hồi = bị lộ, thu hồi cả chuỗi. */

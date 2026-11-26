@@ -57,6 +57,7 @@ public final class MachineControllers {
             return service.view(id);
         }
 
+        /** Quản trị viên và Chủ cửa hàng thêm máy giặt, máy sấy. */
         @PostMapping({"/api/admin/machines", "/api/owner/machines"})
         @ResponseStatus(HttpStatus.CREATED)
         public MachineView create(@Valid @RequestBody MachineDtos.CreateMachine body) {

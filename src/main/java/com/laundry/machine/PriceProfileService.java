@@ -44,13 +44,17 @@ public class PriceProfileService {
     public record PackView(int minutes, long priceVnd, boolean active) {
     }
 
+    /** capacityKg: profile dành cho máy công suất này (giá thuê theo công suất); null = mọi công suất. */
     public record ProfileView(UUID id, String name, String description, Machine.Type machineType, long priceVnd,
                               int cycleMinutes, List<PackView> packs, int machineCount, List<String> machineCodes,
-                              Instant updatedAt) {
+                              Instant updatedAt, java.math.BigDecimal capacityKg, List<String> matchingUnassigned) {
     }
 
     public record ProfileInput(String name, String description, Machine.Type machineType, long priceVnd, int cycleMinutes,
-                               List<PackView> packs) {
+                               List<PackView> packs, java.math.BigDecimal capacityKg) {
+    }
+
+    public record ApplyResult(ProfileView profile, List<String> assigned, List<String> skipped) {
     }
 
     @Transactional(readOnly = true)
@@ -61,8 +65,44 @@ public class PriceProfileService {
         }
         Map<UUID, List<PriceProfilePack>> packs = profilePacks.listAll().stream()
                 .collect(Collectors.groupingBy(PriceProfilePack::getProfileId));
+        List<Machine> all = machines.listInService();
         return profiles.listAll().stream()
-                .map(p -> view(p, packs.getOrDefault(p.getId(), List.of()), codes.getOrDefault(p.getId(), List.of()))).toList();
+                .map(p -> view(p, packs.getOrDefault(p.getId(), List.of()), codes.getOrDefault(p.getId(), List.of()), all))
+                .toList();
+    }
+
+    /**
+     * Giá thuê theo công suất: gắn profile (đã đặt công suất) cho mọi máy đang phục vụ cùng loại và cùng công suất chưa
+     * theo profile này. Máy đang theo profile khác cũng được chuyển sang.
+     */
+    @Transactional
+    public ApplyResult applyByCapacity(UUID id, String rawReason) {
+        String reason = Reasons.require(rawReason);
+        PriceProfile p = profiles.lock(id).orElseThrow(() -> BusinessException.notFound("profile giá"));
+        if (p.getCapacityKg() == null) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "Profile chưa đặt công suất: sửa profile, chọn công suất máy trước");
+        }
+        List<PriceProfilePack> packs = profilePacks.findByProfileIdOrderByDisplayOrderAscMinutesAsc(id);
+        List<String> assigned = new ArrayList<>();
+        List<String> skipped = new ArrayList<>();
+        for (Machine m : machines.listInService()) {
+            if (m.getMachineType() != p.getMachineType() || m.getCapacityKg() == null
+                    || m.getCapacityKg().compareTo(p.getCapacityKg()) != 0) continue;
+            if (id.equals(m.getPriceProfileId())) {
+                skipped.add(m.getCode());
+                continue;
+            }
+            Machine locked = machines.lock(m.getId()).orElseThrow();
+            locked.setPriceProfileId(id);
+            syncFrom(locked, p, packs);
+            assigned.add(m.getCode());
+        }
+        if (!assigned.isEmpty()) {
+            audit.user("PRICE_PROFILE_APPLIED", "price_profile", id.toString(), reason, null,
+                    Map.of("capacityKg", p.getCapacityKg(), "machines", assigned));
+        }
+        List<String> codes = machines.findByPriceProfileIdOrderByCode(id).stream().map(Machine::getCode).toList();
+        return new ApplyResult(view(p, packs, codes, machines.listInService()), assigned, skipped);
     }
 
     @Transactional
@@ -76,7 +116,7 @@ public class PriceProfileService {
         List<PriceProfilePack> saved = replacePacks(p.getId(), packs);
         audit.user("PRICE_PROFILE_CREATED", "price_profile", p.getId().toString(), "Thêm profile " + p.getName(), null,
                 snapshot(p, saved));
-        return view(p, saved, List.of());
+        return view(p, saved, List.of(), machines.listInService());
     }
 
     /** Sửa profile: mọi máy gắn profile đổi giá/số phút theo ngay. Lượt đã đặt giữ giá cũ. */
@@ -90,14 +130,23 @@ public class PriceProfileService {
         requireUniqueName(in.name(), id);
         List<PackView> packs = validPacks(p.getMachineType(), in.packs());
         Map<String, Object> before = snapshot(p, profilePacks.findByProfileIdOrderByDisplayOrderAscMinutesAsc(id));
+        List<Machine> attached = machines.findByPriceProfileIdOrderByCode(id);
+        if (in.capacityKg() != null) {
+            List<String> mismatched = attached.stream().filter(m -> m.getCapacityKg() == null
+                    || m.getCapacityKg().compareTo(in.capacityKg()) != 0).map(Machine::getCode).toList();
+            if (!mismatched.isEmpty()) {
+                throw new BusinessException(ErrorCode.CONFLICT, "Máy " + String.join(", ", mismatched)
+                        + " đang theo profile nhưng khác công suất " + in.capacityKg().stripTrailingZeros().toPlainString()
+                        + " kg; gỡ các máy đó hoặc để trống công suất");
+            }
+        }
         apply(p, in);
         List<PriceProfilePack> saved = replacePacks(id, packs);
-        List<Machine> attached = machines.findByPriceProfileIdOrderByCode(id);
         for (Machine m : attached) syncFrom(m, p, saved);
         Map<String, Object> after = snapshot(p, saved);
         after.put("machines", attached.stream().map(Machine::getCode).toList());
         audit.user("PRICE_PROFILE_CHANGED", "price_profile", id.toString(), reason, before, after);
-        return view(p, saved, attached.stream().map(Machine::getCode).toList());
+        return view(p, saved, attached.stream().map(Machine::getCode).toList(), machines.listInService());
     }
 
     @Transactional
@@ -133,6 +182,11 @@ public class PriceProfileService {
             if (p.getMachineType() != m.getMachineType()) {
                 throw new BusinessException(ErrorCode.MACHINE_TYPE_MISMATCH, "Profile " + p.getName() + " dành cho "
                         + (p.getMachineType() == Machine.Type.DRYER ? "máy sấy" : "máy giặt"));
+            }
+            if (p.getCapacityKg() != null && (m.getCapacityKg() == null || m.getCapacityKg().compareTo(p.getCapacityKg()) != 0)) {
+                throw new BusinessException(ErrorCode.MACHINE_TYPE_MISMATCH, "Profile " + p.getName() + " dành cho máy "
+                        + p.getCapacityKg().stripTrailingZeros().toPlainString() + " kg; máy " + m.getCode() + " là "
+                        + (m.getCapacityKg() == null ? "?" : m.getCapacityKg().stripTrailingZeros().toPlainString()) + " kg");
             }
             m.setPriceProfileId(p.getId());
             syncFrom(m, p, profilePacks.findByProfileIdOrderByDisplayOrderAscMinutesAsc(p.getId()));
@@ -215,6 +269,7 @@ public class PriceProfileService {
         p.setDescription(in.description() == null || in.description().isBlank() ? null : in.description().trim());
         p.setPriceVnd(in.priceVnd());
         p.setCycleMinutes(in.cycleMinutes());
+        p.setCapacityKg(in.capacityKg());
     }
 
     private void requireUniqueName(String name, UUID except) {
@@ -230,15 +285,20 @@ public class PriceProfileService {
         m.put("machineType", p.getMachineType());
         m.put("priceVnd", p.getPriceVnd());
         m.put("cycleMinutes", p.getCycleMinutes());
+        m.put("capacityKg", p.getCapacityKg());
         if (p.getMachineType() == Machine.Type.DRYER) {
             m.put("packs", packs.stream().map(x -> x.getMinutes() + " phút " + x.getPriceVnd() + (x.isActive() ? "" : " (tắt)")).toList());
         }
         return m;
     }
 
-    private static ProfileView view(PriceProfile p, List<PriceProfilePack> packs, List<String> codes) {
+    private static ProfileView view(PriceProfile p, List<PriceProfilePack> packs, List<String> codes, List<Machine> inService) {
+        List<String> matching = p.getCapacityKg() == null ? List.of() : inService.stream()
+                .filter(m -> m.getMachineType() == p.getMachineType() && m.getCapacityKg() != null
+                        && m.getCapacityKg().compareTo(p.getCapacityKg()) == 0 && !p.getId().equals(m.getPriceProfileId()))
+                .map(Machine::getCode).sorted().toList();
         return new ProfileView(p.getId(), p.getName(), p.getDescription(), p.getMachineType(), p.getPriceVnd(),
                 p.getCycleMinutes(), packs.stream().map(x -> new PackView(x.getMinutes(), x.getPriceVnd(), x.isActive())).toList(),
-                codes.size(), codes, p.getUpdatedAt());
+                codes.size(), codes, p.getUpdatedAt(), p.getCapacityKg(), matching);
     }
 }

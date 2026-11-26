@@ -66,6 +66,7 @@ public class MachineService {
         if (machines.existsByCode(body.code())) throw new BusinessException(ErrorCode.CONFLICT, "Số hiệu máy đã tồn tại");
         Machine m = new Machine();
         m.setCode(body.code());
+        m.setDisplayName(cleanName(body.displayName()));
         m.setMachineType(body.type());
         m.setCapacityKg(body.capacityKg());
         m.setCycleMinutes(body.cycleMinutes());
@@ -82,10 +83,22 @@ public class MachineService {
         Machine m = get(id);
         Map<String, Object> before = new LinkedHashMap<>();
         Map<String, Object> after = new LinkedHashMap<>();
+        if (body.displayName() != null) {
+            String name = cleanName(body.displayName());
+            if (!java.util.Objects.equals(name, m.getDisplayName())) {
+                before.put("displayName", m.getDisplayName());
+                after.put("displayName", name);
+                m.setDisplayName(name);
+            }
+        }
         if (body.capacityKg() != null && body.capacityKg().compareTo(m.getCapacityKg()) != 0) {
             before.put("capacityKg", m.getCapacityKg());
             after.put("capacityKg", body.capacityKg());
             m.setCapacityKg(body.capacityKg());
+            // Profile giá theo công suất chỉ áp cho đúng số kg: đổi công suất thì máy tách khỏi profile đó.
+            boolean capacityBound = m.getPriceProfileId() != null && profiles.findById(m.getPriceProfileId())
+                    .map(p -> p.getCapacityKg() != null && p.getCapacityKg().compareTo(body.capacityKg()) != 0).orElse(false);
+            if (capacityBound) detachProfile(m, before, after);
         }
         if (body.cycleMinutes() != null && body.cycleMinutes() != m.getCycleMinutes()) {
             before.put("cycleMinutes", m.getCycleMinutes());
@@ -224,6 +237,13 @@ public class MachineService {
     private List<PackView> packViews(Machine m) {
         if (m.getMachineType() != Machine.Type.DRYER) return List.of();
         return packs.findByMachineIdOrderByDisplayOrderAscMinutesAsc(m.getId()).stream().map(PackView::of).toList();
+    }
+
+    /** Bỏ khoảng trắng thừa; chuỗi rỗng thành null (chưa đặt tên). */
+    private static String cleanName(String raw) {
+        if (raw == null) return null;
+        String name = raw.strip().replaceAll("\\s+", " ");
+        return name.isEmpty() ? null : name;
     }
 
     private static Map<String, Object> mapOf(String key, Object value) {

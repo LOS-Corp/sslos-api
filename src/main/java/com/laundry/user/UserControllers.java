@@ -87,5 +87,42 @@ public final class UserControllers {
         public UserView status(@PathVariable UUID id, @Valid @RequestBody UserDtos.UpdateStatus body) {
             return service.updateStatus(id, body.status(), body.reason());
         }
+
+        @PutMapping("/{id}/booking-ban")
+        @Operation(summary = "Khóa quyền đặt trước của khách tới `until` (vi phạm); until null = gỡ khóa")
+        public UserView bookingBan(@PathVariable UUID id, @Valid @RequestBody UserDtos.BookingBan body) {
+            return service.setBookingBan(id, body.until(), body.reason());
+        }
+    }
+
+    /** Chủ cửa hàng: tạo tài khoản nhân viên, khóa / mở, đặt lại mật khẩu. Không cấp được quyền khác STAFF. */
+    @RestController
+    @RequestMapping("/api/owner/staff")
+    @RequiredArgsConstructor
+    @Tag(name = "Chủ cửa hàng · Nhân viên")
+    public static class OwnerStaffController {
+        private final UserService service;
+
+        @GetMapping
+        public java.util.List<UserView> list() {
+            return service.staff();
+        }
+
+        @PostMapping
+        @ResponseStatus(HttpStatus.CREATED)
+        public UserView create(@Valid @RequestBody UserDtos.CreateStaff body) {
+            return service.ownerCreateStaff(body);
+        }
+
+        @PutMapping("/{id}/status")
+        public UserView status(@PathVariable UUID id, @Valid @RequestBody UserDtos.UpdateStatus body) {
+            return service.ownerUpdateStaffStatus(id, body.status(), body.reason());
+        }
+
+        @PutMapping("/{id}/password")
+        @ResponseStatus(HttpStatus.NO_CONTENT)
+        public void resetPassword(@PathVariable UUID id, @Valid @RequestBody UserDtos.ResetPassword body) {
+            service.ownerResetStaffPassword(id, body.password(), body.reason());
+        }
     }
 }
