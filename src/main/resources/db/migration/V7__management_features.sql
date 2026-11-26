@@ -1,5 +1,5 @@
 -- =============================================================================
--- V5: Chức năng quản lý của Quản trị viên và Chủ cửa hàng.
+-- V7: Chức năng quản lý của Quản trị viên và Chủ cửa hàng.
 --   Admin: khóa quyền đặt lịch (vi phạm), lịch sử đăng nhập, sự cố hệ thống.
 --   Owner: dịch vụ tại quầy (ủi, giặt-sấy-ủi), giá theo công suất, phân công việc cho nhân viên,
 --          chi phí mỗi lượt máy (ước tính lợi nhuận).

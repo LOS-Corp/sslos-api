@@ -8,6 +8,11 @@ import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.net.http.HttpClient;
@@ -40,6 +45,9 @@ public class SePayGateway {
     private final SePayProperties props;
     private final ObjectMapper mapper;
     private final RestClient http;
+    /** Như trình duyệt gửi form, nhưng không đi theo chuyển hướng (để đọc Location). */
+    private final HttpClient browser = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
+            .followRedirects(HttpClient.Redirect.NEVER).build();
 
     public SePayGateway(SePayProperties props, ObjectMapper mapper) {
         this.props = props;
@@ -114,6 +122,39 @@ public class SePayGateway {
         } catch (Exception e) {
             throw new IllegalStateException("Không ký được form SePay", e);
         }
+    }
+
+    /**
+     * Gửi form thanh toán từ phía máy chủ và lấy địa chỉ trang thanh toán công khai mà SePay chuyển tới
+     * (303 → https://pay.sepay.vn/v1/checkout?...). Link này mở được trên mọi thiết bị (điện thoại quét QR ở kiosk),
+     * không cần backend có địa chỉ công khai. Lỗi / SePay không chuyển tiếp: null (dùng trang nội bộ thay thế).
+     */
+    public String initCheckout(long code, long amount, String description) {
+        if (!props.configured()) return null;
+        StringBuilder body = new StringBuilder();
+        checkoutForm(code, amount, description).forEach((k, v) -> {
+            if (!body.isEmpty()) body.append('&');
+            body.append(URLEncoder.encode(k, StandardCharsets.UTF_8)).append('=').append(URLEncoder.encode(v, StandardCharsets.UTF_8));
+        });
+        try {
+            HttpResponse<Void> res = browser.send(HttpRequest.newBuilder(URI.create(props.checkoutUrl()))
+                    .timeout(Duration.ofSeconds(10))
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .POST(HttpRequest.BodyPublishers.ofString(body.toString())).build(), HttpResponse.BodyHandlers.discarding());
+            String location = res.headers().firstValue("Location").orElse(null);
+            if (res.statusCode() / 100 == 3 && location != null && location.contains("/v1/checkout")) {
+                URI target = URI.create(props.checkoutUrl()).resolve(location);
+                if ("https".equals(target.getScheme()) && target.getHost() != null && target.getHost().endsWith("sepay.vn")) {
+                    return target.toString();
+                }
+            }
+            log.warn("SePay checkout init for {} answered {} without a checkout redirect", invoice(code), res.statusCode());
+        } catch (IOException | RuntimeException e) {
+            log.warn("SePay checkout init for {} failed: {}", invoice(code), e.getMessage());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        return null;
     }
 
     /**

@@ -126,6 +126,12 @@ public class StaffOrderController {
         return views.view(staff.stop(id, legNo, body.storeFault(), body.reason()), false);
     }
 
+    @GetMapping("/api/staff/orders/{id}/legs/{legNo}/rerun-options")
+    @Operation(summary = "Máy chạy lại được ngay cho lượt bị gián đoạn: cùng loại, đang bán, có kết nối, rảnh")
+    public java.util.List<StaffOrderService.SwitchOption> rerunOptions(@PathVariable UUID id, @PathVariable int legNo) {
+        return staff.rerunOptions(id, legNo);
+    }
+
     @PostMapping("/api/staff/orders/{id}/legs/{legNo}/rerun")
     @Operation(summary = "Máy hỏng giữa chừng: chạy lại miễn phí trên máy khác cùng loại")
     public OrderViews.OrderView rerun(@PathVariable UUID id, @PathVariable int legNo, @Valid @RequestBody MachineBody body) {
@@ -138,7 +144,14 @@ public class StaffOrderController {
         return views.view(staff.refundLeg(id, legNo, body.reason()), false);
     }
 
+    @GetMapping("/api/staff/orders/{id}/legs/{legNo}/switch-options")
+    @Operation(summary = "Máy đổi được cho lượt chưa chạy: cùng loại, đang bán, có kết nối, rảnh; kèm số tiền chênh sẽ hoàn")
+    public java.util.List<StaffOrderService.SwitchOption> switchOptions(@PathVariable UUID id, @PathVariable int legNo) {
+        return staff.switchOptions(id, legNo);
+    }
+
     @PostMapping("/api/staff/orders/{id}/legs/{legNo}/switch-machine")
+    @Operation(summary = "Đổi lượt chưa chạy sang máy khác; máy rẻ hơn thì hoàn phần chênh vào ví, đắt hơn không thu thêm")
     public OrderViews.OrderView switchMachine(@PathVariable UUID id, @PathVariable int legNo,
                                               @Valid @RequestBody MachineBody body) {
         return views.view(staff.switchMachine(id, legNo, body.machineId(), body.reason()), false);

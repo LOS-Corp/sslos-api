@@ -5,11 +5,15 @@ import com.laundry.store.StoreService;
 import com.laundry.store.StoreSettings;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
 import lombok.RequiredArgsConstructor;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -26,7 +30,7 @@ import java.util.UUID;
 /**
  * Quản lý vi phạm (§11.1): khách không đến hoặc hủy muộn đơn đặt trước. Chính sách tự động: đủ ngưỡng trong cửa sổ
  * thì phải trả 100% khi đặt trước trong thời gian phạt. Quản trị viên xem danh sách, và khi cần thì khóa hẳn quyền
- * đặt lịch (PUT /api/admin/users/{id}/booking-ban).
+ * đặt lịch (PUT /api/admin/users/{id}/booking-ban), hoặc miễn vi phạm cho đơn bị tính oan do lỗi hệ thống.
  */
 @RestController
 @RequiredArgsConstructor
@@ -36,6 +40,7 @@ public class ViolationController {
     private final JdbcTemplate jdbc;
     private final StoreService store;
     private final Clock clock;
+    private final BookingService booking;
 
     /**
      * recentCount: số lần vi phạm trong cửa sổ đang tính; prepayPenalty: đang bị buộc trả 100% theo chính sách;
@@ -112,6 +117,19 @@ public class ViolationController {
         return new ViolationSummary(s.getViolationThreshold(), s.getViolationWindowDays(), s.getViolationPenaltyDays(),
                 rows.size(), rows.stream().filter(ViolatorView::prepayPenalty).count(),
                 rows.stream().filter(r -> r.bookingBannedUntil() != null).count(), items);
+    }
+
+    public record WaiveBody(@NotBlank String reason) {
+    }
+
+    public record WaiveResult(UUID orderId, String code, long refunded) {
+    }
+
+    @PostMapping("/api/admin/violations/orders/{orderId}/waive")
+    @Operation(summary = "Miễn vi phạm do lỗi hệ thống: đơn thôi tính vi phạm và hoàn lại tiền giữ chỗ đã giữ vào ví khách")
+    public WaiveResult waive(@PathVariable UUID orderId, @Valid @RequestBody WaiveBody body) {
+        BookingService.Waived w = booking.waiveViolation(orderId, body.reason());
+        return new WaiveResult(w.order().getId(), w.order().getCode(), w.refunded());
     }
 
     @GetMapping("/api/admin/violations/{userId}")

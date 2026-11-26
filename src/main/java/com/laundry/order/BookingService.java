@@ -318,6 +318,39 @@ public class BookingService {
         return o;
     }
 
+    /**
+     * Quản trị viên miễn vi phạm vì lỗi hệ thống (khách không đến / hủy muộn bị tính oan): đổi loại hủy sang lỗi cửa hàng
+     * để đơn thôi tính vi phạm (phạt trả 100% tự hết nếu khách không còn đủ ngưỡng), và hoàn lại tiền giữ chỗ đã giữ.
+     */
+    public record Waived(Order order, long refunded) {
+    }
+
+    @Transactional
+    public Waived waiveViolation(UUID orderId, String rawReason) {
+        String reason = Reasons.require(rawReason);
+        Order o = orders.lock(orderId).orElseThrow(() -> BusinessException.notFound("đơn"));
+        if (o.getChannel() != Order.Channel.APP || o.getCancellationKind() == null
+                || (o.getCancellationKind() != Order.CancellationKind.NO_SHOW
+                && o.getCancellationKind() != Order.CancellationKind.LATE)) {
+            throw new BusinessException(ErrorCode.ORDER_STATE, "Đơn không bị tính vi phạm");
+        }
+        Order.CancellationKind before = o.getCancellationKind();
+        long forfeit = o.getForfeitedAmount();
+        o.setCancellationKind(Order.CancellationKind.STORE_FAULT);
+        o.setForfeitedAmount(0);
+        orders.saveAndFlush(o);
+        refunds.auto(o, forfeit, Refund.Reason.STORE_FAULT, "Miễn vi phạm do lỗi hệ thống: " + reason);
+        events.record(o.getId(), "VIOLATION_WAIVED", o.getStatus(), o.getStatus(),
+                Map.of("from", before.name(), "refund", forfeit, "reason", reason));
+        audit.user("ORDER_VIOLATION_WAIVED", "order", orderId.toString(), reason,
+                Map.of("cancellationKind", before.name(), "forfeited", forfeit),
+                Map.of("cancellationKind", Order.CancellationKind.STORE_FAULT.name(), "refund", forfeit));
+        notifications.order(o, Notification.Type.REFUND_ISSUED, "Đơn " + o.getCode() + " được miễn vi phạm",
+                "Cửa hàng xác nhận lỗi do hệ thống nên đơn không còn tính vi phạm"
+                        + (forfeit > 0 ? ". Hoàn " + Money.format(forfeit) + " tiền giữ chỗ" : "") + ".", null);
+        return new Waived(o, forfeit);
+    }
+
     /** Sự cố cửa hàng, không có máy thay thế: hoàn 100%, không tính vi phạm. */
     @Transactional(propagation = Propagation.MANDATORY)
     public void cancelForStoreFault(Order o, String reason) {

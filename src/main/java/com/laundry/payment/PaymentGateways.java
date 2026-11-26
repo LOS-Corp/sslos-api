@@ -80,7 +80,11 @@ public class PaymentGateways {
             String name = g.name().toLowerCase(Locale.ROOT);
             return new Created(g, "sim://" + name + "/" + code, "SIMULATED|" + code + "|" + amount, null);
         }
-        if (g == PaymentIntent.Gateway.SEPAY) return new Created(g, sepay.checkoutLink(code), null, null);
+        if (g == PaymentIntent.Gateway.SEPAY) {
+            // Link trang thanh toán công khai của SePay (mở được trên điện thoại); lỗi thì dùng trang nội bộ của backend.
+            String url = sepay.initCheckout(code, amount, description);
+            return new Created(g, url != null ? url : sepay.checkoutLink(code), null, null);
+        }
         PayOsGateway.Link link = payos.create(code, amount, description, expiresAt);
         return new Created(g, link.checkoutUrl(), link.qrCode(), link.paymentLinkId());
     }

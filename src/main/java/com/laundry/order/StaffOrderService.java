@@ -29,6 +29,8 @@ public class StaffOrderService {
     private final MachineRepository machines;
     private final BookingSupport support;
     private final BookingService booking;
+    private final ReassignmentService reassignment;
+    private final com.laundry.notification.NotificationService notifications;
     private final DeviceCommandService commands;
     private final OrderEventLog events;
     private final AuditService audit;
@@ -54,6 +56,29 @@ public class StaffOrderService {
         events.record(o.getId(), "LEG_STOPPED_BY_STAFF", o.getStatus(), o.getStatus(),
                 Map.of("legNo", legNo, "storeFault", storeFault, "reason", reason));
         return o;
+    }
+
+    /**
+     * Máy chạy lại được cho lượt bị gián đoạn: cùng loại, đang bán, có kết nối, khác máy vừa hỏng, rảnh từ bây giờ tới
+     * hết khung rerun (chờ START + chu trình + lấy đồ + dọn), đúng như {@link #rerun} kiểm tra.
+     */
+    @Transactional(readOnly = true)
+    public java.util.List<SwitchOption> rerunOptions(UUID orderId, int legNo) {
+        Order o = orders.findById(orderId).orElseThrow(() -> BusinessException.notFound("đơn"));
+        OrderLeg leg = legs.findByOrderIdOrderByLegNo(o.getId()).stream().filter(l -> l.getLegNo() == legNo).findFirst()
+                .orElseThrow(() -> BusinessException.notFound("chặng"));
+        if (leg.getStatus() != OrderLeg.Status.INTERRUPTED) return java.util.List.of();
+        OrderPolicy p = support.policy(o);
+        Instant now = clock.instant();
+        java.util.List<Machine> candidates = machines.findByMachineTypeOrderByDisplayOrderAscCodeAsc(leg.getMachineType()).stream()
+                .filter(Machine::sellable).filter(m -> !m.getId().equals(leg.getMachineId()))
+                .filter(m -> commands.isOnline(m.getId())).toList();
+        return candidates.stream().filter(m -> {
+            Instant end = now.plus(Duration.ofMinutes(p.startWindowMinutes() + m.getCycleMinutes() + p.unloadMinutes()
+                    + p.cleanupMinutes()));
+            return support.snapshot(java.util.List.of(m.getId()), now, end).free(m.getId(), now, end, o.getId());
+        }).map(m -> new SwitchOption(m.getId(), m.getCode(), m.getDisplayName(), m.getCapacityKg(), m.getCycleMinutes(),
+                m.getPriceVnd(), 0)).toList();
     }
 
     /** Máy hỏng giữa chừng: chạy lại miễn phí trên máy khác cùng loại, ngay bây giờ (§12). */
@@ -105,14 +130,44 @@ public class StaffOrderService {
         return o;
     }
 
-    /** Chuyển một lượt chưa chạy sang máy khác (đến sớm, máy có vấn đề...). */
+    /** Máy đổi được cho một lượt chưa chạy: cùng loại, đang bán, có kết nối, rảnh suốt khoảng giữ máy của lượt. */
+    public record SwitchOption(UUID machineId, String code, String displayName, java.math.BigDecimal capacityKg,
+                               int cycleMinutes, long priceVnd, long refundIfSwitched) {
+    }
+
+    @Transactional(readOnly = true)
+    public java.util.List<SwitchOption> switchOptions(UUID orderId, int legNo) {
+        Order o = orders.findById(orderId).orElseThrow(() -> BusinessException.notFound("đơn"));
+        OrderLeg leg = legs.findByOrderIdOrderByLegNo(o.getId()).stream().filter(l -> l.getLegNo() == legNo).findFirst()
+                .orElseThrow(() -> BusinessException.notFound("chặng"));
+        if (!leg.notStarted() || !o.isOpen()) return java.util.List.of();
+        var r = support.reservation(leg);
+        Instant now = clock.instant();
+        Instant start = r.getStartsAt().isBefore(now) ? now : r.getStartsAt();
+        Instant end = r.getEndsAt().isAfter(start) ? r.getEndsAt() : start.plusSeconds(60);
+        java.util.List<Machine> candidates = machines.findByMachineTypeOrderByDisplayOrderAscCodeAsc(leg.getMachineType()).stream()
+                .filter(Machine::sellable).filter(m -> !m.getId().equals(leg.getMachineId()))
+                .filter(m -> commands.isOnline(m.getId())).toList();
+        ScheduleSnapshot snap = support.snapshot(candidates.stream().map(Machine::getId).toList(), start, end);
+        return candidates.stream().filter(m -> snap.free(m.getId(), start, end, o.getId()))
+                .map(m -> new SwitchOption(m.getId(), m.getCode(), m.getDisplayName(), m.getCapacityKg(),
+                        m.getCycleMinutes(), m.getPriceVnd(), Math.max(0, leg.getPriceAmount() - m.getPriceVnd())))
+                .toList();
+    }
+
+    /**
+     * Chuyển một lượt chưa chạy sang máy khác (máy có vấn đề, đến sớm...). Máy mới rẻ hơn thì hoàn phần chênh vào ví;
+     * đắt hơn khách không trả thêm.
+     */
     @Transactional
     public Order switchMachine(UUID orderId, int legNo, UUID machineId, String rawReason) {
         String reason = Reasons.require(rawReason);
         support.lockSchedule();
         Order o = orders.lock(orderId).orElseThrow(() -> BusinessException.notFound("đơn"));
+        if (!o.isOpen()) throw new BusinessException(ErrorCode.ORDER_STATE, "Đơn đã kết thúc");
         OrderLeg leg = leg(o, legNo);
         if (!leg.notStarted()) throw new BusinessException(ErrorCode.ORDER_STATE, "Lượt đã chạy");
+        if (leg.getMachineId().equals(machineId)) throw new BusinessException(ErrorCode.ORDER_STATE, "Lượt đang ở máy này");
         Machine m = machines.findById(machineId).filter(x -> x.getMachineType() == leg.getMachineType())
                 .filter(Machine::sellable).orElseThrow(() -> new BusinessException(ErrorCode.MACHINE_TYPE_MISMATCH));
         var r = support.reservation(leg);
@@ -123,11 +178,15 @@ public class StaffOrderService {
         }
         String from = machines.findById(leg.getMachineId()).map(Machine::getCode).orElse("?");
         support.move(leg, machineId, start, r.getEndsAt());
-        if (leg.getStatus() == OrderLeg.Status.ACTIVATED) leg.setStatus(OrderLeg.Status.SCHEDULED);
+        long refund = reassignment.applyMachine(o, leg, m);
+        orders.saveAndFlush(o);
         audit.user("ORDER_LEG_SWITCHED", "order", orderId.toString(), reason, Map.of("machine", from),
-                Map.of("machine", m.getCode()));
+                Map.of("machine", m.getCode(), "refund", refund));
         events.record(o.getId(), "MACHINE_SWITCHED", o.getStatus(), o.getStatus(),
-                Map.of("legNo", legNo, "from", from, "to", m.getCode()));
+                Map.of("legNo", legNo, "from", from, "to", m.getCode(), "refund", refund, "reason", reason));
+        notifications.order(o, com.laundry.notification.Notification.Type.MACHINE_REASSIGNED, "Đổi máy",
+                "Đơn " + o.getCode() + " chuyển từ máy " + from + " sang máy " + m.getCode()
+                        + (refund > 0 ? "; hoàn chênh lệch " + com.laundry.common.Money.format(refund) : "") + ".", null);
         return o;
     }
 

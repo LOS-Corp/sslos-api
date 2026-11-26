@@ -89,6 +89,22 @@ public class ReassignmentService {
             return false;
         }
         support.move(leg, target.getId(), start, end);
+        long diff = applyMachine(o, leg, target);
+        notifications.order(o, Notification.Type.MACHINE_REASSIGNED, "Đổi máy",
+                "Đơn " + o.getCode() + " chuyển từ máy " + fromCode + " sang máy " + target.getCode()
+                        + (diff > 0 ? "; hoàn chênh lệch " + Money.format(diff) : "") + ".", null);
+        events.record(o.getId(), "MACHINE_REASSIGNED", o.getStatus(), o.getStatus(),
+                Map.of("legNo", leg.getLegNo(), "from", fromCode, "to", target.getCode(), "reason", reason,
+                        "refund", Math.max(0, diff)));
+        return true;
+    }
+
+    /**
+     * Cập nhật chặng theo máy mới (đã dời lịch giữ máy): máy rẻ hơn thì hạ giá chặng và hoàn phần chênh vào ví; máy đắt
+     * hơn khách không trả thêm. Trả về số chênh đã giảm giá (0 nếu máy mới không rẻ hơn).
+     */
+    @Transactional(propagation = Propagation.MANDATORY)
+    public long applyMachine(Order o, OrderLeg leg, Machine target) {
         long diff = leg.getPriceAmount() - target.getPriceVnd();
         if (diff > 0) {
             leg.setPriceAmount(target.getPriceVnd());
@@ -101,12 +117,6 @@ public class ReassignmentService {
         leg.setCycleMinutes(target.getCycleMinutes());
         leg.setCapacityKg(target.getCapacityKg());
         if (leg.getStatus() == OrderLeg.Status.ACTIVATED) leg.setStatus(OrderLeg.Status.SCHEDULED);
-        notifications.order(o, Notification.Type.MACHINE_REASSIGNED, "Đổi máy",
-                "Đơn " + o.getCode() + " chuyển từ máy " + fromCode + " sang máy " + target.getCode()
-                        + (diff > 0 ? "; hoàn chênh lệch " + Money.format(diff) : "") + ".", null);
-        events.record(o.getId(), "MACHINE_REASSIGNED", o.getStatus(), o.getStatus(),
-                Map.of("legNo", leg.getLegNo(), "from", fromCode, "to", target.getCode(), "reason", reason,
-                        "refund", Math.max(0, diff)));
-        return true;
+        return Math.max(0, diff);
     }
 }
